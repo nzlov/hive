@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import math
 import re
 from dataclasses import dataclass
 from typing import Protocol
 from urllib import error, request
+from urllib.parse import urlparse
 
 from memory_config import EmbeddingConfig
 
@@ -81,8 +83,9 @@ class OpenAIEmbeddingProvider:
             },
             method="POST",
         )
+        opener = build_embedding_url_opener(self.config.base_url)
         try:
-            with request.urlopen(req, timeout=self.config.timeout_seconds) as response:
+            with opener.open(req, timeout=self.config.timeout_seconds) as response:
                 raw = response.read().decode("utf-8")
         except error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -122,6 +125,34 @@ def create_embedding_provider(config: EmbeddingConfig | None) -> EmbeddingProvid
     return OpenAIEmbeddingProvider(config)
 
 
+def build_embedding_url_opener(base_url: str):
+    """本地嵌入服务常部署在私网地址，命中代理时会把可用服务误判成网关错误。"""
+
+    hostname = urlparse(base_url).hostname or ""
+    if should_bypass_proxy(hostname):
+        return request.build_opener(request.ProxyHandler({}))
+    return request.build_opener()
+
+
+def should_bypass_proxy(hostname: str) -> bool:
+    """私网和本地地址优先直连，避免 urllib 对 NO_PROXY CIDR 支持不足。"""
+
+    normalized = hostname.strip().lower()
+    if not normalized:
+        return False
+    if normalized in {"localhost", "host.docker.internal"}:
+        return True
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    return bool(
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+    )
+
+
 def format_embedding_tags(raw_tags: object) -> str:
     """把标签整理成自然文本，避免 JSON 符号给向量引入无意义噪声。"""
 
@@ -142,6 +173,18 @@ def format_embedding_tags(raw_tags: object) -> str:
     return "、".join(tags)
 
 
+def get_row_value(row: object, key: str, default: object = "") -> object:
+    """统一兼容 dict 和 sqlite3.Row，避免重建阶段因行对象差异中断。"""
+
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        value = row[key]  # type: ignore[index]
+    except (KeyError, IndexError, TypeError):
+        return default
+    return default if value is None else value
+
+
 def strip_front_matter(content: object) -> str:
     """去掉持久化内容里的 YAML 头部，避免重复元数据稀释正文语义。"""
 
@@ -154,13 +197,13 @@ def strip_front_matter(content: object) -> str:
 def build_summary_embedding_text(row) -> str:
     """为总结记忆组织更偏结论导向的嵌入文本，突出主题与关键约束。"""
 
-    title = str(row["title"] or "").strip()
-    summary = str(row["summary"] or "").strip()
-    tags = format_embedding_tags(row.get("tags", []))
-    body = strip_front_matter(row["content"])
+    title = str(get_row_value(row, "title") or "").strip()
+    summary = str(get_row_value(row, "summary") or "").strip()
+    tags = format_embedding_tags(get_row_value(row, "tags", []))
+    body = strip_front_matter(get_row_value(row, "content"))
     parts = [
         "记忆类型: 总结记忆",
-        f"项目: {str(row['project_name'] or '').strip()}",
+        f"项目: {str(get_row_value(row, 'project_name') or '').strip()}",
         f"主题: {title}",
         f"摘要: {summary}",
         f"标签: {tags}",
@@ -173,13 +216,13 @@ def build_summary_embedding_text(row) -> str:
 def build_error_embedding_text(row) -> str:
     """为错误记忆强调故障现象与修复线索，提升后续排障召回精度。"""
 
-    title = str(row["title"] or "").strip()
-    summary = str(row["summary"] or "").strip()
-    tags = format_embedding_tags(row.get("tags", []))
-    body = strip_front_matter(row["content"])
+    title = str(get_row_value(row, "title") or "").strip()
+    summary = str(get_row_value(row, "summary") or "").strip()
+    tags = format_embedding_tags(get_row_value(row, "tags", []))
+    body = strip_front_matter(get_row_value(row, "content"))
     parts = [
         "记忆类型: 错误记忆",
-        f"项目: {str(row['project_name'] or '').strip()}",
+        f"项目: {str(get_row_value(row, 'project_name') or '').strip()}",
         f"问题: {title}",
         f"现象摘要: {summary}",
         f"故障标签: {tags}",
@@ -192,7 +235,7 @@ def build_error_embedding_text(row) -> str:
 def build_memory_embedding_text(row) -> str:
     """按记忆类型切换模板，减少噪声并让不同场景保留最关键语义。"""
 
-    mem_type = str(row["type"] or "").strip().lower()
+    mem_type = str(get_row_value(row, "type") or "").strip().lower()
     if mem_type == "error":
         return build_error_embedding_text(row)
     return build_summary_embedding_text(row)
