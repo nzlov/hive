@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 CONFIG_PATH = Path.home() / ".config" / "memorymanager" / "config.json"
+DEFAULT_STORAGE_ROOT = Path.home() / ".local" / "share" / "memorymanager"
 STORAGE_PATH_KEYS = (
     "memory_storage_path",
     "memoryStorePath",
@@ -71,15 +72,41 @@ def sanitize_project_name(name: str) -> str:
 
 
 def load_config(config_path: Path) -> dict[str, object] | None:
-    """读取配置文件，异常时回退到项目内记忆而不是中断脚本。"""
+    """读取配置文件，缺失时自动创建默认配置以降低首次使用门槛。"""
 
     if not config_path.exists():
+        default_config = build_default_config()
+        if write_default_config(config_path, default_config):
+            return default_config
         return None
     try:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def build_default_config() -> dict[str, object]:
+    """生成默认配置，提前给出统一的外挂记忆落盘位置。"""
+
+    return {
+        "memory_storage_path": str(DEFAULT_STORAGE_ROOT),
+        "external_projects": [],
+    }
+
+
+def write_default_config(config_path: Path, config: dict[str, object]) -> bool:
+    """首次运行自动落默认配置，避免用户必须手写样板文件。"""
+
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        return False
+    return True
 
 
 def project_in_external_list(
