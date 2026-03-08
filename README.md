@@ -66,6 +66,12 @@ python3 scripts/search_memory.py --query '["关键词1","关键词2"]'
 
 ## 如何写入总结记忆
 
+总结记忆建议遵循这些规则：
+
+- 只有在用户明确要求“总结并记忆”时再写入总结记忆，避免把普通执行结果都落成长期记忆。
+- 一次总结可以拆成多条记忆，分别覆盖不同目标、问题、模块或结论。
+- 如果当前会话里之前已经保存过记忆，再次总结时应从上次已保存内容之后开始续写，避免重复总结。
+
 ```bash
 python3 scripts/write_memory.py \
   --type summary \
@@ -73,7 +79,27 @@ python3 scripts/write_memory.py \
   --tags '业务标签,重要文件,重要方法' \
   --summary '一句话简介' \
   --context '完整Markdown正文'
+
+python3 scripts/write_memory.py \
+  --items-json '[
+    {
+      "type": "summary",
+      "title": "支付超时排查结论",
+      "tags": ["支付", "超时", "订单"],
+      "summary": "记录支付超时排查后的核心结论。",
+      "context": "## Summary\n\n- 详情: 支付超时主要由重试任务堆积导致。"
+    },
+    {
+      "type": "summary",
+      "title": "重试队列优化建议",
+      "tags": ["支付", "重试", "性能"],
+      "summary": "补充后续优化方向。",
+      "context": "## Summary\n\n- 详情: 需要扩容消费者并限制单批任务数量。"
+    }
+  ]'
 ```
+
+`--items-json` 支持对象或对象数组，单次请求里可以混合写入多条 `summary` / `error` 记忆。
 
 建议正文结构：
 
@@ -92,6 +118,11 @@ python3 scripts/write_memory.py \
 ```
 
 ## 如何写入错误记忆
+
+错误记忆规则：
+
+- 会话里出现的错误，只要最终已定位或修复，就必须写入错误记忆。
+- 如果一次处理里有多个独立错误或多个问题目标，建议拆成多条错误记忆分别保存。
 
 ```bash
 python3 scripts/write_memory.py \
@@ -209,8 +240,8 @@ python3 scripts/rebuild_memory_embeddings.py --root . --force
 
 1. 检索历史记忆。
 2. 进行代码搜索、分析或修复。
-3. 问题解决后写入总结记忆。
-4. 如果过程中出现过错误并已修复，再补写错误记忆。
+3. 只有在用户明确要求总结并记忆时，才写入总结记忆；必要时可一次写入多条。
+4. 如果过程中出现过错误并已修复，再补写错误记忆；这一步不可跳过。
 
 示例：
 

@@ -1,6 +1,6 @@
 ---
 name: memory-manager
-description: Trigger this skill by default for search or analysis tasks. prior-context recall, file/method/logic/module lookup, code reading, root-cause analysis, recurring-error troubleshooting, and continuation of earlier fixes. Always retrieve relevant memory before any code search, code analysis, or edits, then write back reusable conclusions after resolution.
+description: Trigger this skill by default for search or analysis tasks. prior-context recall, file/method/logic/module lookup, code reading, root-cause analysis, recurring-error troubleshooting, and continuation of earlier fixes. Always retrieve relevant memory before any code search, code analysis, or edits. Only write summary memories when the user explicitly asks to summarize and remember them, but always persist resolved session errors to avoid repeating the same mistake.
 ---
 
 # 记忆管理
@@ -39,14 +39,19 @@ python3 scripts/search_memory.py --query '["关键词1","<关键词2>"]'
 
 ## 写入总结记忆
 
+- 只有当用户明确要求“总结并记忆”“保存记忆”“写入总结记忆”等语义时，才调用脚本写入总结记忆。
+- 一次总结可以拆成多条记忆，按不同目标、问题、模块或结论分别写入，避免把无关内容混成一条。
+- 如果当前会话里之前已经保存过记忆，那么再次总结时应从上次记忆之后的新内容开始续写，不要重复总结已保存部分。
 - `--context` 传入最终 Markdown 正文，注意shell环境转义。
 - 使用具体实体作为小标题，不使用泛化栏目名。
 - 小标题优先覆盖具体文件名、方法名、逻辑点（可补充模块、流程、结论）。
 - 示例：`## src/order/service.go`、`## BuildOrderSnapshot`、`## 支付成功后进入已确认状态`。
 - 每个实体小标题下至少包含一条“详情”信息（行为、约束、依赖、结论之一）。
+- 脚本支持一次请求写入多条总结或错误记忆，适合把多个结论一起落库。
 
 使用命令：
 
+* 单条记忆
 ```bash
 python3 scripts/write_memory.py \
   --type summary \
@@ -56,12 +61,35 @@ python3 scripts/write_memory.py \
   --context '完整Markdown正文'
 ```
 
+* 多条记忆
+```bash
+python3 scripts/write_memory.py \
+  --items-json '[
+    {
+      "type": "summary",
+      "title": "自动标题1",
+      "tags": ["业务标签", "文件A"],
+      "summary": "一句话简介1",
+      "context": "完整Markdown正文1"
+    },
+    {
+      "type": "summary",
+      "title": "自动标题2",
+      "tags": ["业务标签", "文件B"],
+      "summary": "一句话简介2",
+      "context": "完整Markdown正文2"
+    }
+  ]'
+```
+
 ## 写入错误记忆
 
 1. 出现错误先检索错误记忆。
 2. 无可复用错误记忆且错误已解决时写入。
-3. 当总结记忆被触发且会话有错误时，错误记忆写入不可跳过。
-4. `--context` 需覆盖：错误现象、触发条件、根因、修复结论。
+3. 会话中一旦发生错误且最终已经定位或修复，错误记忆必须写入，避免以后重复犯同样的问题。
+4. 当总结记忆被触发且会话有错误时，错误记忆写入不可跳过。
+5. 如果一次处理里有多个独立错误或多个根因，应拆成多条错误记忆分别写入。
+6. `--context` 需覆盖：错误现象、触发条件、根因、修复结论。
 
 使用命令：
 
