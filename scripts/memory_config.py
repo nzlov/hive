@@ -16,11 +16,6 @@ STORAGE_PATH_KEYS = (
     "storage_path",
     "storagePath",
 )
-PROJECTS_KEYS = (
-    "external_projects",
-    "externalProjects",
-    "projects",
-)
 
 
 @dataclass(frozen=True)
@@ -36,23 +31,33 @@ class MemoryLocation:
 
 
 def resolve_memory_location(project_root: Path) -> MemoryLocation:
-    """根据项目根目录与用户配置决定实际记忆目录。"""
+    """优先使用项目内 `.memory`，缺失时再回退到默认外挂目录。"""
 
     resolved_root = project_root.resolve()
     project_name = sanitize_project_name(resolved_root.name)
     config = load_config(CONFIG_PATH)
+    local_memory_root = resolved_root / ".memory"
 
-    if config and project_in_external_list(config, resolved_root, project_name):
-        storage_root = resolve_storage_root(config, CONFIG_PATH.parent)
-        if storage_root is not None:
-            return MemoryLocation(
-                project_root=resolved_root,
-                project_name=project_name,
-                search_root=storage_root,
-                memory_root=storage_root / ".memory",
-                external_enabled=True,
-                config_path=CONFIG_PATH,
-            )
+    if local_memory_root.is_dir():
+        return MemoryLocation(
+            project_root=resolved_root,
+            project_name=project_name,
+            search_root=resolved_root,
+            memory_root=local_memory_root,
+            external_enabled=False,
+            config_path=CONFIG_PATH,
+        )
+
+    storage_root = resolve_storage_root(config or build_default_config(), CONFIG_PATH.parent)
+    if storage_root is not None:
+        return MemoryLocation(
+            project_root=resolved_root,
+            project_name=project_name,
+            search_root=storage_root,
+            memory_root=storage_root / ".memory",
+            external_enabled=True,
+            config_path=CONFIG_PATH,
+        )
 
     return MemoryLocation(
         project_root=resolved_root,
@@ -91,7 +96,6 @@ def build_default_config() -> dict[str, object]:
 
     return {
         "memory_storage_path": str(DEFAULT_STORAGE_ROOT),
-        "external_projects": [],
     }
 
 
@@ -109,49 +113,6 @@ def write_default_config(config_path: Path, config: dict[str, object]) -> bool:
     return True
 
 
-def project_in_external_list(
-    config: dict[str, object], project_root: Path, project_name: str
-) -> bool:
-    """兼容项目名、项目根路径和对象写法，尽量减少配置格式耦合。"""
-
-    entries = extract_projects(config)
-    project_root_text = str(project_root)
-    for entry in entries:
-        if isinstance(entry, str):
-            normalized = entry.strip()
-            if normalized in {project_name, project_root_text}:
-                return True
-            continue
-
-        if not isinstance(entry, dict):
-            continue
-
-        candidate_name = first_text(entry, "name", "project", "project_name")
-        if candidate_name and candidate_name == project_name:
-            return True
-
-        candidate_path = first_text(entry, "path", "root", "project_root")
-        if candidate_path:
-            candidate_root = Path(candidate_path).expanduser()
-            if not candidate_root.is_absolute():
-                candidate_root = (CONFIG_PATH.parent / candidate_root).resolve()
-            else:
-                candidate_root = candidate_root.resolve()
-            if candidate_root == project_root:
-                return True
-    return False
-
-
-def extract_projects(config: dict[str, object]) -> list[object]:
-    """从多个兼容字段中提取外挂项目列表。"""
-
-    for key in PROJECTS_KEYS:
-        value = config.get(key)
-        if isinstance(value, list):
-            return value
-    return []
-
-
 def resolve_storage_root(config: dict[str, object], base_dir: Path) -> Path | None:
     """解析外挂记忆根目录，支持相对路径配置。"""
 
@@ -166,13 +127,3 @@ def resolve_storage_root(config: dict[str, object], base_dir: Path) -> Path | No
             storage_root = storage_root.resolve()
         return storage_root
     return None
-
-
-def first_text(payload: dict[str, object], *keys: str) -> str:
-    """从候选键中取第一个非空字符串。"""
-
-    for key in keys:
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""

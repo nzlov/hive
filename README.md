@@ -106,33 +106,38 @@ python3 scripts/write_memory.py \
 ~/.config/memorymanager/config.json
 ```
 
+如果配置文件不存在，脚本会自动创建默认配置：
+
+```json
+{
+  "memory_storage_path": "/home/当前用户/.local/share/memorymanager"
+}
+```
+
+对应的默认外挂记忆数据库文件为：
+
+```text
+~/.local/share/memorymanager/.memory/memory.db
+```
+
 示例配置：
 
 ```json
 {
-  "memory_storage_path": "/data/memories",
-  "external_projects": [
-    "vivid-beaver",
-    {
-      "path": "/abs/path/to/another-project"
-    }
-  ]
+  "memory_storage_path": "/data/memories"
 }
 ```
 
 字段说明：
 
 - `memory_storage_path`：外挂记忆根目录。
-- `external_projects`：需要启用外挂记忆的项目列表。
 
-`external_projects` 支持以下写法：
+记忆位置规则如下：
 
-- 直接写项目名，例如 `"vivid-beaver"`
-- 直接写项目根路径，例如 `"/abs/path/to/project"`
-- 对象格式，例如 `{ "name": "vivid-beaver" }`
-- 对象格式，例如 `{ "path": "/abs/path/to/project" }`
+- 如果当前项目根目录已经存在 `.memory/`，脚本使用当前项目根目录下的 `./.memory/memory.db`
+- 如果当前项目根目录不存在 `.memory/`，脚本回退到外挂记忆目录下的共享数据库
 
-命中外挂配置后，实际记忆目录会切换为：
+回退到外挂目录后，实际记忆目录为：
 
 ```text
 记忆存储路径/.memory/memory.db
@@ -146,19 +151,14 @@ python3 scripts/write_memory.py \
 
 此时所有外挂项目共用同一个 SQLite 文件，但每条记录都会自动写入当前项目名；检索时也会自动按当前项目名过滤，因此不会串项目。
 
-如果未命中外挂配置，脚本仍然使用项目根目录下的：
-
-```text
-.memory/
-```
-
 ## 使用建议
 
 - 在任何搜索、分析、排查任务开始前先执行一次检索。
 - `--context` 建议使用 Markdown，方便后续按标题检索。
 - 标题尽量使用具体文件名、方法名、业务结论，避免泛化标题。
 - 若 shell 参数中包含反引号或单引号，注意转义。
-- 配置文件读取失败时，脚本会自动回退到项目内 `.memory/`，不会中断执行。
+- 如果希望项目独立存储记忆，先在项目根目录创建 `.memory/` 目录。
+- 配置文件读取失败时，脚本会回退到默认外挂目录配置或项目内 `.memory/`，不会中断执行。
 
 ## 一个完整流程示例
 
