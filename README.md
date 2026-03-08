@@ -22,12 +22,7 @@
 
 ```text
 .memory/
-  summaries/
-    YYYY/
-      MM/
-  errors/
-    YYYY/
-      MM/
+  memory.db
 ```
 
 ## 如何检索记忆
@@ -54,7 +49,8 @@ python3 scripts/search_memory.py --query '["关键词1","关键词2"]'
 - `search_root`：本次实际搜索根目录。
 - `Error Hits` / `Summary Hits`：命中的错误记忆与总结记忆。
 - `snippets`：命中的片段与行号。
-- `file_content`：当标题命中时返回完整文件内容。
+- `file_content`：当标题命中时返回完整记忆内容。
+- `project`：写入和检索时都会自动附带当前项目名，用于共享库隔离。
 
 ## 如何写入总结记忆
 
@@ -139,14 +135,16 @@ python3 scripts/write_memory.py \
 命中外挂配置后，实际记忆目录会切换为：
 
 ```text
-记忆存储路径/项目名/.memory/
+记忆存储路径/.memory/memory.db
 ```
 
 例如：
 
 ```text
-/data/memories/vivid-beaver/.memory/
+/data/memories/.memory/memory.db
 ```
+
+此时所有外挂项目共用同一个 SQLite 文件，但每条记录都会自动写入当前项目名；检索时也会自动按当前项目名过滤，因此不会串项目。
 
 如果未命中外挂配置，脚本仍然使用项目根目录下的：
 

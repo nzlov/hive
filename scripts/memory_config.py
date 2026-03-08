@@ -24,7 +24,7 @@ PROJECTS_KEYS = (
 
 @dataclass(frozen=True)
 class MemoryLocation:
-    """统一描述当前项目对应的记忆目录位置。"""
+    """统一描述当前项目对应的记忆位置与项目标识。"""
 
     project_root: Path
     project_name: str
@@ -44,12 +44,11 @@ def resolve_memory_location(project_root: Path) -> MemoryLocation:
     if config and project_in_external_list(config, resolved_root, project_name):
         storage_root = resolve_storage_root(config, CONFIG_PATH.parent)
         if storage_root is not None:
-            search_root = storage_root / project_name
             return MemoryLocation(
                 project_root=resolved_root,
                 project_name=project_name,
-                search_root=search_root,
-                memory_root=search_root / ".memory",
+                search_root=storage_root,
+                memory_root=storage_root / ".memory",
                 external_enabled=True,
                 config_path=CONFIG_PATH,
             )
@@ -65,7 +64,7 @@ def resolve_memory_location(project_root: Path) -> MemoryLocation:
 
 
 def sanitize_project_name(name: str) -> str:
-    """保证外挂目录名稳定可用，避免空名或非法片段。"""
+    """保证项目名稳定可用，避免空名或非法片段污染检索维度。"""
 
     cleaned = name.strip().strip("./")
     return cleaned or "default-project"
