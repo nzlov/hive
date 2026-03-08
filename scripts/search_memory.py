@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from embedding_provider import cosine_similarity, create_embedding_provider
+from embedding_provider import build_query_embedding_text, cosine_similarity, create_embedding_provider
 from memory_config import resolve_memory_location
 from memory_store import connect_memory_db, fetch_memory_embeddings, get_memory_db_path
 from rebuild_memory_embeddings import rebuild_embeddings
@@ -200,7 +200,7 @@ def collect_semantic_hits(
 
     if not provider.enabled:
         return []
-    query_text = "\n".join(queries).strip()
+    query_text = build_query_embedding_text(source, queries)
     if not query_text:
         return []
     query_vector = provider.embed_texts([query_text])[0]

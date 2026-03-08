@@ -260,7 +260,7 @@ def main() -> int:
                         "project_name": project_name,
                         "type": item.mem_type,
                         "title": title,
-                        "tags": encode_tags(tags),
+                        "tags": tags,
                         "summary": item.summary,
                         "content": content,
                     },

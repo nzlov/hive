@@ -5,11 +5,15 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from typing import Protocol
 from urllib import error, request
 
 from memory_config import EmbeddingConfig
+
+
+FRONT_MATTER_RE = re.compile(r"\A---\n.*?\n---\n?", re.DOTALL)
 
 
 class EmbeddingProvider(Protocol):
@@ -118,18 +122,102 @@ def create_embedding_provider(config: EmbeddingConfig | None) -> EmbeddingProvid
     return OpenAIEmbeddingProvider(config)
 
 
-def build_memory_embedding_text(row) -> str:
-    """拼接对检索最重要的字段，避免向量仅看到正文而忽略标题和摘要。"""
+def format_embedding_tags(raw_tags: object) -> str:
+    """把标签整理成自然文本，避免 JSON 符号给向量引入无意义噪声。"""
 
+    tags: list[str] = []
+    if isinstance(raw_tags, list):
+        tags = [str(item).strip() for item in raw_tags if str(item).strip()]
+    elif isinstance(raw_tags, str):
+        text = raw_tags.strip()
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                payload = None
+            if isinstance(payload, list):
+                tags = [str(item).strip() for item in payload if str(item).strip()]
+        elif text:
+            tags = [part.strip() for part in text.split(",") if part.strip()]
+    return "、".join(tags)
+
+
+def strip_front_matter(content: object) -> str:
+    """去掉持久化内容里的 YAML 头部，避免重复元数据稀释正文语义。"""
+
+    text = str(content or "").strip()
+    if not text:
+        return ""
+    return FRONT_MATTER_RE.sub("", text, count=1).strip()
+
+
+def build_summary_embedding_text(row) -> str:
+    """为总结记忆组织更偏结论导向的嵌入文本，突出主题与关键约束。"""
+
+    title = str(row["title"] or "").strip()
+    summary = str(row["summary"] or "").strip()
+    tags = format_embedding_tags(row.get("tags", []))
+    body = strip_front_matter(row["content"])
     parts = [
-        f"project: {str(row['project_name'] or '').strip()}",
-        f"type: {str(row['type'] or '').strip()}",
-        f"title: {str(row['title'] or '').strip()}",
-        f"summary: {str(row['summary'] or '').strip()}",
-        f"tags: {str(row['tags'] or '').strip()}",
-        str(row["content"] or "").strip(),
+        "记忆类型: 总结记忆",
+        f"项目: {str(row['project_name'] or '').strip()}",
+        f"主题: {title}",
+        f"摘要: {summary}",
+        f"标签: {tags}",
+        "正文:",
+        body,
     ]
-    return "\n".join(part for part in parts if part)
+    return "\n".join(part for part in parts if part and part != "标签: ")
+
+
+def build_error_embedding_text(row) -> str:
+    """为错误记忆强调故障现象与修复线索，提升后续排障召回精度。"""
+
+    title = str(row["title"] or "").strip()
+    summary = str(row["summary"] or "").strip()
+    tags = format_embedding_tags(row.get("tags", []))
+    body = strip_front_matter(row["content"])
+    parts = [
+        "记忆类型: 错误记忆",
+        f"项目: {str(row['project_name'] or '').strip()}",
+        f"问题: {title}",
+        f"现象摘要: {summary}",
+        f"故障标签: {tags}",
+        "排障记录:",
+        body,
+    ]
+    return "\n".join(part for part in parts if part and part != "故障标签: ")
+
+
+def build_memory_embedding_text(row) -> str:
+    """按记忆类型切换模板，减少噪声并让不同场景保留最关键语义。"""
+
+    mem_type = str(row["type"] or "").strip().lower()
+    if mem_type == "error":
+        return build_error_embedding_text(row)
+    return build_summary_embedding_text(row)
+
+
+def build_query_embedding_text(source: str, queries: list[str]) -> str:
+    """为查询构造与目标记忆类型对齐的模板，减少短关键词直接拼接带来的语义损耗。"""
+
+    cleaned_queries = [query.strip() for query in queries if query.strip()]
+    if not cleaned_queries:
+        return ""
+    joined_queries = "、".join(cleaned_queries)
+    if source == "error":
+        parts = [
+            "查询类型: 错误排查记忆检索",
+            f"关注问题: {joined_queries}",
+            "检索目标: 查找相似的错误现象、触发条件、根因和修复结论。",
+        ]
+        return "\n".join(parts)
+    parts = [
+        "查询类型: 总结记忆检索",
+        f"关注主题: {joined_queries}",
+        "检索目标: 查找相关主题、关键结论、约束条件和实现经验。",
+    ]
+    return "\n".join(parts)
 
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:
