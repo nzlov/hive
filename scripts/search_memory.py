@@ -12,8 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from embedding_provider import cosine_similarity, create_embedding_provider
 from memory_config import resolve_memory_location
-from memory_store import connect_memory_db, get_memory_db_path
+from memory_store import connect_memory_db, fetch_memory_embeddings, get_memory_db_path
+from rebuild_memory_embeddings import rebuild_embeddings
 
 
 TIMESTAMP_RE = re.compile(r"^(\d{14})")
@@ -22,6 +24,7 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 
 @dataclass
 class MemoryHit:
+    id: int
     source: str
     path: str
     project_name: str
@@ -38,8 +41,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Search memory files under .memory")
     parser.add_argument("--root", default=".", help="Project root that contains .memory/")
     parser.add_argument("--query", required=True, nargs="+", help="Search keyword/regex list")
-    parser.add_argument("--error-limit", type=int, default=5, help="Error memories to return")
-    parser.add_argument("--summary-limit", type=int, default=10, help="Summary memories to return")
     parser.add_argument(
         "-debug",
         "--debug",
@@ -54,7 +55,7 @@ def parse_queries(raw_queries: list[str]) -> list[str]:
 
     if not raw_queries:
         return []
-    # Compatible with both: --query a b  and --query '["a","b"]'
+    # 兼容 `--query a b` 和 `--query '["a","b"]'` 两种调用方式，减少调用方改造成本。
     if len(raw_queries) == 1:
         text = raw_queries[0].strip()
         if text.startswith("[") and text.endswith("]"):
@@ -132,7 +133,6 @@ def collect_hits(
     project_name: str,
     allow_legacy_blank_project: bool,
     queries: list[str],
-    limit: int,
     debug_commands: list[str] | None = None,
 ) -> list[MemoryHit]:
     """在数据库记录中筛选命中项，并保持旧输出结构不变。"""
@@ -172,6 +172,7 @@ def collect_hits(
         ts = extract_timestamp(str(row["timestamp"] or ""))
         hits.append(
             MemoryHit(
+                id=int(row["id"]),
                 source=source,
                 path=f"{db_path}#project={row['project_name']}#id={row['id']}",
                 project_name=str(row["project_name"] or ""),
@@ -183,7 +184,90 @@ def collect_hits(
             )
         )
     hits.sort(key=lambda x: x.timestamp, reverse=True)
-    return hits[:limit]
+    return hits
+
+
+def collect_semantic_hits(
+    source: str,
+    memory_root: Path,
+    project_name: str,
+    allow_legacy_blank_project: bool,
+    queries: list[str],
+    provider,
+    debug_commands: list[str] | None = None,
+) -> list[MemoryHit]:
+    """在保留关键字检索的同时补充语义召回，减少措辞变化带来的漏检。"""
+
+    if not provider.enabled:
+        return []
+    query_text = "\n".join(queries).strip()
+    if not query_text:
+        return []
+    query_vector = provider.embed_texts([query_text])[0]
+    rows = fetch_memory_rows(
+        memory_root,
+        source,
+        project_name,
+        allow_legacy_blank_project,
+        debug_commands,
+    )
+    memory_ids = [int(row["id"]) for row in rows]
+    with connect_memory_db(memory_root) as conn:
+        embedding_map = fetch_memory_embeddings(conn, memory_ids)
+    now = datetime.now(timezone.utc)
+    db_path = str(get_memory_db_path(memory_root))
+    hits: list[MemoryHit] = []
+    for row in rows:
+        memory_id = int(row["id"])
+        vector = embedding_map.get(memory_id)
+        if not vector:
+            continue
+        semantic_score = cosine_similarity(query_vector, vector)
+        if semantic_score <= 0.15:
+            continue
+        lines = str(row["content"] or "").splitlines()
+        header = read_header(lines)
+        ts = extract_timestamp(str(row["timestamp"] or ""))
+        age_score = confidence_by_age(ts, now)
+        hits.append(
+            MemoryHit(
+                id=memory_id,
+                source=source,
+                path=f"{db_path}#project={row['project_name']}#id={row['id']}",
+                project_name=str(row["project_name"] or ""),
+                timestamp=ts,
+                confidence=max(semantic_score, age_score * 0.5 + semantic_score * 0.5),
+                snippets=[],
+                file_content=build_full_file_content(lines),
+                header=header,
+            )
+        )
+    hits.sort(key=lambda hit: (hit.confidence, hit.timestamp), reverse=True)
+    return hits
+
+
+def merge_hits(primary_hits: list[MemoryHit], semantic_hits: list[MemoryHit]) -> list[MemoryHit]:
+    """关键字命中优先保留原片段展示，再补上语义召回缺失的结果。"""
+
+    merged: list[MemoryHit] = []
+    seen_ids: set[int] = set()
+    semantic_by_id = {hit.id: hit for hit in semantic_hits}
+
+    for hit in primary_hits:
+        semantic_hit = semantic_by_id.get(hit.id)
+        if semantic_hit is not None and semantic_hit.confidence > hit.confidence:
+            hit.confidence = semantic_hit.confidence
+            if hit.file_content is None:
+                hit.file_content = semantic_hit.file_content
+        merged.append(hit)
+        seen_ids.add(hit.id)
+
+    for hit in semantic_hits:
+        if hit.id in seen_ids:
+            continue
+        merged.append(hit)
+        seen_ids.add(hit.id)
+    return merged
 
 
 def to_dicts(hits: Iterable[MemoryHit]) -> list[dict[str, object]]:
@@ -691,29 +775,49 @@ def main() -> int:
     if not queries:
         raise SystemExit("--query must contain at least one non-empty keyword")
     location = resolve_memory_location(Path(args.root))
+    rebuild_embeddings(location.project_root)
     memory_root = location.memory_root
     project_name = location.project_name
     allow_legacy_blank_project = not location.external_enabled
+    provider = create_embedding_provider(location.embedding_config)
 
     debug_commands: list[str] | None = [] if args.debug else None
-    error_hits = collect_hits(
+    error_keyword_hits = collect_hits(
         "error",
         memory_root,
         project_name,
         allow_legacy_blank_project,
         queries,
-        args.error_limit,
         debug_commands,
     )
-    summary_hits = collect_hits(
+    summary_keyword_hits = collect_hits(
         "summary",
         memory_root,
         project_name,
         allow_legacy_blank_project,
         queries,
-        args.summary_limit,
         debug_commands,
     )
+    error_semantic_hits = collect_semantic_hits(
+        "error",
+        memory_root,
+        project_name,
+        allow_legacy_blank_project,
+        queries,
+        provider,
+        debug_commands,
+    )
+    summary_semantic_hits = collect_semantic_hits(
+        "summary",
+        memory_root,
+        project_name,
+        allow_legacy_blank_project,
+        queries,
+        provider,
+        debug_commands,
+    )
+    error_hits = merge_hits(error_keyword_hits, error_semantic_hits)
+    summary_hits = merge_hits(summary_keyword_hits, summary_semantic_hits)
     error_hit_dicts = to_dicts(error_hits)
     summary_hit_dicts = to_dicts(summary_hits)
     query_text = ", ".join(queries)

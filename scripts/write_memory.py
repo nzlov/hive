@@ -8,8 +8,10 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from embedding_provider import build_memory_embedding_text, create_embedding_provider
 from memory_config import resolve_memory_location
-from memory_store import connect_memory_db, encode_tags, get_memory_db_path
+from memory_store import connect_memory_db, encode_tags, get_memory_db_path, upsert_memory_embedding
+from rebuild_memory_embeddings import rebuild_embeddings
 
 
 def parse_args() -> argparse.Namespace:
@@ -106,8 +108,10 @@ def main() -> int:
 
     args = parse_args()
     location = resolve_memory_location(Path(args.root))
+    rebuild_embeddings(location.project_root)
     memory_root = location.memory_root
     project_name = location.project_name
+    provider = create_embedding_provider(location.embedding_config)
     now = datetime.now(timezone.utc)
     ts = now.strftime("%Y%m%d%H%M%S")
     title = sanitize_title(args.title)
@@ -127,7 +131,7 @@ def main() -> int:
         )
 
     with connect_memory_db(memory_root) as conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO memories (
                 project_name,
@@ -152,6 +156,22 @@ def main() -> int:
                 now.isoformat(),
             ),
         )
+        if provider.enabled:
+            row = {
+                "id": cursor.lastrowid,
+                "project_name": project_name,
+                "type": args.type,
+                "title": title,
+                "tags": encode_tags(tags),
+                "summary": args.summary.strip(),
+                "content": content,
+            }
+            upsert_memory_embedding(
+                conn,
+                int(cursor.lastrowid),
+                provider.embed_texts([build_memory_embedding_text(row)])[0],
+                now.isoformat(),
+            )
         conn.commit()
 
     print(get_memory_db_path(memory_root))

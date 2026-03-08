@@ -16,6 +16,21 @@ STORAGE_PATH_KEYS = (
     "storage_path",
     "storagePath",
 )
+EMBEDDING_SECTION_KEYS = ("embedding", "embeddings")
+EMBEDDING_BASE_URL_KEYS = ("base_url", "baseUrl", "url", "endpoint")
+EMBEDDING_API_KEY_KEYS = ("api_key", "apiKey")
+EMBEDDING_MODEL_KEYS = ("model", "embedding_model", "embeddingModel")
+EMBEDDING_TIMEOUT_KEYS = ("timeout_seconds", "timeoutSeconds")
+
+
+@dataclass(frozen=True)
+class EmbeddingConfig:
+    """统一描述嵌入服务配置，避免脚本各自解析字段。"""
+
+    base_url: str
+    api_key: str
+    model: str
+    timeout_seconds: float
 
 
 @dataclass(frozen=True)
@@ -28,6 +43,7 @@ class MemoryLocation:
     memory_root: Path
     external_enabled: bool
     config_path: Path
+    embedding_config: EmbeddingConfig | None
 
 
 def resolve_memory_location(project_root: Path) -> MemoryLocation:
@@ -36,6 +52,7 @@ def resolve_memory_location(project_root: Path) -> MemoryLocation:
     resolved_root = project_root.resolve()
     project_name = sanitize_project_name(resolved_root.name)
     config = load_config(CONFIG_PATH)
+    embedding_config = resolve_embedding_config(config or {})
     local_memory_root = resolved_root / ".memory"
 
     if local_memory_root.is_dir():
@@ -46,6 +63,7 @@ def resolve_memory_location(project_root: Path) -> MemoryLocation:
             memory_root=local_memory_root,
             external_enabled=False,
             config_path=CONFIG_PATH,
+            embedding_config=embedding_config,
         )
 
     storage_root = resolve_storage_root(config or build_default_config(), CONFIG_PATH.parent)
@@ -57,6 +75,7 @@ def resolve_memory_location(project_root: Path) -> MemoryLocation:
             memory_root=storage_root / ".memory",
             external_enabled=True,
             config_path=CONFIG_PATH,
+            embedding_config=embedding_config,
         )
 
     return MemoryLocation(
@@ -66,6 +85,7 @@ def resolve_memory_location(project_root: Path) -> MemoryLocation:
         memory_root=resolved_root / ".memory",
         external_enabled=False,
         config_path=CONFIG_PATH,
+        embedding_config=embedding_config,
     )
 
 
@@ -96,6 +116,12 @@ def build_default_config() -> dict[str, object]:
 
     return {
         "memory_storage_path": str(DEFAULT_STORAGE_ROOT),
+        "embedding": {
+            "base_url": "",
+            "api_key": "",
+            "model": "",
+            "timeout_seconds": 30,
+        },
     }
 
 
@@ -127,3 +153,58 @@ def resolve_storage_root(config: dict[str, object], base_dir: Path) -> Path | No
             storage_root = storage_root.resolve()
         return storage_root
     return None
+
+
+def resolve_embedding_config(config: dict[str, object]) -> EmbeddingConfig | None:
+    """兼容多种字段命名，提取可用的嵌入服务配置。"""
+
+    section = find_embedding_section(config)
+    if section is None:
+        return None
+    base_url = pick_string(section, EMBEDDING_BASE_URL_KEYS)
+    api_key = pick_string(section, EMBEDDING_API_KEY_KEYS)
+    model = pick_string(section, EMBEDDING_MODEL_KEYS)
+    if not base_url or not api_key or not model:
+        return None
+    timeout_seconds = pick_float(section, EMBEDDING_TIMEOUT_KEYS, default=30.0)
+    return EmbeddingConfig(
+        base_url=base_url.rstrip("/"),
+        api_key=api_key,
+        model=model,
+        timeout_seconds=max(1.0, timeout_seconds),
+    )
+
+
+def find_embedding_section(config: dict[str, object]) -> dict[str, object] | None:
+    """优先读取嵌套配置，必要时兼容平铺字段，减少升级摩擦。"""
+
+    for key in EMBEDDING_SECTION_KEYS:
+        value = config.get(key)
+        if isinstance(value, dict):
+            return value
+    return config if isinstance(config, dict) else None
+
+
+def pick_string(payload: dict[str, object], keys: tuple[str, ...]) -> str:
+    """从候选字段里取第一个非空字符串，避免脚本端写重复解析。"""
+
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def pick_float(payload: dict[str, object], keys: tuple[str, ...], default: float) -> float:
+    """对超时时间做宽松解析，避免配置类型差异导致功能失效。"""
+
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str) and value.strip():
+            try:
+                return float(value)
+            except ValueError:
+                continue
+    return default

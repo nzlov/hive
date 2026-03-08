@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -44,6 +45,19 @@ def init_memory_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_memories_type_timestamp
         ON memories(type, timestamp DESC, id DESC);
+
+        CREATE TABLE IF NOT EXISTS memory_embeddings (
+            memory_id INTEGER PRIMARY KEY,
+            vector TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS memory_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         """
     )
     ensure_project_name_column(conn)
@@ -86,3 +100,111 @@ def decode_tags(raw: str) -> list[str]:
     if not isinstance(payload, list):
         return []
     return [str(item).strip() for item in payload if str(item).strip()]
+
+
+def encode_vector(vector: list[float]) -> str:
+    """将向量序列化为 JSON，避免 SQLite 缺少原生数组类型带来的歧义。"""
+
+    return json.dumps(vector, ensure_ascii=False, separators=(",", ":"))
+
+
+def decode_vector(raw: str) -> list[float]:
+    """容错解析向量数据，避免单条坏数据中断整个检索流程。"""
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    vector: list[float] = []
+    for item in payload:
+        try:
+            vector.append(float(item))
+        except (TypeError, ValueError):
+            return []
+    return vector
+
+
+def upsert_memory_embedding(
+    conn: sqlite3.Connection, memory_id: int, vector: list[float], updated_at: str | None = None
+) -> None:
+    """统一维护记忆向量，避免写入脚本和重建脚本各自处理冲突策略。"""
+
+    timestamp = updated_at or datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO memory_embeddings (memory_id, vector, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(memory_id) DO UPDATE SET
+            vector = excluded.vector,
+            updated_at = excluded.updated_at
+        """,
+        (memory_id, encode_vector(vector), timestamp),
+    )
+
+
+def delete_all_memory_embeddings(conn: sqlite3.Connection) -> None:
+    """模型切换时先清空旧向量，避免新旧维度混用导致相似度失真。"""
+
+    conn.execute("DELETE FROM memory_embeddings")
+
+
+def get_memory_metadata(conn: sqlite3.Connection, key: str) -> str | None:
+    """集中读取元数据，避免外部脚本重复拼 SQL。"""
+
+    row = conn.execute(
+        "SELECT value FROM memory_metadata WHERE key = ?",
+        (key,),
+    ).fetchone()
+    if row is None:
+        return None
+    return str(row[0])
+
+
+def set_memory_metadata(
+    conn: sqlite3.Connection, key: str, value: str, updated_at: str | None = None
+) -> None:
+    """统一写入元数据，确保模型切换和状态同步都落在同一处。"""
+
+    timestamp = updated_at or datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO memory_metadata (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        """,
+        (key, value, timestamp),
+    )
+
+
+def fetch_all_memories(conn: sqlite3.Connection):
+    """为重建向量提供完整数据集，避免脚本层感知具体库结构。"""
+
+    return conn.execute(
+        """
+        SELECT id, project_name, type, title, tags, summary, content, timestamp, created_at
+        FROM memories
+        ORDER BY timestamp DESC, id DESC
+        """
+    ).fetchall()
+
+
+def fetch_memory_embeddings(conn: sqlite3.Connection, memory_ids: list[int]) -> dict[int, list[float]]:
+    """批量读取向量，减少检索阶段的数据库往返次数。"""
+
+    if not memory_ids:
+        return {}
+    placeholders = ",".join("?" for _ in memory_ids)
+    rows = conn.execute(
+        f"SELECT memory_id, vector FROM memory_embeddings WHERE memory_id IN ({placeholders})",
+        tuple(memory_ids),
+    ).fetchall()
+    out: dict[int, list[float]] = {}
+    for row in rows:
+        vector = decode_vector(str(row[1]))
+        if vector:
+            out[int(row[0])] = vector
+    return out
