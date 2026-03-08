@@ -8,6 +8,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from memory_config import resolve_memory_location
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Write a memory file")
@@ -82,9 +84,11 @@ def build_error_content(
 
 
 def main() -> int:
+    """根据配置将记忆写入项目内或外挂目录。"""
+
     args = parse_args()
-    root = Path(args.root).resolve()
-    memory_root = root / ".memory"
+    location = resolve_memory_location(Path(args.root))
+    memory_root = location.memory_root
     now = datetime.now()
     year = now.strftime("%Y")
     month = now.strftime("%m")

@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from memory_config import resolve_memory_location
+
 
 TIMESTAMP_RE = re.compile(r"^(\d{14})")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -623,12 +625,14 @@ def build_header_snippets(
 
 
 def main() -> int:
+    """按配置解析记忆目录后执行搜索。"""
+
     args = parse_args()
     queries = parse_queries(args.query)
     if not queries:
         raise SystemExit("--query must contain at least one non-empty keyword")
-    project_root = Path(args.root).resolve()
-    memory_root = project_root / ".memory"
+    location = resolve_memory_location(Path(args.root))
+    memory_root = location.memory_root
     errors_root = memory_root / "errors"
     summaries_root = memory_root / "summaries"
 
@@ -641,7 +645,7 @@ def main() -> int:
     print(
         render_result_markdown(
             query_text,
-            str(project_root),
+            str(location.search_root),
             error_hit_dicts,
             summary_hit_dicts,
             debug_commands,
