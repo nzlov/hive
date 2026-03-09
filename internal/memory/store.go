@@ -83,45 +83,7 @@ func initDB(db *sql.DB) error {
 			return err
 		}
 	}
-	if err := ensureColumnExists(db, "memories", "userid", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	if err := ensureColumnExists(db, "users", "userid", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	if err := ensureColumnExists(db, "users", "real_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
 	return nil
-}
-
-// ensureColumnExists 在兼容旧数据库时补齐缺失列，避免升级后因历史表结构缺字段而崩溃。
-func ensureColumnExists(db *sql.DB, tableName, columnName, definition string) error {
-	query := fmt.Sprintf(`PRAGMA table_info(%s)`, tableName)
-	rows, err := db.Query(query)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name string
-		var dataType string
-		var notNull int
-		var defaultValue sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
-			return err
-		}
-		if strings.EqualFold(name, columnName) {
-			return nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	_, err = db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, tableName, columnName, definition))
-	return err
 }
 
 // EncodeTags 使用 JSON 保存标签，避免分隔符规则污染实际内容。
