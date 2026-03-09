@@ -834,3 +834,126 @@ func TestServiceMergeHitsPreservesKeywordSnippetAndAppliesFusion(t *testing.T) {
 		t.Fatalf("融合置信度异常: got=%v want=%v", merged[0].Confidence, want)
 	}
 }
+
+// TestServiceKeywordQueriesExpandsSynonyms 验证同义词扩展受配置控制，避免关键字召回依赖调用方手工补齐词表。
+func TestServiceKeywordQueriesExpandsSynonyms(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{KeywordSynonymsEnabled: true, KeywordSynonymGroups: [][]string{{"error", "故障", "失败"}}}})
+	queries := service.keywordQueries([]string{"error"})
+	joined := strings.Join(queries, ",")
+	if !strings.Contains(joined, "error") || !strings.Contains(joined, "故障") || !strings.Contains(joined, "失败") {
+		t.Fatalf("同义词扩展结果异常: %+v", queries)
+	}
+}
+
+// TestServiceRankRowsByKeywordBM25 验证 BM25 模式会按字段权重重排结果，避免关键字命中长期只看时间顺序。
+func TestServiceRankRowsByKeywordBM25(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{
+		KeywordMode:         "bm25",
+		KeywordFields:       []string{"title", "content"},
+		KeywordFieldWeights: map[string]float64{"title": 3, "content": 1},
+		KeywordBM25K1:       1.2,
+		KeywordBM25B:        0.75,
+	}})
+	rows := []Row{
+		{ID: 1, Title: "数据库连接池抖动", Content: "普通内容", Timestamp: "20260310100000"},
+		{ID: 2, Title: "普通标题", Content: "数据库连接池出现抖动并持续重试", Timestamp: "20260310100100"},
+	}
+	sortedRows, scoreByID := service.rankRowsByKeywordBM25(rows, []string{"数据库连接池"})
+	if len(sortedRows) != 2 {
+		t.Fatalf("BM25 重排结果数量异常: %+v", sortedRows)
+	}
+	if sortedRows[0].ID != 1 {
+		t.Fatalf("标题高权重场景下应优先返回标题命中: %+v", sortedRows)
+	}
+	if scoreByID[1] <= scoreByID[2] {
+		t.Fatalf("标题高权重场景下得分应更高: %+v", scoreByID)
+	}
+}
+
+// TestServiceSemanticSearchUsesCache 验证开启缓存后重复搜索会复用语义结果，避免重复请求嵌入服务。
+func TestServiceSemanticSearchUsesCache(t *testing.T) {
+	t.Helper()
+	provider := &queryEmbeddingProvider{vector: []float64{1, 0}}
+	service := NewService(config.AppConfig{
+		MemoryRoot: t.TempDir(),
+		SearchConfig: &config.SearchConfig{
+			CacheEnabled:           true,
+			CacheQueryEmbeddingTTL: 600,
+			CacheSemanticHitsTTL:   600,
+			CacheMaxEntries:        100,
+		},
+	})
+	service.provider = provider
+	ctx := testContextWithStore(t, service.config)
+
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		t.Fatalf("读取模型存储失败: %v", err)
+	}
+	seedSemanticMemory(t, store, "cache-project", "summary", "缓存记忆", "## Summary\n\n- 详情: 缓存命中。", "20260310100000", []float64{1, 0})
+
+	if _, err := service.Search(ctx, "cache-project", []string{"缓存查询"}, false); err != nil {
+		t.Fatalf("首次搜索失败: %v", err)
+	}
+	if _, err := service.Search(ctx, "cache-project", []string{"缓存查询"}, false); err != nil {
+		t.Fatalf("第二次搜索失败: %v", err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("缓存生效后应只在首轮调用一次嵌入，实际=%d", provider.calls)
+	}
+}
+
+// TestServiceWriteInvalidatesSearchCache 验证写入后会清理语义缓存，避免新记忆无法被同查询及时命中。
+func TestServiceWriteInvalidatesSearchCache(t *testing.T) {
+	t.Helper()
+	provider := &stubEmbeddingProvider{enabled: true, model: "cache-test-model", vector: []float64{1, 0}}
+	service := NewService(config.AppConfig{
+		MemoryRoot: t.TempDir(),
+		SearchConfig: &config.SearchConfig{
+			CacheEnabled:           true,
+			CacheQueryEmbeddingTTL: 600,
+			CacheSemanticHitsTTL:   600,
+			CacheMaxEntries:        100,
+		},
+	})
+	service.provider = provider
+	ctx := testContextWithStore(t, service.config)
+
+	if _, err := service.Write(ctx, "cache-write-project", "", "", []api.MemoryWriteItem{{
+		Type:    "summary",
+		Title:   "缓存写入一",
+		Tags:    []string{"缓存"},
+		Summary: "首条缓存记忆",
+		Context: "## Summary\n\n- 详情: 第一条。",
+	}}); err != nil {
+		t.Fatalf("首次写入失败: %v", err)
+	}
+
+	first, err := service.Search(ctx, "cache-write-project", []string{"缓存写入"}, false)
+	if err != nil {
+		t.Fatalf("首次搜索失败: %v", err)
+	}
+	if len(first.SummaryHits) == 0 {
+		t.Fatalf("首次搜索应命中至少一条结果: %+v", first.SummaryHits)
+	}
+
+	if _, err := service.Write(ctx, "cache-write-project", "", "", []api.MemoryWriteItem{{
+		Type:    "summary",
+		Title:   "缓存写入二",
+		Tags:    []string{"缓存"},
+		Summary: "第二条缓存记忆",
+		Context: "## Summary\n\n- 详情: 第二条。",
+	}}); err != nil {
+		t.Fatalf("第二次写入失败: %v", err)
+	}
+
+	second, err := service.Search(ctx, "cache-write-project", []string{"缓存写入"}, false)
+	if err != nil {
+		t.Fatalf("第二次搜索失败: %v", err)
+	}
+	if len(second.SummaryHits) < 2 {
+		t.Fatalf("写入后应失效缓存并返回新结果: %+v", second.SummaryHits)
+	}
+}

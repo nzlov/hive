@@ -221,6 +221,12 @@ func TestResolveSearchConfigUsesDefaults(t *testing.T) {
 	if got.KeywordMode != defaultKeywordMode {
 		t.Fatalf("KeywordMode = %q, want %q", got.KeywordMode, defaultKeywordMode)
 	}
+	if got.KeywordBM25K1 != defaultKeywordBM25K1 {
+		t.Fatalf("KeywordBM25K1 = %v, want %v", got.KeywordBM25K1, defaultKeywordBM25K1)
+	}
+	if got.KeywordBM25B != defaultKeywordBM25B {
+		t.Fatalf("KeywordBM25B = %v, want %v", got.KeywordBM25B, defaultKeywordBM25B)
+	}
 	if got.FusionFormula != defaultFusionFormula {
 		t.Fatalf("FusionFormula = %q, want %q", got.FusionFormula, defaultFusionFormula)
 	}
@@ -280,6 +286,12 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 	}
 	if got.KeywordFieldWeights["title"] != 3 {
 		t.Fatalf("KeywordFieldWeights[title] = %v, want 3", got.KeywordFieldWeights["title"])
+	}
+	if got.KeywordBM25K1 != defaultKeywordBM25K1 {
+		t.Fatalf("KeywordBM25K1 = %v, want %v", got.KeywordBM25K1, defaultKeywordBM25K1)
+	}
+	if got.KeywordBM25B != defaultKeywordBM25B {
+		t.Fatalf("KeywordBM25B = %v, want %v", got.KeywordBM25B, defaultKeywordBM25B)
 	}
 	if !got.KeywordSynonymsEnabled {
 		t.Fatalf("KeywordSynonymsEnabled = %v, want true", got.KeywordSynonymsEnabled)

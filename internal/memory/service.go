@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nzlov/hive/internal/api"
@@ -21,17 +22,20 @@ const embeddingModelMetaKey = "embedding_model"
 var (
 	timestampRegexp = regexp.MustCompile(`^(\d{14})`)
 	headingRegexp   = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*$`)
+	keywordTermRE   = regexp.MustCompile(`[\p{Han}\p{L}\p{N}_]+`)
 )
 
 // Service 封装记忆相关核心业务，避免 HTTP 层直接感知数据库与嵌入细节。
 type Service struct {
 	config   config.AppConfig
 	provider EmbeddingProvider
+	cacheMu  sync.RWMutex
+	cache    *searchCache
 }
 
 // NewService 构造记忆服务，确保搜索、写入和重建共享同一套配置和 provider。
 func NewService(cfg config.AppConfig) *Service {
-	return &Service{config: cfg, provider: NewEmbeddingProvider(cfg.EmbeddingConfig)}
+	return &Service{config: cfg, provider: NewEmbeddingProvider(cfg.EmbeddingConfig), cache: newSearchCache()}
 }
 
 // Search 执行记忆检索并返回结构化结果，统一仅按项目名隔离单库中的不同项目数据。
@@ -102,7 +106,8 @@ func (s *Service) searchHits(ctx context.Context, projectName string, queries []
 		debugCommands = []string{}
 		debugCommandsRef = &debugCommands
 	}
-	matcher := buildQueryMatcher(queries)
+	effectiveQueries := s.keywordQueries(queries)
+	matcher := buildQueryMatcher(effectiveQueries)
 	errorKeywordHits, err := s.collectHits(store, "error", projectName, queries, matcher, debugCommandsRef)
 	if err != nil {
 		return SearchResult{}, err
@@ -193,6 +198,7 @@ func (s *Service) Write(ctx context.Context, projectName, gitBranch, userID stri
 	if err != nil {
 		return "", err
 	}
+	s.invalidateSearchCache()
 	return store.SourceLabel(), nil
 }
 
@@ -267,6 +273,7 @@ func (s *Service) rebuildEmbeddingsWithDB(location Location, store *models.Store
 	if err != nil {
 		return RebuildResult{}, err
 	}
+	s.invalidateSearchCache()
 	_ = location
 	return RebuildResult{Changed: true, Message: fmt.Sprintf("已使用模型 %s 重建 %d 条向量。", s.provider.ModelName(), len(vectors))}, nil
 }
@@ -276,13 +283,18 @@ func (s *Service) collectHits(store *models.Store, source string, projectName st
 	if debugCommands != nil {
 		*debugCommands = append(*debugCommands, fmt.Sprintf("%s scan: %s [%s/%s]", store.Driver(), store.SourceLabel(), projectName, source))
 	}
-	storedRows, err := store.SearchMemoriesByProjectAndType(projectName, source, queries)
+	effectiveQueries := s.keywordQueries(queries)
+	storedRows, err := store.SearchMemoriesByProjectAndType(projectName, source, effectiveQueries)
 	if err != nil {
 		return nil, err
 	}
 	rows := make([]Row, 0, len(storedRows))
 	for _, item := range storedRows {
 		rows = append(rows, memoryRowFromModel(item))
+	}
+	keywordScoreByID := map[int64]float64{}
+	if s.keywordMode() == "bm25" {
+		rows, keywordScoreByID = s.rankRowsByKeywordBM25(rows, effectiveQueries)
 	}
 	now := time.Now().UTC()
 	hits := make([]Hit, 0)
@@ -294,6 +306,10 @@ func (s *Service) collectHits(store *models.Store, source string, projectName st
 			continue
 		}
 		ts := parseTimestamp(row.Timestamp)
+		keywordConfidence := s.confidenceByAgeForType(source, ts, now)
+		if score, ok := keywordScoreByID[row.ID]; ok {
+			keywordConfidence = score
+		}
 		hit := Hit{
 			ID:         row.ID,
 			Source:     source,
@@ -301,7 +317,7 @@ func (s *Service) collectHits(store *models.Store, source string, projectName st
 			Title:      row.Title,
 			Tags:       models.DecodeTags(row.Tags),
 			Timestamp:  ts,
-			Confidence: s.confidenceByAgeForType(source, ts, now),
+			Confidence: keywordConfidence,
 		}
 		if metadataMatched && len(lineNumbers) == 0 {
 			hit.FileContent = strings.TrimSpace(row.Content)
@@ -313,7 +329,9 @@ func (s *Service) collectHits(store *models.Store, source string, projectName st
 		}
 		hits = append(hits, hit)
 	}
-	sort.Slice(hits, func(i, j int) bool { return hits[i].Timestamp.After(hits[j].Timestamp) })
+	if s.keywordMode() != "bm25" {
+		sort.Slice(hits, func(i, j int) bool { return hits[i].Timestamp.After(hits[j].Timestamp) })
+	}
 	return hits, nil
 }
 
@@ -326,7 +344,21 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 	if len(queryTexts) == 0 {
 		return nil, nil
 	}
-	vectors, err := s.provider.EmbedTexts(queryTexts)
+	now := time.Now().UTC()
+	semanticCacheKey := s.semanticHitsCacheKey(source, projectName, queryTexts)
+	if hits, ok := s.getCachedSemanticHits(semanticCacheKey, now); ok {
+		return hits, nil
+	}
+	queryEmbeddingCacheKey := s.queryEmbeddingsCacheKey(queryTexts)
+	vectors, ok := s.getCachedQueryEmbeddings(queryEmbeddingCacheKey, now)
+	var err error
+	if !ok {
+		vectors, err = s.provider.EmbedTexts(queryTexts)
+		if err != nil {
+			return nil, err
+		}
+		s.setCachedQueryEmbeddings(queryEmbeddingCacheKey, vectors, now)
+	}
 	if err != nil || len(vectors) == 0 {
 		return nil, err
 	}
@@ -340,6 +372,7 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 		}
 		return hits[i].Confidence > hits[j].Confidence
 	})
+	s.setCachedSemanticHits(semanticCacheKey, hits, now)
 	return hits, nil
 }
 
@@ -500,6 +533,248 @@ func normalizeEmbeddingQueries(queries []string) []string {
 		}
 	}
 	return out
+}
+
+// keywordMode 返回关键字检索模式，确保 LIKE 与 BM25 可以按配置切换。
+func (s *Service) keywordMode() string {
+	if s.config.SearchConfig == nil {
+		return "like"
+	}
+	if strings.EqualFold(strings.TrimSpace(s.config.SearchConfig.KeywordMode), "bm25") {
+		return "bm25"
+	}
+	return "like"
+}
+
+// keywordQueries 基于配置扩展同义词查询，避免调用方自己维护扩展规则。
+func (s *Service) keywordQueries(queries []string) []string {
+	cleaned := normalizePlainQueries(queries)
+	if len(cleaned) == 0 {
+		return cleaned
+	}
+	if s.config.SearchConfig == nil || !s.config.SearchConfig.KeywordSynonymsEnabled || len(s.config.SearchConfig.KeywordSynonymGroups) == 0 {
+		return cleaned
+	}
+	out := make([]string, 0, len(cleaned))
+	seen := map[string]struct{}{}
+	for _, query := range cleaned {
+		normalized := strings.ToLower(strings.TrimSpace(query))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; !ok {
+			out = append(out, query)
+			seen[normalized] = struct{}{}
+		}
+		for _, group := range s.config.SearchConfig.KeywordSynonymGroups {
+			if !containsKeywordIgnoreCase(group, query) {
+				continue
+			}
+			for _, item := range group {
+				candidate := strings.TrimSpace(item)
+				if candidate == "" {
+					continue
+				}
+				candidateKey := strings.ToLower(candidate)
+				if _, ok := seen[candidateKey]; ok {
+					continue
+				}
+				out = append(out, candidate)
+				seen[candidateKey] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
+// containsKeywordIgnoreCase 判断分组里是否包含查询词，避免同义词扩展误把无关分组加入召回条件。
+func containsKeywordIgnoreCase(group []string, query string) bool {
+	for _, item := range group {
+		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(query)) {
+			return true
+		}
+	}
+	return false
+}
+
+// rankRowsByKeywordBM25 按配置字段和权重执行 BM25 重排，避免关键字结果长期仅靠时间排序。
+func (s *Service) rankRowsByKeywordBM25(rows []Row, queries []string) ([]Row, map[int64]float64) {
+	if len(rows) == 0 {
+		return rows, map[int64]float64{}
+	}
+	terms := extractKeywordTerms(queries)
+	if len(terms) == 0 {
+		return rows, map[int64]float64{}
+	}
+	fields, fieldWeights := s.keywordBM25FieldsAndWeights()
+	if len(fields) == 0 {
+		return rows, map[int64]float64{}
+	}
+	n := float64(len(rows))
+	avgLen := make(map[string]float64, len(fields))
+	df := make(map[string]map[string]float64, len(fields))
+	for _, field := range fields {
+		df[field] = map[string]float64{}
+		totalLen := 0.0
+		for _, row := range rows {
+			text := keywordFieldText(row, field)
+			lowerText := strings.ToLower(text)
+			totalLen += float64(len([]rune(text)))
+			for _, term := range terms {
+				if strings.Contains(lowerText, term) {
+					df[field][term]++
+				}
+			}
+		}
+		avg := totalLen / n
+		if avg <= 0 {
+			avg = 1
+		}
+		avgLen[field] = avg
+	}
+	k1, b := s.keywordBM25Params()
+	maxScore := 0.0
+	scoreByID := map[int64]float64{}
+	for _, row := range rows {
+		score := 0.0
+		for _, field := range fields {
+			weight := fieldWeights[field]
+			if weight <= 0 {
+				continue
+			}
+			text := strings.ToLower(keywordFieldText(row, field))
+			docLen := float64(len([]rune(text)))
+			if docLen <= 0 {
+				docLen = 1
+			}
+			for _, term := range terms {
+				tf := float64(strings.Count(text, term))
+				if tf <= 0 {
+					continue
+				}
+				docFreq := df[field][term]
+				idf := math.Log(1 + (n-docFreq+0.5)/(docFreq+0.5))
+				denominator := tf + k1*(1-b+b*(docLen/avgLen[field]))
+				if denominator <= 0 {
+					continue
+				}
+				score += weight * idf * ((tf * (k1 + 1)) / denominator)
+			}
+		}
+		scoreByID[row.ID] = score
+		if score > maxScore {
+			maxScore = score
+		}
+	}
+	normalized := map[int64]float64{}
+	if maxScore <= 0 {
+		for _, row := range rows {
+			normalized[row.ID] = 0
+		}
+	} else {
+		for _, row := range rows {
+			normalized[row.ID] = scoreByID[row.ID] / maxScore
+		}
+	}
+	sortedRows := append([]Row(nil), rows...)
+	sort.Slice(sortedRows, func(i, j int) bool {
+		left := normalized[sortedRows[i].ID]
+		right := normalized[sortedRows[j].ID]
+		if left == right {
+			return parseTimestamp(sortedRows[i].Timestamp).After(parseTimestamp(sortedRows[j].Timestamp))
+		}
+		return left > right
+	})
+	return sortedRows, normalized
+}
+
+// keywordBM25FieldsAndWeights 返回 BM25 参与字段和权重，避免关键字打分字段散落在多处。
+func (s *Service) keywordBM25FieldsAndWeights() ([]string, map[string]float64) {
+	allowed := map[string]struct{}{"title": {}, "summary": {}, "tags": {}, "content": {}, "project_name": {}}
+	defaultFields := []string{"title", "summary", "tags", "content", "project_name"}
+	defaultWeights := map[string]float64{"title": 2.0, "summary": 1.5, "tags": 1.5, "content": 1.0, "project_name": 0.8}
+	if s.config.SearchConfig == nil {
+		return defaultFields, defaultWeights
+	}
+	fields := make([]string, 0, len(s.config.SearchConfig.KeywordFields))
+	for _, field := range s.config.SearchConfig.KeywordFields {
+		normalized := strings.ToLower(strings.TrimSpace(field))
+		if _, ok := allowed[normalized]; ok {
+			fields = append(fields, normalized)
+		}
+	}
+	if len(fields) == 0 {
+		fields = defaultFields
+	}
+	weights := map[string]float64{}
+	for key, value := range defaultWeights {
+		weights[key] = value
+	}
+	for key, value := range s.config.SearchConfig.KeywordFieldWeights {
+		normalized := strings.ToLower(strings.TrimSpace(key))
+		if _, ok := allowed[normalized]; !ok || value <= 0 {
+			continue
+		}
+		weights[normalized] = value
+	}
+	return fields, weights
+}
+
+// keywordBM25Params 返回 BM25 参数，确保公式调优可以通过配置控制。
+func (s *Service) keywordBM25Params() (float64, float64) {
+	if s.config.SearchConfig == nil {
+		return 1.2, 0.75
+	}
+	k1 := s.config.SearchConfig.KeywordBM25K1
+	if k1 <= 0 {
+		k1 = 1.2
+	}
+	b := s.config.SearchConfig.KeywordBM25B
+	if b < 0 {
+		b = 0
+	}
+	if b > 1 {
+		b = 1
+	}
+	return k1, b
+}
+
+// keywordFieldText 返回指定字段正文，避免 BM25 打分阶段重复拼接字段分支。
+func keywordFieldText(row Row, field string) string {
+	switch field {
+	case "title":
+		return row.Title
+	case "summary":
+		return row.Summary
+	case "tags":
+		return strings.Join(models.DecodeTags(row.Tags), " ")
+	case "content":
+		return row.Content
+	case "project_name":
+		return row.ProjectName
+	default:
+		return ""
+	}
+}
+
+// extractKeywordTerms 提取关键字项用于 BM25 打分，避免整句输入导致统计粒度过粗。
+func extractKeywordTerms(queries []string) []string {
+	seen := map[string]struct{}{}
+	terms := []string{}
+	for _, query := range queries {
+		for _, item := range keywordTermRE.FindAllString(strings.ToLower(strings.TrimSpace(query)), -1) {
+			term := strings.TrimSpace(item)
+			if term == "" {
+				continue
+			}
+			if _, ok := seen[term]; ok {
+				continue
+			}
+			terms = append(terms, term)
+			seen[term] = struct{}{}
+		}
+	}
+	return terms
 }
 
 // maxSemanticSimilarity 使用多查询向量中的最高分，避免任一查询词被拼接模板稀释。

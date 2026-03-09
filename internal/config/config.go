@@ -28,6 +28,8 @@ const (
 	defaultKeywordMode                 = "like"
 	defaultKeywordBackend              = "auto"
 	defaultKeywordSynonymsEnabled      = true
+	defaultKeywordBM25K1               = 1.2
+	defaultKeywordBM25B                = 0.75
 	defaultFusionEnabled               = true
 	defaultFusionFormula               = "weighted_sum"
 	defaultFusionKeywordWeight         = 0.55
@@ -82,6 +84,8 @@ type SearchConfig struct {
 	KeywordFieldWeights          map[string]float64
 	KeywordSynonymsEnabled       bool
 	KeywordSynonymGroups         [][]string
+	KeywordBM25K1                float64
+	KeywordBM25B                 float64
 	FusionEnabled                bool
 	FusionFormula                string
 	FusionKeywordWeight          float64
@@ -153,6 +157,8 @@ var (
 	searchKeywordSynonymsSectionKeys         = []string{"synonyms"}
 	searchKeywordSynonymsEnabledKeys         = []string{"enabled"}
 	searchKeywordSynonymsGroupsKeys          = []string{"groups"}
+	searchKeywordBM25K1Keys                  = []string{"bm25_k1", "bm25K1"}
+	searchKeywordBM25BKeys                   = []string{"bm25_b", "bm25B"}
 	searchFusionSectionKeys                  = []string{"fusion"}
 	searchFusionEnabledKeys                  = []string{"enabled"}
 	searchFusionFormulaKeys                  = []string{"formula"}
@@ -279,6 +285,8 @@ func buildDefaultPayload() (map[string]any, error) {
 			"keyword": map[string]any{
 				"mode":    defaultKeywordMode,
 				"backend": defaultKeywordBackend,
+				"bm25_k1": defaultKeywordBM25K1,
+				"bm25_b":  defaultKeywordBM25B,
 				"fields":  []string{"title", "summary", "tags", "content", "project_name"},
 				"field_weights": map[string]any{
 					"title":        2.0,
@@ -525,6 +533,17 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 	if len(keywordFieldWeights) == 0 {
 		keywordFieldWeights = map[string]float64{"title": 2.0, "summary": 1.5, "tags": 1.5, "content": 1.0, "project_name": 0.8}
 	}
+	keywordBM25K1 := pickFloat(keywordSection, searchKeywordBM25K1Keys, defaultKeywordBM25K1)
+	if keywordBM25K1 <= 0 {
+		keywordBM25K1 = defaultKeywordBM25K1
+	}
+	keywordBM25B := pickFloat(keywordSection, searchKeywordBM25BKeys, defaultKeywordBM25B)
+	if keywordBM25B < 0 {
+		keywordBM25B = 0
+	}
+	if keywordBM25B > 1 {
+		keywordBM25B = 1
+	}
 	synonymsSection := findSection(keywordSection, searchKeywordSynonymsSectionKeys)
 	keywordSynonymsEnabled := pickBool(synonymsSection, searchKeywordSynonymsEnabledKeys, defaultKeywordSynonymsEnabled)
 	keywordSynonymGroups := pickStringGroups(synonymsSection, searchKeywordSynonymsGroupsKeys)
@@ -579,6 +598,8 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 		KeywordFieldWeights:          keywordFieldWeights,
 		KeywordSynonymsEnabled:       keywordSynonymsEnabled,
 		KeywordSynonymGroups:         keywordSynonymGroups,
+		KeywordBM25K1:                keywordBM25K1,
+		KeywordBM25B:                 keywordBM25B,
 		FusionEnabled:                fusionEnabled,
 		FusionFormula:                fusionFormula,
 		FusionKeywordWeight:          fusionKeywordWeight,
