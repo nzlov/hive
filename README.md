@@ -280,24 +280,13 @@ Hive 不再通过“每个项目各自一个数据库”来隔离，而是通过
 {}
 ```
 
-### `POST /api/v1/memories/rebuild-embeddings`
+### 嵌入模型启动校验
 
-请求示例：
+服务启动时会自动检查当前配置中的嵌入模型，是否与数据库 `memory_metadata` 里记录的模型一致。
 
-```json
-{
-  "force": true
-}
-```
-
-返回示例：
-
-```json
-{
-  "changed": true,
-  "message": "已使用模型 text-embedding-3-small 重建 42 条向量。"
-}
-```
+- 一致：直接复用现有向量。
+- 不一致：自动全量重建 `memory_embeddings`，避免新旧模型向量混用。
+- 未配置嵌入模型：跳过校验与重建。
 
 ## 客户端使用说明
 
@@ -362,8 +351,9 @@ python3 hive/scripts/main.py write --root . --items-json '[
 
 - 写入时同步写入向量
 - 搜索时在关键字命中外追加语义召回
-- 模型切换时自动重建全部向量
-- 历史向量缺失时自动补建
+- 启动时会检查配置模型与数据库记录是否一致
+- 模型切换时启动阶段自动重建全部向量
+- 向量表通过 `project_name` 字段直接做项目隔离
 
 嵌入服务需兼容 OpenAI Embeddings API：
 

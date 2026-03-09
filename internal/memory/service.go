@@ -39,9 +39,6 @@ func (s *Service) Search(projectName string, queries []string, debug bool) (Sear
 		return SearchResult{}, err
 	}
 	defer db.Close()
-	if _, err := s.rebuildEmbeddingsWithDB(location, db, false); err != nil {
-		return SearchResult{}, err
-	}
 	effectiveProjectName := normalizeProjectName(projectName)
 	var debugCommands []string
 	var debugCommandsRef *[]string
@@ -83,9 +80,6 @@ func (s *Service) Write(projectName, gitBranch string, items []api.MemoryWriteIt
 		return "", err
 	}
 	defer db.Close()
-	if _, err := s.rebuildEmbeddingsWithDB(location, db, false); err != nil {
-		return "", err
-	}
 	tx, err := db.Begin()
 	if err != nil {
 		return "", err
@@ -132,9 +126,12 @@ func (s *Service) Write(projectName, gitBranch string, items []api.MemoryWriteIt
 			if idx >= len(vectors) {
 				break
 			}
-			if err := UpsertMemoryEmbedding(tx, memoryID, vectors[idx], updatedAt); err != nil {
+			if err := UpsertMemoryEmbedding(tx, effectiveProjectName, memoryID, vectors[idx], updatedAt); err != nil {
 				return "", err
 			}
+		}
+		if err := SetMemoryMetadata(tx, embeddingModelMetaKey, s.provider.ModelName(), updatedAt); err != nil {
+			return "", err
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -143,14 +140,14 @@ func (s *Service) Write(projectName, gitBranch string, items []api.MemoryWriteIt
 	return DBPath(location.MemoryRoot), nil
 }
 
-// RebuildEmbeddings 对外暴露向量重建能力，让脚本和 HTTP 维护入口共享同一实现。
-func (s *Service) RebuildEmbeddings(force bool) (RebuildResult, error) {
+// EnsureEmbeddingsReady 在服务启动阶段校验模型一致性，避免请求到来后才暴露旧向量问题。
+func (s *Service) EnsureEmbeddingsReady() (RebuildResult, error) {
 	location, db, err := s.openProjectDB()
 	if err != nil {
 		return RebuildResult{}, err
 	}
 	defer db.Close()
-	return s.rebuildEmbeddingsWithDB(location, db, force)
+	return s.rebuildEmbeddingsWithDB(location, db, false)
 }
 
 // openProjectDB 统一完成数据库连接，避免重复打开逻辑散落在各能力中。
@@ -204,7 +201,7 @@ func (s *Service) rebuildEmbeddingsWithDB(location Location, db *sql.DB, force b
 		if idx >= len(vectors) {
 			break
 		}
-		if err := UpsertMemoryEmbedding(tx, row.ID, vectors[idx], rebuiltAt); err != nil {
+		if err := UpsertMemoryEmbedding(tx, row.ProjectName, row.ID, vectors[idx], rebuiltAt); err != nil {
 			return RebuildResult{}, err
 		}
 	}
@@ -284,7 +281,7 @@ func (s *Service) collectSemanticHits(db *sql.DB, source string, location Locati
 		filteredRows = append(filteredRows, row)
 		memoryIDs = append(memoryIDs, row.ID)
 	}
-	embeddings, err := FetchMemoryEmbeddings(db, memoryIDs)
+	embeddings, err := FetchMemoryEmbeddings(db, projectName, memoryIDs)
 	if err != nil {
 		return nil, err
 	}

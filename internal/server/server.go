@@ -49,19 +49,6 @@ func NewRouter(service *memory.Service) *gin.Engine {
 		}
 		c.JSON(http.StatusOK, api.WriteResponse{})
 	})
-	router.POST("/api/v1/memories/rebuild-embeddings", func(c *gin.Context) {
-		var request api.RebuildRequest
-		if err := c.ShouldBindJSON(&request); err != nil {
-			c.JSON(http.StatusBadRequest, api.RebuildResponse{Error: err.Error()})
-			return
-		}
-		result, err := service.RebuildEmbeddings(request.Force)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, api.RebuildResponse{Error: err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, api.RebuildResponse{Changed: result.Changed, Message: result.Message})
-	})
 	return router
 }
 

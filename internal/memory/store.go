@@ -50,10 +50,12 @@ func initDB(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_memories_project_type_timestamp ON memories(project_name, type, timestamp DESC, id DESC);`,
 		`CREATE TABLE IF NOT EXISTS memory_embeddings (
 			memory_id INTEGER PRIMARY KEY,
+			project_name TEXT NOT NULL DEFAULT '',
 			vector TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
 		);`,
+		`CREATE INDEX IF NOT EXISTS idx_memory_embeddings_project_memory ON memory_embeddings(project_name, memory_id);`,
 		`CREATE TABLE IF NOT EXISTS memory_metadata (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL,
@@ -65,38 +67,7 @@ func initDB(db *sql.DB) error {
 			return err
 		}
 	}
-	return ensureProjectNameColumn(db)
-}
-
-// ensureProjectNameColumn 兼容旧库结构，避免升级后因为缺列导致现有记忆不可读写。
-func ensureProjectNameColumn(db *sql.DB) error {
-	rows, err := db.Query(`PRAGMA table_info(memories)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	hasProjectName := false
-	for rows.Next() {
-		var cid int
-		var name string
-		var fieldType string
-		var notNull int
-		var defaultValue sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &fieldType, &notNull, &defaultValue, &pk); err != nil {
-			return err
-		}
-		if name == "project_name" {
-			hasProjectName = true
-			break
-		}
-	}
-	if hasProjectName {
-		return nil
-	}
-	_, err = db.Exec(`ALTER TABLE memories ADD COLUMN project_name TEXT NOT NULL DEFAULT ''`)
-	return err
+	return nil
 }
 
 // EncodeTags 使用 JSON 保存标签，避免分隔符规则污染实际内容。
@@ -155,13 +126,14 @@ func InsertMemory(tx *sql.Tx, row Row) (int64, error) {
 	return result.LastInsertId()
 }
 
-// UpsertMemoryEmbedding 统一维护向量写入，避免写入和重建各自处理冲突策略。
-func UpsertMemoryEmbedding(tx *sql.Tx, memoryID int64, vector []float64, updatedAt string) error {
+// UpsertMemoryEmbedding 统一维护向量写入，并冗余项目名避免查询阶段再回表关联。
+func UpsertMemoryEmbedding(tx *sql.Tx, projectName string, memoryID int64, vector []float64, updatedAt string) error {
 	_, err := tx.Exec(
-		`INSERT INTO memory_embeddings (memory_id, vector, updated_at)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT(memory_id) DO UPDATE SET vector = excluded.vector, updated_at = excluded.updated_at`,
+		`INSERT INTO memory_embeddings (memory_id, project_name, vector, updated_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(memory_id) DO UPDATE SET project_name = excluded.project_name, vector = excluded.vector, updated_at = excluded.updated_at`,
 		memoryID,
+		projectName,
 		encodeVector(vector),
 		updatedAt,
 	)
@@ -219,18 +191,19 @@ func FetchMemoryRows(db *sql.DB, projectName, memType string) ([]Row, error) {
 	return scanRows(rows)
 }
 
-// FetchMemoryEmbeddings 批量读取向量，减少检索阶段数据库往返次数。
-func FetchMemoryEmbeddings(db *sql.DB, memoryIDs []int64) (map[int64][]float64, error) {
+// FetchMemoryEmbeddings 按项目名批量读取向量，避免单库模式下跨项目误取向量数据。
+func FetchMemoryEmbeddings(db *sql.DB, projectName string, memoryIDs []int64) (map[int64][]float64, error) {
 	if len(memoryIDs) == 0 {
 		return map[int64][]float64{}, nil
 	}
 	placeholders := make([]string, 0, len(memoryIDs))
-	args := make([]any, 0, len(memoryIDs))
+	args := make([]any, 0, len(memoryIDs)+1)
+	args = append(args, projectName)
 	for _, id := range memoryIDs {
 		placeholders = append(placeholders, "?")
 		args = append(args, id)
 	}
-	query := `SELECT memory_id, vector FROM memory_embeddings WHERE memory_id IN (` + strings.Join(placeholders, ",") + `)`
+	query := `SELECT memory_id, vector FROM memory_embeddings WHERE project_name = ? AND memory_id IN (` + strings.Join(placeholders, ",") + `)`
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err

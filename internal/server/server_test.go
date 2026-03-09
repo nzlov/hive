@@ -97,3 +97,18 @@ func TestRouterReturnsErrorField(t *testing.T) {
 		t.Fatalf("错误响应未返回 error 字段: %+v", searchResponse)
 	}
 }
+
+// TestRouterDoesNotExposeRebuildEmbeddingsEndpoint 验证向量重建不再通过 HTTP 暴露，避免维护入口与启动自愈逻辑并存。
+func TestRouterDoesNotExposeRebuildEmbeddingsEndpoint(t *testing.T) {
+	t.Helper()
+	service := memory.NewService(config.AppConfig{MemoryRoot: t.TempDir()})
+	router := NewRouter(service)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/memories/rebuild-embeddings", bytes.NewReader([]byte(`{"force":true}`)))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("重建接口应已移除: status=%d, body=%s", recorder.Code, recorder.Body.String())
+	}
+}

@@ -15,6 +15,13 @@ func main() {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 	service := memory.NewService(cfg)
+	result, err := service.EnsureEmbeddingsReady()
+	if err != nil {
+		log.Fatalf("校验嵌入模型失败: %v", err)
+	}
+	if result.Message != "" {
+		log.Printf("嵌入模型检查完成: %s", result.Message)
+	}
 	router := server.NewRouter(service)
 	log.Printf("hive server listening on %s, %s", cfg.ServerListenAddr, cfg.String())
 	if err := router.Run(cfg.ServerListenAddr); err != nil {

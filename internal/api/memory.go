@@ -57,15 +57,3 @@ type WriteRequest struct {
 type WriteResponse struct {
 	Error string `json:"error,omitempty"`
 }
-
-// RebuildRequest 描述向量重建请求，让脚本可以通过 HTTP 触发服务端维护动作。
-type RebuildRequest struct {
-	Force bool `json:"force"`
-}
-
-// RebuildResponse 返回是否执行与说明信息，方便命令行直接展示结果。
-type RebuildResponse struct {
-	Changed bool   `json:"changed"`
-	Message string `json:"message"`
-	Error   string `json:"error,omitempty"`
-}

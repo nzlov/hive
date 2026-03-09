@@ -1,12 +1,39 @@
 package memory
 
 import (
+	"math"
 	"strings"
 	"testing"
 
 	"github.com/nzlov/hive/internal/api"
 	"github.com/nzlov/hive/internal/config"
 )
+
+// stubEmbeddingProvider 伪造稳定向量返回，避免测试依赖外部嵌入服务可用性。
+type stubEmbeddingProvider struct {
+	enabled bool
+	model   string
+	vector  []float64
+	calls   int
+}
+
+// Enabled 让测试显式控制当前 provider 是否启用，避免不同分支隐式耦合。
+func (p *stubEmbeddingProvider) Enabled() bool { return p.enabled }
+
+// ModelName 返回固定模型名，方便验证模型切换后的元数据是否同步更新。
+func (p *stubEmbeddingProvider) ModelName() string { return p.model }
+
+// EmbedTexts 为每条输入返回同一组向量，让测试只关注重建触发条件而非算法细节。
+func (p *stubEmbeddingProvider) EmbedTexts(texts []string) ([][]float64, error) {
+	p.calls++
+	vectors := make([][]float64, 0, len(texts))
+	for range texts {
+		vector := make([]float64, len(p.vector))
+		copy(vector, p.vector)
+		vectors = append(vectors, vector)
+	}
+	return vectors, nil
+}
 
 // TestServiceWriteAndSearch 验证服务层可以完成写入和检索，避免 HTTP 之下的核心流程回归失效。
 func TestServiceWriteAndSearch(t *testing.T) {
@@ -142,5 +169,135 @@ func TestServiceSearchIsolatedByProjectName(t *testing.T) {
 	}
 	if strings.Contains(resultB.Markdown(), "项目A记忆") {
 		t.Fatalf("项目B搜索结果串入了项目A记忆: %s", resultB.Markdown())
+	}
+}
+
+// TestServiceEnsureEmbeddingsReadyRebuildsOnModelMismatch 验证服务启动时会在模型不一致时自动重建向量。
+func TestServiceEnsureEmbeddingsReadyRebuildsOnModelMismatch(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
+	oldProvider := &stubEmbeddingProvider{enabled: true, model: "old-model", vector: []float64{1, 0}}
+	service.provider = oldProvider
+
+	if _, err := service.Write("rebuild-project", "", []api.MemoryWriteItem{{
+		Type:    "summary",
+		Title:   "模型切换记忆",
+		Tags:    []string{"重建"},
+		Summary: "先写入旧模型向量，再验证启动时重建。",
+		Context: "## Summary\n\n- 详情: 旧模型写入。",
+	}}); err != nil {
+		t.Fatalf("写入旧模型记忆失败: %v", err)
+	}
+	if oldProvider.calls != 1 {
+		t.Fatalf("旧模型写入时应生成一次向量，实际次数=%d", oldProvider.calls)
+	}
+
+	newProvider := &stubEmbeddingProvider{enabled: true, model: "new-model", vector: []float64{0, 1}}
+	service.provider = newProvider
+	result, err := service.EnsureEmbeddingsReady()
+	if err != nil {
+		t.Fatalf("启动校验嵌入模型失败: %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("模型切换后应触发重建: %+v", result)
+	}
+	if !strings.Contains(result.Message, "new-model") {
+		t.Fatalf("重建结果未包含新模型名: %+v", result)
+	}
+	if newProvider.calls != 1 {
+		t.Fatalf("模型切换后应执行一次重建，实际次数=%d", newProvider.calls)
+	}
+
+	_, db, err := service.openProjectDB()
+	if err != nil {
+		t.Fatalf("打开数据库失败: %v", err)
+	}
+	defer db.Close()
+
+	currentModel, err := GetMemoryMetadata(db, embeddingModelMetaKey)
+	if err != nil {
+		t.Fatalf("读取模型元数据失败: %v", err)
+	}
+	if currentModel != "new-model" {
+		t.Fatalf("模型元数据未更新: %s", currentModel)
+	}
+	rows, err := FetchAllMemories(db)
+	if err != nil {
+		t.Fatalf("读取记忆失败: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("测试数据数量异常: %d", len(rows))
+	}
+	embeddings, err := FetchMemoryEmbeddings(db, "rebuild-project", []int64{rows[0].ID})
+	if err != nil {
+		t.Fatalf("读取向量失败: %v", err)
+	}
+	vector, ok := embeddings[rows[0].ID]
+	if !ok {
+		t.Fatalf("重建后缺少向量记录")
+	}
+	if len(vector) != 2 || math.Abs(vector[0]-0) > 1e-9 || math.Abs(vector[1]-1) > 1e-9 {
+		t.Fatalf("向量未按新模型重建: %+v", vector)
+	}
+}
+
+// TestFetchMemoryEmbeddingsIsolatedByProjectName 验证向量查询会再次按项目名过滤，避免单库下跨项目误取向量。
+func TestFetchMemoryEmbeddingsIsolatedByProjectName(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
+	provider := &stubEmbeddingProvider{enabled: true, model: "project-aware-model", vector: []float64{0.5, 0.5}}
+	service.provider = provider
+
+	if _, err := service.Write("project-a", "", []api.MemoryWriteItem{{
+		Type:    "summary",
+		Title:   "项目A向量",
+		Tags:    []string{"A"},
+		Summary: "用于验证项目隔离。",
+		Context: "## Summary\n\n- 详情: A。",
+	}}); err != nil {
+		t.Fatalf("写入项目A记忆失败: %v", err)
+	}
+	if _, err := service.Write("project-b", "", []api.MemoryWriteItem{{
+		Type:    "summary",
+		Title:   "项目B向量",
+		Tags:    []string{"B"},
+		Summary: "用于验证项目隔离。",
+		Context: "## Summary\n\n- 详情: B。",
+	}}); err != nil {
+		t.Fatalf("写入项目B记忆失败: %v", err)
+	}
+
+	_, db, err := service.openProjectDB()
+	if err != nil {
+		t.Fatalf("打开数据库失败: %v", err)
+	}
+	defer db.Close()
+
+	rows, err := FetchAllMemories(db)
+	if err != nil {
+		t.Fatalf("读取记忆失败: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("测试数据数量异常: %d", len(rows))
+	}
+	allIDs := []int64{rows[0].ID, rows[1].ID}
+
+	embeddings, err := FetchMemoryEmbeddings(db, "project-a", allIDs)
+	if err != nil {
+		t.Fatalf("按项目读取向量失败: %v", err)
+	}
+	if len(embeddings) != 1 {
+		t.Fatalf("项目A查询不应读到其他项目向量: %+v", embeddings)
+	}
+
+	projectARows, err := FetchMemoryRows(db, "project-a", "summary")
+	if err != nil {
+		t.Fatalf("读取项目A记忆失败: %v", err)
+	}
+	if len(projectARows) != 1 {
+		t.Fatalf("项目A记忆数量异常: %d", len(projectARows))
+	}
+	if _, ok := embeddings[projectARows[0].ID]; !ok {
+		t.Fatalf("项目A向量查询未返回自身记录: %+v", embeddings)
 	}
 }
