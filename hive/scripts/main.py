@@ -50,8 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     search_parser = subparsers.add_parser("search")
     search_parser.add_argument("--root", default=".", help="项目根目录")
-    search_parser.add_argument("--query", nargs="+", required=True, help="搜索关键词或 JSON 数组")
-    search_parser.add_argument("-debug", "--debug", action="store_true", help="输出调试信息")
+    search_parser.add_argument(
+        "--query", nargs="+", required=True, help="搜索关键词或 JSON 数组"
+    )
+    search_parser.add_argument(
+        "-debug", "--debug", action="store_true", help="输出调试信息"
+    )
 
     write_parser = subparsers.add_parser("write", help="批量写入多条记忆")
     write_parser.add_argument("--root", default=".", help="项目根目录")
@@ -113,7 +117,12 @@ def lookup_project_config(config: dict[str, Any], project_root: str) -> dict[str
 
     project_name = Path(project_root).name
     remote_project_name = resolve_git_remote_project_name(project_root)
-    for key in (project_root, str(Path(project_root)), remote_project_name, project_name):
+    for key in (
+        project_root,
+        str(Path(project_root)),
+        remote_project_name,
+        project_name,
+    ):
         if not key:
             continue
         value = projects.get(key)
@@ -148,7 +157,9 @@ def resolve_git_remote_project_name(project_root: str) -> str:
     remote = run_git_command(project_root, ["remote", "get-url", "origin"])
     if not remote:
         remotes = run_git_command(project_root, ["remote"])
-        first_remote = next((line.strip() for line in remotes.splitlines() if line.strip()), "")
+        first_remote = next(
+            (line.strip() for line in remotes.splitlines() if line.strip()), ""
+        )
         if first_remote:
             remote = run_git_command(project_root, ["remote", "get-url", first_remote])
     return normalize_git_remote(remote)
@@ -189,7 +200,14 @@ def resolve_server_value(payload: dict[str, Any]) -> str:
 def resolve_project_alias(project_config: dict[str, Any]) -> str:
     """兼容项目别名的不同键名，避免配置字段调整影响调用链路。"""
 
-    for key in ("alias", "project_alias", "projectAlias", "project_name", "projectName", "name"):
+    for key in (
+        "alias",
+        "project_alias",
+        "projectAlias",
+        "project_name",
+        "projectName",
+        "name",
+    ):
         value = project_config.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -212,13 +230,19 @@ def resolve_api_token(payload: dict[str, Any]) -> str:
     return ""
 
 
-def resolve_request_target(config: dict[str, Any], root: str) -> tuple[str, str, str, str]:
+def resolve_request_target(
+    config: dict[str, Any], root: str
+) -> tuple[str, str, str, str]:
     """根据项目配置和本地仓库信息决定请求地址、项目名与 API Token，保证单库隔离稳定。"""
 
     project_root = resolve_project_root(root)
     project_config = lookup_project_config(config, project_root)
-    base_url = resolve_server_value(project_config) or resolve_default_server_base_url(config)
-    project_name = resolve_project_alias(project_config) or resolve_default_project_name(project_root)
+    base_url = resolve_server_value(project_config) or resolve_default_server_base_url(
+        config
+    )
+    project_name = resolve_project_alias(
+        project_config
+    ) or resolve_default_project_name(project_root)
     api_token = resolve_api_token(project_config) or resolve_api_token(config)
     return project_root, base_url, project_name, api_token
 
@@ -276,7 +300,9 @@ def parse_write_items(args: argparse.Namespace) -> list[dict[str, Any]]:
             raise SystemExit(f"--items-json 第 {index} 项必须是对象")
         mem_type = str(item.get("type", "")).strip()
         if mem_type not in {"summary", "error"}:
-            raise SystemExit(f"--items-json 第 {index} 项的 type 必须是 summary 或 error")
+            raise SystemExit(
+                f"--items-json 第 {index} 项的 type 必须是 summary 或 error"
+            )
         title = str(item.get("title", "")).strip()
         if not title:
             raise SystemExit(f"--items-json 第 {index} 项缺少 title")
@@ -297,7 +323,9 @@ def parse_write_items(args: argparse.Namespace) -> list[dict[str, Any]]:
     return items
 
 
-def post_json(base_url: str, path: str, payload: dict[str, Any], api_token: str = "") -> dict[str, Any]:
+def post_json(
+    base_url: str, path: str, payload: dict[str, Any], api_token: str = ""
+) -> dict[str, Any]:
     """统一处理 HTTP 请求和错误解码，避免各子命令重复维护网络细节。"""
 
     headers = {"Content-Type": "application/json"}
@@ -320,7 +348,9 @@ def post_json(base_url: str, path: str, payload: dict[str, Any], api_token: str 
         except json.JSONDecodeError:
             payload = {}
         message = payload.get("error") if isinstance(payload, dict) else ""
-        raise SystemExit(str(message).strip() or raw_body.strip() or f"HTTP {exc.code}") from exc
+        raise SystemExit(
+            str(message).strip() or raw_body.strip() or f"HTTP {exc.code}"
+        ) from exc
     except error.URLError as exc:
         raise SystemExit(f"服务端请求失败: {exc.reason}") from exc
 
@@ -395,7 +425,11 @@ def branch_ref_candidates(git_branch: str) -> list[str]:
 def branch_exists(project_root: str, git_branch: str) -> bool:
     """先确认分支引用存在，再做祖先判断，避免缺失引用时误报已合并。"""
 
-    return bool(run_git_command(project_root, ["rev-parse", "--verify", f"{git_branch}^{{commit}}"]))
+    return bool(
+        run_git_command(
+            project_root, ["rev-parse", "--verify", f"{git_branch}^{{commit}}"]
+        )
+    )
 
 
 def is_branch_reachable(project_root: str, git_branch: str) -> bool:
@@ -414,7 +448,12 @@ def is_branch_reachable(project_root: str, git_branch: str) -> bool:
     return True
 
 
-def should_keep_hit(hit: dict[str, Any], project_root: str, current_branch: str, branch_cache: dict[str, bool]) -> bool:
+def should_keep_hit(
+    hit: dict[str, Any],
+    project_root: str,
+    current_branch: str,
+    branch_cache: dict[str, bool],
+) -> bool:
     """逐条判断分支记忆是否已经被当前分支吸收，避免把未合并结论提前暴露出来。"""
 
     memory_branch = normalize_git_branch(str(hit.get("git_branch", "")))
@@ -435,11 +474,17 @@ def should_keep_hit(hit: dict[str, Any], project_root: str, current_branch: str,
     return False
 
 
-def filter_hits_by_branch(hits: list[dict[str, Any]], project_root: str, current_branch: str) -> list[dict[str, Any]]:
+def filter_hits_by_branch(
+    hits: list[dict[str, Any]], project_root: str, current_branch: str
+) -> list[dict[str, Any]]:
     """按当前项目分支筛掉未合并的分支记忆，保证搜索结果和代码历史一致。"""
 
     branch_cache: dict[str, bool] = {}
-    return [hit for hit in hits if should_keep_hit(hit, project_root, current_branch, branch_cache)]
+    return [
+        hit
+        for hit in hits
+        if should_keep_hit(hit, project_root, current_branch, branch_cache)
+    ]
 
 
 def markdown_fence_for(text: str) -> str:
@@ -451,7 +496,7 @@ def markdown_fence_for(text: str) -> str:
 def render_hit(hit: dict[str, Any], index: int) -> list[str]:
     """统一渲染单条命中，保证脚本筛选后仍保持服务端原有展示结构。"""
 
-    lines = [f"### Record {index}", f"- source: {hit.get('source', '')}"]
+    lines = [f"### Record {index}"]
     lines.append(f"- timestamp: {hit.get('timestamp', '')}")
     lines.append(f"- confidence: {float(hit.get('confidence', 0.0)):.3f}")
     file_content = str(hit.get("file_content", "")).strip()
@@ -494,7 +539,11 @@ def render_hits_section(title: str, hits: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def render_search_markdown(response: dict[str, Any], error_hits: list[dict[str, Any]], summary_hits: list[dict[str, Any]]) -> str:
+def render_search_markdown(
+    response: dict[str, Any],
+    error_hits: list[dict[str, Any]],
+    summary_hits: list[dict[str, Any]],
+) -> str:
     lines = ["# Hive Search Result"]
     debug_commands = response.get("debug_commands")
     if isinstance(debug_commands, list) and debug_commands:
@@ -509,14 +558,22 @@ def render_search_markdown(response: dict[str, Any], error_hits: list[dict[str, 
     return "\n".join(lines)
 
 
-def run_search(args: argparse.Namespace, project_root: str, base_url: str, project_name: str, api_token: str) -> int:
+def run_search(
+    args: argparse.Namespace,
+    project_root: str,
+    base_url: str,
+    project_name: str,
+    api_token: str,
+) -> int:
     """搜索子命令只整理输入并打印服务端返回结果，保持脚本职责轻量。"""
 
     queries = parse_queries(args.query)
     if not queries:
         raise SystemExit("--query 至少需要一个非空关键词")
     if not api_token.strip():
-        raise SystemExit("缺少 API Token，请在 ~/.config/hive/config.json 中配置 api_token")
+        raise SystemExit(
+            "缺少 API Token，请在 ~/.config/hive/config.json 中配置 api_token"
+        )
     response = post_json(
         base_url,
         "/tokenapi/v1/memories/search",
@@ -529,12 +586,16 @@ def run_search(args: argparse.Namespace, project_root: str, base_url: str, proje
     )
     current_branch = resolve_current_git_branch(project_root)
     error_hits = filter_hits_by_branch(
-        response.get("error_hits", []) if isinstance(response.get("error_hits"), list) else [],
+        response.get("error_hits", [])
+        if isinstance(response.get("error_hits"), list)
+        else [],
         project_root,
         current_branch,
     )
     summary_hits = filter_hits_by_branch(
-        response.get("summary_hits", []) if isinstance(response.get("summary_hits"), list) else [],
+        response.get("summary_hits", [])
+        if isinstance(response.get("summary_hits"), list)
+        else [],
         project_root,
         current_branch,
     )
@@ -547,16 +608,26 @@ def run_search(args: argparse.Namespace, project_root: str, base_url: str, proje
     return 0
 
 
-def run_write(args: argparse.Namespace, project_root: str, base_url: str, project_name: str, api_token: str) -> int:
+def run_write(
+    args: argparse.Namespace,
+    project_root: str,
+    base_url: str,
+    project_name: str,
+    api_token: str,
+) -> int:
     """写入子命令只负责参数兼容和输出结果，把持久化逻辑完全留给服务端。"""
 
     current_branch = resolve_current_git_branch(project_root)
     if not api_token.strip():
-        raise SystemExit("缺少 API Token，请在 ~/.config/hive/config.json 中配置 api_token")
+        raise SystemExit(
+            "缺少 API Token，请在 ~/.config/hive/config.json 中配置 api_token"
+        )
     post_json(
         base_url,
         "/tokenapi/v1/memories/write",
-        build_request_payload(project_name, git_branch=current_branch, items=parse_write_items(args)),
+        build_request_payload(
+            project_name, git_branch=current_branch, items=parse_write_items(args)
+        ),
         api_token=api_token,
     )
     return 0
@@ -571,7 +642,9 @@ def main() -> int:
         parser.print_help()
         return 1
 
-    project_root, base_url, project_name, api_token = resolve_request_target(load_config(), args.root)
+    project_root, base_url, project_name, api_token = resolve_request_target(
+        load_config(), args.root
+    )
     if args.command == "search":
         return run_search(args, project_root, base_url, project_name, api_token)
     if args.command == "write":
