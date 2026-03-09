@@ -55,10 +55,20 @@ const form = reactive({
 
 // handleSubmit 统一处理登录状态与错误提示，避免表单重复提交造成界面抖动。
 async function handleSubmit() {
+  const username = form.username.trim()
+  const password = form.password.trim()
+  if (!username) {
+    errorMessage.value = '请输入用户名'
+    return
+  }
+  if (!password) {
+    errorMessage.value = '请输入密码'
+    return
+  }
   loading.value = true
   errorMessage.value = ''
   try {
-    await login(form.username, form.password)
+    await login(username, password)
     router.push('/admin')
   } catch (error) {
     errorMessage.value = error.message
