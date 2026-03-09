@@ -124,6 +124,7 @@ type MemoryItem struct {
 	Title       string   `json:"title"`
 	Tags        []string `json:"tags"`
 	Summary     string   `json:"summary"`
+	Confidence  *float64 `json:"confidence,omitempty"`
 	UserID      string   `json:"userid"`
 	CreatedAt   string   `json:"created_at"`
 }

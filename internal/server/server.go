@@ -29,14 +29,14 @@ func NewRouter(memoryService *memory.Service, userService *user.Service, store *
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	registerUserRoutes(router, userService)
+	registerUserRoutes(router, memoryService, userService)
 	registerTokenMemoryRoutes(router, memoryService, userService)
 	router.NoRoute(buildSPAFallbackHandler())
 	return router
 }
 
-// registerUserRoutes 把管理端登录和用户管理接口集中注册，避免 JWT 路由散落在多个文件中。
-func registerUserRoutes(router *gin.Engine, userService *user.Service) {
+// registerUserRoutes 把管理端登录、用户管理和后台记忆接口集中注册，避免 JWT 路由散落在多个文件中。
+func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userService *user.Service) {
 	publicGroup := router.Group("/api/v1/users")
 	publicGroup.POST("/auth/login", func(c *gin.Context) {
 		var request api.LoginRequest
@@ -149,33 +149,20 @@ func registerUserRoutes(router *gin.Engine, userService *user.Service) {
 			c.JSON(http.StatusBadRequest, api.MemoryListResponse{Error: err.Error()})
 			return
 		}
-		store, err := models.StoreFromContext(c.Request.Context())
+		result, err := memoryService.List(c.Request.Context(), request.Page, request.PageSize, queries)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, api.MemoryListResponse{Error: err.Error()})
 			return
-		}
-		items, total, err := store.ListMemoriesPaginated(request.Page, request.PageSize, queries)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, api.MemoryListResponse{Error: err.Error()})
-			return
-		}
-		page := request.Page
-		if page < 1 {
-			page = 1
-		}
-		pageSize := request.PageSize
-		if pageSize < 1 {
-			pageSize = 10
 		}
 		response := api.MemoryListResponse{
-			Items:     make([]api.MemoryItem, 0, len(items)),
-			Total:     total,
-			Page:      page,
-			PageSize:  pageSize,
-			TotalPage: buildTotalPages(total, pageSize),
+			Items:     make([]api.MemoryItem, 0, len(result.Items)),
+			Total:     result.Total,
+			Page:      result.Page,
+			PageSize:  result.PageSize,
+			TotalPage: result.TotalPage,
 		}
-		for _, item := range items {
-			response.Items = append(response.Items, memoryToItem(item))
+		for _, item := range result.Items {
+			response.Items = append(response.Items, memoryToItem(item.Memory, item.Confidence))
 		}
 		c.JSON(http.StatusOK, response)
 	})
@@ -401,14 +388,15 @@ func userToSummary(item user.User) api.UserSummary {
 	}
 }
 
-// memoryToItem 统一裁剪列表字段，避免前端列表场景误传完整正文造成响应膨胀。
-func memoryToItem(item models.Memory) api.MemoryItem {
+// memoryToItem 统一裁剪列表字段，并在搜索场景下补充置信度供管理端解释排序原因。
+func memoryToItem(item models.Memory, confidence *float64) api.MemoryItem {
 	return api.MemoryItem{
 		ID:          item.ID,
 		ProjectName: item.ProjectName,
 		Title:       item.Title,
 		Tags:        models.DecodeTags(item.Tags),
 		Summary:     item.Summary,
+		Confidence:  confidence,
 		UserID:      item.UserID,
 		CreatedAt:   item.CreatedAt,
 	}

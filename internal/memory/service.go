@@ -36,11 +36,66 @@ func NewService(cfg config.AppConfig) *Service {
 
 // Search 执行记忆检索并返回结构化结果，统一仅按项目名隔离单库中的不同项目数据。
 func (s *Service) Search(ctx context.Context, projectName string, queries []string, debug bool) (SearchResult, error) {
+	rawResult, err := s.searchHits(ctx, normalizeProjectName(projectName), queries, debug)
+	if err != nil {
+		return SearchResult{}, err
+	}
+	rawResult.ErrorHits = s.limitSearchHits(rawResult.ErrorHits, s.lowConfidenceErrorHitLimit())
+	rawResult.SummaryHits = s.limitSearchHits(rawResult.SummaryHits, s.lowConfidenceSummaryHitLimit())
+	return rawResult, nil
+}
+
+// List 为管理端提供分页列表；无查询词时走时间排序，有查询词时复用搜索逻辑并返回完整命中集。
+func (s *Service) List(ctx context.Context, page, pageSize int, queries []string) (MemoryListResult, error) {
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		return MemoryListResult{}, err
+	}
+	page, pageSize = normalizePagination(page, pageSize)
+	cleanedQueries := normalizePlainQueries(queries)
+	if len(cleanedQueries) == 0 {
+		items, total, err := store.ListMemoriesPaginated(page, pageSize, nil)
+		if err != nil {
+			return MemoryListResult{}, err
+		}
+		listItems := make([]MemoryListItem, 0, len(items))
+		for _, item := range items {
+			listItems = append(listItems, MemoryListItem{Memory: item})
+		}
+		return MemoryListResult{
+			Items:     listItems,
+			Total:     total,
+			Page:      page,
+			PageSize:  pageSize,
+			TotalPage: computeTotalPages(total, pageSize),
+		}, nil
+	}
+	rawResult, err := s.searchHits(ctx, "", cleanedQueries, false)
+	if err != nil {
+		return MemoryListResult{}, err
+	}
+	mergedHits := mergeListHits(rawResult.ErrorHits, rawResult.SummaryHits)
+	total := int64(len(mergedHits))
+	pagedHits := paginateHits(mergedHits, page, pageSize)
+	orderedItems, err := s.buildListItems(store, pagedHits)
+	if err != nil {
+		return MemoryListResult{}, err
+	}
+	return MemoryListResult{
+		Items:     orderedItems,
+		Total:     total,
+		Page:      page,
+		PageSize:  pageSize,
+		TotalPage: computeTotalPages(total, pageSize),
+	}, nil
+}
+
+// searchHits 收敛关键字与向量召回实现，让搜索接口和管理列表共享同一套命中逻辑。
+func (s *Service) searchHits(ctx context.Context, projectName string, queries []string, debug bool) (SearchResult, error) {
 	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	effectiveProjectName := normalizeProjectName(projectName)
 	var debugCommands []string
 	var debugCommandsRef *[]string
 	if debug {
@@ -48,30 +103,29 @@ func (s *Service) Search(ctx context.Context, projectName string, queries []stri
 		debugCommandsRef = &debugCommands
 	}
 	matcher := buildQueryMatcher(queries)
-	errorKeywordHits, err := s.collectHits(store, "error", effectiveProjectName, queries, matcher, debugCommandsRef)
+	errorKeywordHits, err := s.collectHits(store, "error", projectName, queries, matcher, debugCommandsRef)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	summaryKeywordHits, err := s.collectHits(store, "summary", effectiveProjectName, queries, matcher, debugCommandsRef)
+	summaryKeywordHits, err := s.collectHits(store, "summary", projectName, queries, matcher, debugCommandsRef)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	errorSemanticHits, err := s.collectSemanticHits(store, "error", effectiveProjectName, queries)
+	errorSemanticHits, err := s.collectSemanticHits(store, "error", projectName, queries)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	summarySemanticHits, err := s.collectSemanticHits(store, "summary", effectiveProjectName, queries)
+	summarySemanticHits, err := s.collectSemanticHits(store, "summary", projectName, queries)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	result := SearchResult{
+	return SearchResult{
 		Query:         strings.Join(queries, ", "),
-		ProjectName:   effectiveProjectName,
+		ProjectName:   projectName,
 		DebugCommands: debugCommands,
-		ErrorHits:     s.limitSearchHits(mergeHits(errorKeywordHits, errorSemanticHits), s.lowConfidenceErrorHitLimit()),
-		SummaryHits:   s.limitSearchHits(mergeHits(summaryKeywordHits, summarySemanticHits), s.lowConfidenceSummaryHitLimit()),
-	}
-	return result, nil
+		ErrorHits:     mergeHits(errorKeywordHits, errorSemanticHits),
+		SummaryHits:   mergeHits(summaryKeywordHits, summarySemanticHits),
+	}, nil
 }
 
 // Write 写入总结或错误记忆，并把写入人 userid 一并落库以便后续追溯来源。
@@ -539,6 +593,74 @@ func mergeHits(primaryHits, semanticHits []Hit) []Hit {
 	return merged
 }
 
+// mergeListHits 把不同类型命中合并为管理列表结果，并按相关度优先、时间次之稳定排序。
+func mergeListHits(groups ...[]Hit) []Hit {
+	merged := make([]Hit, 0)
+	bestByID := make(map[int64]Hit)
+	for _, group := range groups {
+		for _, hit := range group {
+			existing, ok := bestByID[hit.ID]
+			if !ok || hit.Confidence > existing.Confidence || (hit.Confidence == existing.Confidence && hit.Timestamp.After(existing.Timestamp)) {
+				bestByID[hit.ID] = hit
+			}
+		}
+	}
+	for _, hit := range bestByID {
+		merged = append(merged, hit)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		if merged[i].Confidence == merged[j].Confidence {
+			return merged[i].Timestamp.After(merged[j].Timestamp)
+		}
+		return merged[i].Confidence > merged[j].Confidence
+	})
+	return merged
+}
+
+// paginateHits 统一分页切片，避免列表查询模式在服务层和 HTTP 层重复处理边界。
+func paginateHits(hits []Hit, page, pageSize int) []Hit {
+	if len(hits) == 0 {
+		return []Hit{}
+	}
+	start := (page - 1) * pageSize
+	if start >= len(hits) {
+		return []Hit{}
+	}
+	end := minInt(start+pageSize, len(hits))
+	return hits[start:end]
+}
+
+// buildListItems 按命中顺序回表组装管理端列表项，避免 SQL IN 查询打乱搜索排序。
+func (s *Service) buildListItems(store *models.Store, hits []Hit) ([]MemoryListItem, error) {
+	if len(hits) == 0 {
+		return []MemoryListItem{}, nil
+	}
+	memoryIDs := make([]int64, 0, len(hits))
+	confidenceByID := make(map[int64]float64, len(hits))
+	for _, hit := range hits {
+		memoryIDs = append(memoryIDs, hit.ID)
+		confidenceByID[hit.ID] = hit.Confidence
+	}
+	items, err := store.ListMemoriesByIDs(memoryIDs)
+	if err != nil {
+		return nil, err
+	}
+	itemByID := make(map[int64]models.Memory, len(items))
+	for _, item := range items {
+		itemByID[item.ID] = item
+	}
+	ordered := make([]MemoryListItem, 0, len(hits))
+	for _, hit := range hits {
+		item, ok := itemByID[hit.ID]
+		if !ok {
+			continue
+		}
+		confidence := confidenceByID[hit.ID]
+		ordered = append(ordered, MemoryListItem{Memory: item, Confidence: &confidence})
+	}
+	return ordered, nil
+}
+
 type lineMatcher func(string) bool
 
 // buildQueryMatcher 同时支持正则和大小写不敏感子串匹配，降低查询书写负担。
@@ -713,6 +835,44 @@ func normalizeProjectName(projectName string) string {
 		return "default-project"
 	}
 	return cleaned
+}
+
+// normalizePlainQueries 统一清洗查询词，避免列表与搜索入口在空白处理上出现行为分叉。
+func normalizePlainQueries(queries []string) []string {
+	out := make([]string, 0, len(queries))
+	for _, query := range queries {
+		if cleaned := strings.TrimSpace(query); cleaned != "" {
+			out = append(out, cleaned)
+		}
+	}
+	return out
+}
+
+// normalizePagination 统一分页边界，避免管理端不同查询模式下出现页码和页大小漂移。
+func normalizePagination(page, pageSize int) (int, int) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+	pageSize = minInt(pageSize, 100)
+	return page, pageSize
+}
+
+// computeTotalPages 统一页数计算，避免管理列表在普通浏览和搜索模式下出现分页口径不一致。
+func computeTotalPages(total int64, pageSize int) int {
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	if total == 0 {
+		return 0
+	}
+	pages := int(total) / pageSize
+	if int(total)%pageSize != 0 {
+		pages++
+	}
+	return pages
 }
 
 // normalizeGitBranch 统一裁剪分支名，避免头部记录被无意义空白污染。

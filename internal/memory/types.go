@@ -1,6 +1,10 @@
 package memory
 
-import "time"
+import (
+	"time"
+
+	"github.com/nzlov/hive/internal/models"
+)
 
 // Location 描述当前服务使用的记忆目录，避免数据库路径决策散落在多个层次。
 type Location struct {
@@ -55,4 +59,19 @@ type SearchResult struct {
 	DebugCommands []string
 	ErrorHits     []Hit
 	SummaryHits   []Hit
+}
+
+// MemoryListItem 统一承接列表项和可选置信度，避免管理端与搜索端各自维护映射规则。
+type MemoryListItem struct {
+	Memory     models.Memory
+	Confidence *float64
+}
+
+// MemoryListResult 描述管理端记忆列表分页结果，便于 HTTP 层复用统一查询逻辑。
+type MemoryListResult struct {
+	Items     []MemoryListItem
+	Total     int64
+	Page      int
+	PageSize  int
+	TotalPage int
 }

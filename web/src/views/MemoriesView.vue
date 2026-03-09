@@ -44,16 +44,17 @@
                 <th class="px-5 py-4 font-medium">Tags</th>
                 <th class="px-5 py-4 font-medium">总结</th>
                 <th class="px-5 py-4 font-medium">创建人</th>
+                <th class="px-5 py-4 font-medium">置信度</th>
                 <th class="px-5 py-4 font-medium">创建时间</th>
                 <th class="px-5 py-4 font-medium">操作</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100 bg-white/90">
               <tr v-if="loading">
-                <td class="px-5 py-10 text-center text-slate-400" colspan="7">正在加载记忆列表...</td>
+                <td class="px-5 py-10 text-center text-slate-400" colspan="8">正在加载记忆列表...</td>
               </tr>
               <tr v-else-if="!memories.length">
-                <td class="px-5 py-10 text-center text-slate-400" colspan="7">暂无匹配的记忆</td>
+                <td class="px-5 py-10 text-center text-slate-400" colspan="8">暂无匹配的记忆</td>
               </tr>
               <tr v-for="item in memories" :key="item.id" class="align-top">
                 <td class="px-5 py-4 font-medium text-ink">{{ item.project_name || '-' }}</td>
@@ -74,6 +75,7 @@
                   <p class="max-w-md whitespace-pre-wrap break-words">{{ item.summary || '-' }}</p>
                 </td>
                 <td class="px-5 py-4 text-slate-500">{{ item.userid || '-' }}</td>
+                <td class="px-5 py-4 text-slate-500">{{ formatConfidence(item.confidence) }}</td>
                 <td class="px-5 py-4 text-slate-500">{{ formatDate(item.created_at) }}</td>
                 <td class="px-5 py-4">
                   <div class="flex flex-wrap gap-3">
@@ -255,6 +257,14 @@ function closeDetail() {
   detailLoading.value = false
   detailError.value = ''
   detail.value = null
+}
+
+// formatConfidence 统一格式化搜索置信度，避免未搜索时把空值误显示成 0。
+function formatConfidence(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return '-'
+  }
+  return `${(value * 100).toFixed(value >= 0.995 ? 0 : 1)}%`
 }
 
 // handleDelete 删除前先做确认，并在删除详情项时同步关闭抽屉避免展示脏数据。
