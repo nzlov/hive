@@ -77,12 +77,12 @@
                 <td class="px-5 py-4 text-slate-500">{{ item.creator_name || item.userid || '-' }}</td>
                 <td class="px-5 py-4 text-slate-500">{{ formatConfidence(item.confidence) }}</td>
                 <td class="px-5 py-4 text-slate-500">{{ formatDate(item.created_at) }}</td>
-                <td class="px-5 py-4">
-                  <div class="flex flex-wrap gap-3">
-                    <button class="ghost-btn" type="button" @click="openDetail(item.id)">查看</button>
-                    <button class="danger-btn" type="button" @click="handleDelete(item)">删除</button>
-                  </div>
-                </td>
+        <td class="px-5 py-4">
+          <div class="flex flex-wrap gap-3">
+            <button class="ghost-btn" type="button" @click="openDetail(item.id)">查看</button>
+            <button v-if="user.is_admin" class="danger-btn" type="button" @click="handleDelete(item)">删除</button>
+          </div>
+        </td>
               </tr>
             </tbody>
           </table>
@@ -173,7 +173,9 @@
 import { onMounted, ref } from 'vue'
 import AdminShell from '../components/AdminShell.vue'
 import { deleteMemory, fetchMemories, fetchMemoryDetail } from '../lib/api'
+import { getStoredUser } from '../lib/auth'
 
+const user = getStoredUser()
 const memories = ref([])
 const loading = ref(false)
 const errorMessage = ref('')

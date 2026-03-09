@@ -172,3 +172,8 @@ type MemoryDetailResponse struct {
 	Item  MemoryDetail `json:"item,omitempty"`
 	Error string       `json:"error,omitempty"`
 }
+
+// ChangePasswordRequest 描述用户修改密码的请求参数，允许用户更新自己的登录密码。
+type ChangePasswordRequest struct {
+	NewPassword string `json:"new_password"`
+}
