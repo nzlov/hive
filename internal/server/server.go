@@ -29,14 +29,14 @@ func NewRouter(memoryService *memory.Service, userService *user.Service, store *
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	registerUserRoutes(router, userService)
+	registerUserRoutes(router, memoryService, userService)
 	registerTokenMemoryRoutes(router, memoryService, userService)
 	router.NoRoute(buildSPAFallbackHandler())
 	return router
 }
 
-// registerUserRoutes 把管理端登录和用户管理接口集中注册，避免 JWT 路由散落在多个文件中。
-func registerUserRoutes(router *gin.Engine, userService *user.Service) {
+// registerUserRoutes 把管理端登录、用户管理和后台记忆接口集中注册，避免 JWT 路由散落在多个文件中。
+func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userService *user.Service) {
 	publicGroup := router.Group("/api/v1/users")
 	publicGroup.POST("/auth/login", func(c *gin.Context) {
 		var request api.LoginRequest
@@ -168,38 +168,30 @@ func registerUserRoutes(router *gin.Engine, userService *user.Service) {
 			c.JSON(http.StatusBadRequest, api.MemoryListResponse{Error: err.Error()})
 			return
 		}
+		result, err := memoryService.List(c.Request.Context(), request.Page, request.PageSize, queries)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.MemoryListResponse{Error: err.Error()})
+			return
+		}
 		store, err := models.StoreFromContext(c.Request.Context())
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, api.MemoryListResponse{Error: err.Error()})
 			return
 		}
-		items, total, err := store.ListMemoriesPaginated(request.Page, request.PageSize, queries)
+		creatorNameMap, err := buildCreatorNameMap(store, collectMemoryUserIDs(result.Items))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, api.MemoryListResponse{Error: err.Error()})
 			return
-		}
-		creatorNameMap, err := buildCreatorNameMap(store, collectMemoryUserIDs(items))
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, api.MemoryListResponse{Error: err.Error()})
-			return
-		}
-		page := request.Page
-		if page < 1 {
-			page = 1
-		}
-		pageSize := request.PageSize
-		if pageSize < 1 {
-			pageSize = 10
 		}
 		response := api.MemoryListResponse{
-			Items:     make([]api.MemoryItem, 0, len(items)),
-			Total:     total,
-			Page:      page,
-			PageSize:  pageSize,
-			TotalPage: buildTotalPages(total, pageSize),
+			Items:     make([]api.MemoryItem, 0, len(result.Items)),
+			Total:     result.Total,
+			Page:      result.Page,
+			PageSize:  result.PageSize,
+			TotalPage: result.TotalPage,
 		}
-		for _, item := range items {
-			response.Items = append(response.Items, memoryToItem(item, creatorNameMap[item.UserID]))
+		for _, item := range result.Items {
+			response.Items = append(response.Items, memoryToItem(item.Memory, creatorNameMap[item.Memory.UserID], item.Confidence))
 		}
 		c.JSON(http.StatusOK, response)
 	})
@@ -430,14 +422,15 @@ func userToSummary(item user.User) api.UserSummary {
 	}
 }
 
-// memoryToItem 统一裁剪列表字段，并把创建人真实姓名一并返回减少前端额外请求。
-func memoryToItem(item models.Memory, creatorName string) api.MemoryItem {
+// memoryToItem 统一裁剪列表字段，并补齐创建人和置信度以减少前端额外请求与解释成本。
+func memoryToItem(item models.Memory, creatorName string, confidence *float64) api.MemoryItem {
 	return api.MemoryItem{
 		ID:          item.ID,
 		ProjectName: item.ProjectName,
 		Title:       item.Title,
 		Tags:        models.DecodeTags(item.Tags),
 		Summary:     item.Summary,
+		Confidence:  confidence,
 		UserID:      item.UserID,
 		CreatorName: strings.TrimSpace(creatorName),
 		CreatedAt:   item.CreatedAt,
@@ -463,10 +456,10 @@ func memoryToDetail(item models.Memory, creatorName string) api.MemoryDetail {
 }
 
 // collectMemoryUserIDs 收敛记忆创建人 ID，方便后端一次性补齐真实姓名避免前端自行查表。
-func collectMemoryUserIDs(items []models.Memory) []string {
+func collectMemoryUserIDs(items []memory.MemoryListItem) []string {
 	userIDs := make([]string, 0, len(items))
 	for _, item := range items {
-		if value := strings.TrimSpace(item.UserID); value != "" {
+		if value := strings.TrimSpace(item.Memory.UserID); value != "" {
 			userIDs = append(userIDs, value)
 		}
 	}

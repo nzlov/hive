@@ -665,3 +665,65 @@ func TestServiceSearchLimitsLowConfidenceHits(t *testing.T) {
 		t.Fatalf("被裁掉的低置信度总结命中不应出现在结果中")
 	}
 }
+
+// TestServiceListKeepsAllSemanticHits 验证管理列表搜索不会沿用 search 接口的低置信度裁剪上限。
+func TestServiceListKeepsAllSemanticHits(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{
+		MemoryRoot: t.TempDir(),
+		SearchConfig: &config.SearchConfig{
+			LowConfidenceErrorHitLimit:   1,
+			LowConfidenceSummaryHitLimit: 1,
+		},
+		EmbeddingConfig: &config.EmbeddingConfig{
+			SemanticCandidateBatchSize:  16,
+			SemanticCandidateMaxCount:   64,
+			SemanticHitFetchLimit:       64,
+			SemanticSimilarityThreshold: 0.15,
+		},
+	})
+	ctx := testContextWithStore(t, service.config)
+	service.provider = &queryEmbeddingProvider{vector: []float64{1, 0}}
+
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		t.Fatalf("读取模型存储失败: %v", err)
+	}
+	base := time.Date(2026, 3, 9, 10, 0, 0, 0, time.UTC)
+	for idx := 0; idx < 3; idx++ {
+		seedSemanticMemory(
+			t,
+			store,
+			fmt.Sprintf("list-semantic-project-%d", idx),
+			"summary",
+			fmt.Sprintf("管理列表语义记忆-%d", idx+1),
+			fmt.Sprintf("## Summary\n\n- 详情: 管理列表语义候选 %d。", idx+1),
+			base.Add(-time.Duration(idx+1)*24*time.Hour).Format("20060102150405"),
+			[]float64{1, 0},
+		)
+	}
+
+	searchResult, err := service.Search(ctx, "list-semantic-project-0", []string{"管理列表语义查询"}, false)
+	if err != nil {
+		t.Fatalf("Search 返回错误: %v", err)
+	}
+	if len(searchResult.SummaryHits) != 1 {
+		t.Fatalf("Search 应继续保留低置信度裁剪: %+v", searchResult.SummaryHits)
+	}
+
+	listResult, err := service.List(ctx, 1, 10, []string{"管理列表语义查询"})
+	if err != nil {
+		t.Fatalf("List 返回错误: %v", err)
+	}
+	if listResult.Total != 3 {
+		t.Fatalf("List 不应裁剪语义命中: total=%d items=%+v", listResult.Total, listResult.Items)
+	}
+	if len(listResult.Items) != 3 {
+		t.Fatalf("List 当前页结果数量异常: %+v", listResult.Items)
+	}
+	for _, item := range listResult.Items {
+		if item.Confidence == nil || *item.Confidence <= 0 {
+			t.Fatalf("List 搜索结果应返回置信度: %+v", item)
+		}
+	}
+}

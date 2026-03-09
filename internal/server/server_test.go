@@ -176,6 +176,60 @@ func TestRouterDoesNotExposeRebuildEmbeddingsEndpoint(t *testing.T) {
 	}
 }
 
+// TestRouterMemoryListReturnsConfidence 验证管理端记忆列表在搜索模式下会返回置信度，便于前端解释排序依据。
+func TestRouterMemoryListReturnsConfidence(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	_, password, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	if _, err := service.Write(ctx, "router-list-project", "feature/admin", "admin", []api.MemoryWriteItem{{
+		Type:    "summary",
+		Title:   "管理列表关键字命中",
+		Tags:    []string{"后台", "列表"},
+		Summary: "用于验证管理列表的置信度展示。",
+		Context: "## Summary\n\n- 详情: 管理列表关键字命中内容。",
+	}}); err != nil {
+		t.Fatalf("写入测试记忆失败: %v", err)
+	}
+	router := NewRouter(service, userService, store)
+
+	loginBody := bytes.NewReader([]byte(`{"username":"admin","password":"` + password + `"}`))
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/users/auth/login", loginBody)
+	loginRequest.Header.Set("Content-Type", "application/json")
+	loginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(loginRecorder, loginRequest)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("登录接口返回状态异常: %d, body=%s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	var loginResponse api.LoginResponse
+	if err := json.Unmarshal(loginRecorder.Body.Bytes(), &loginResponse); err != nil {
+		t.Fatalf("解析登录响应失败: %v", err)
+	}
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/memories?page=1&page_size=10&queries=管理列表关键字命中", nil)
+	listRequest.Header.Set("Authorization", "Bearer "+loginResponse.Token)
+	listRecorder := httptest.NewRecorder()
+	router.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("记忆列表接口返回状态异常: %d, body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var listResponse api.MemoryListResponse
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &listResponse); err != nil {
+		t.Fatalf("解析记忆列表响应失败: %v", err)
+	}
+	if len(listResponse.Items) != 1 {
+		t.Fatalf("记忆列表结果数量异常: %+v", listResponse)
+	}
+	if listResponse.Items[0].Confidence == nil || *listResponse.Items[0].Confidence <= 0 {
+		t.Fatalf("记忆列表搜索结果应返回置信度: %+v", listResponse.Items[0])
+	}
+}
+
 // TestRouterLoginAndUserList 验证管理端登录和 JWT 鉴权链路可用，避免前端管理页无法获取用户列表。
 func TestRouterLoginAndUserList(t *testing.T) {
 	t.Helper()

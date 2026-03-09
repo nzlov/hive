@@ -97,26 +97,43 @@ func (s *Store) ListMemoriesByProjectAndType(projectName, memType string) ([]Mem
 	return items, err
 }
 
-// ListMemoryLitesByProjectTypeAndIDs 在候选打分后再回表取正文，避免语义搜索先全量加载全部记忆内容。
+// ListMemoriesByIDs 批量读取指定主键的记忆，避免管理列表按命中顺序逐条回表放大查询次数。
+func (s *Store) ListMemoriesByIDs(memoryIDs []int64) ([]Memory, error) {
+	if len(memoryIDs) == 0 {
+		return []Memory{}, nil
+	}
+	var items []Memory
+	err := s.db.Where("id IN ?", memoryIDs).Find(&items).Error
+	return items, err
+}
+
+// ListMemoryLitesByProjectTypeAndIDs 在候选打分后再回表取正文，允许按项目隔离或跨项目查询同一类型候选。
 func (s *Store) ListMemoryLitesByProjectTypeAndIDs(projectName, memType string, memoryIDs []int64) ([]MemoryLite, error) {
 	if len(memoryIDs) == 0 {
 		return []MemoryLite{}, nil
 	}
 	var items []MemoryLite
-	err := s.db.Model(&Memory{}).
+	db := s.db.Model(&Memory{}).
 		Select("id, git_branch, title, tags, summary, content, timestamp").
-		Where("project_name = ? AND type = ? AND id IN ?", strings.TrimSpace(projectName), strings.TrimSpace(memType), memoryIDs).
-		Find(&items).Error
+		Where("type = ? AND id IN ?", strings.TrimSpace(memType), memoryIDs)
+	if cleanedProjectName := strings.TrimSpace(projectName); cleanedProjectName != "" {
+		db = db.Where("project_name = ?", cleanedProjectName)
+	}
+	err := db.Find(&items).Error
 	return items, err
 }
 
-// SearchMemoriesByProjectAndType 使用 SQL 关键字过滤候选记忆，避免先全量取回再在业务层粗筛。
+// SearchMemoriesByProjectAndType 使用 SQL 关键字过滤候选记忆，允许按项目隔离或跨项目复用同一筛选逻辑。
 func (s *Store) SearchMemoriesByProjectAndType(projectName, memType string, queries []string) ([]Memory, error) {
 	cleaned := normalizeKeywordQueries(queries)
 	if len(cleaned) == 0 {
 		return []Memory{}, nil
 	}
-	db := applyMemoryKeywordFilters(s.db.Where("project_name = ? AND type = ?", strings.TrimSpace(projectName), strings.TrimSpace(memType)), cleaned)
+	db := s.db.Where("type = ?", strings.TrimSpace(memType))
+	if cleanedProjectName := strings.TrimSpace(projectName); cleanedProjectName != "" {
+		db = db.Where("project_name = ?", cleanedProjectName)
+	}
+	db = applyMemoryKeywordFilters(db, cleaned)
 	var items []Memory
 	err := db.Order("timestamp DESC").Order("id DESC").Find(&items).Error
 	return items, err

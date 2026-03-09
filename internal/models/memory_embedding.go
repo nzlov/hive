@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"strings"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -83,20 +84,23 @@ func (s *Store) ListMemoryEmbeddings(projectName string, memoryIDs []int64) (map
 	return out, nil
 }
 
-// ListSemanticEmbeddingCandidates 分页读取指定项目和类型的向量候选，让服务层按批打分而不是一次性全量载入。
+// ListSemanticEmbeddingCandidates 分页读取指定类型的向量候选，必要时再按项目隔离避免跨项目误召回。
 func (s *Store) ListSemanticEmbeddingCandidates(projectName, memType string, limit, offset int) ([]MemoryEmbeddingCandidate, error) {
 	if limit <= 0 {
 		return []MemoryEmbeddingCandidate{}, nil
 	}
 	var items []MemoryEmbeddingCandidate
-	err := s.db.Model(&MemoryEmbedding{}).
+	db := s.db.Model(&MemoryEmbedding{}).
 		Select("memory_id, vector, timestamp").
-		Where("project_name = ? AND type = ?", projectName, memType).
+		Where("type = ?", memType).
 		Order("timestamp DESC").
 		Order("memory_id DESC").
 		Limit(limit).
-		Offset(offset).
-		Scan(&items).Error
+		Offset(offset)
+	if cleanedProjectName := strings.TrimSpace(projectName); cleanedProjectName != "" {
+		db = db.Where("project_name = ?", cleanedProjectName)
+	}
+	err := db.Scan(&items).Error
 	if err != nil {
 		return nil, err
 	}
