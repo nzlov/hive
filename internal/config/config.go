@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -234,11 +235,21 @@ func loadPayload(configPath string) (map[string]any, error) {
 		}
 		return payload, nil
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(data, &payload); err != nil {
+	payload, err := unmarshalJSONCPayload(data)
+	if err != nil {
 		return nil, err
 	}
-	return payload, nil
+	defaults, err := buildDefaultPayload()
+	if err != nil {
+		return nil, err
+	}
+	mergedPayload, changed := mergeMissingDefaults(payload, defaults)
+	if changed {
+		if writeErr := writeDefaultPayload(configPath, mergedPayload); writeErr == nil {
+			return mergedPayload, nil
+		}
+	}
+	return mergedPayload, nil
 }
 
 // buildDefaultPayload 构造统一默认配置，避免服务端首次启动时必须手工建文件。
@@ -326,11 +337,341 @@ func writeDefaultPayload(configPath string, payload map[string]any) error {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(payload, "", "  ")
+	data, err := marshalJSONCWithComments(payload)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, append(data, '\n'), 0o644)
+	return os.WriteFile(configPath, data, 0o644)
+}
+
+// unmarshalJSONCPayload 支持解析 JSONC 配置，避免注释导致配置加载失败。
+func unmarshalJSONCPayload(data []byte) (map[string]any, error) {
+	cleaned := stripJSONCComments(string(data))
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(cleaned), &payload); err != nil {
+		return nil, err
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	return payload, nil
+}
+
+// mergeMissingDefaults 仅补齐缺失键，避免升级配置时覆盖用户已显式设置的值。
+func mergeMissingDefaults(payload, defaults map[string]any) (map[string]any, bool) {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	changed := false
+	for key, defaultValue := range defaults {
+		existingValue, ok := payload[key]
+		if !ok {
+			payload[key] = cloneConfigValue(defaultValue)
+			changed = true
+			continue
+		}
+		existingMap, existingIsMap := toStringAnyMap(existingValue)
+		defaultMap, defaultIsMap := toStringAnyMap(defaultValue)
+		if existingIsMap && defaultIsMap {
+			merged, nestedChanged := mergeMissingDefaults(existingMap, defaultMap)
+			if nestedChanged {
+				changed = true
+			}
+			payload[key] = merged
+		}
+	}
+	return payload, changed
+}
+
+// cloneConfigValue 深拷贝默认配置值，避免不同层级共享底层引用导致串改。
+func cloneConfigValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		cloned := make(map[string]any, len(typed))
+		for key, item := range typed {
+			cloned[key] = cloneConfigValue(item)
+		}
+		return cloned
+	case []any:
+		cloned := make([]any, 0, len(typed))
+		for _, item := range typed {
+			cloned = append(cloned, cloneConfigValue(item))
+		}
+		return cloned
+	case []string:
+		cloned := make([]string, len(typed))
+		copy(cloned, typed)
+		return cloned
+	case [][]string:
+		cloned := make([][]string, 0, len(typed))
+		for _, group := range typed {
+			inner := make([]string, len(group))
+			copy(inner, group)
+			cloned = append(cloned, inner)
+		}
+		return cloned
+	default:
+		return typed
+	}
+}
+
+// toStringAnyMap 兼容 map[string]any 与 map[any]any，避免不同解码路径造成类型分支遗漏。
+func toStringAnyMap(value any) (map[string]any, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed, true
+	case map[any]any:
+		converted := map[string]any{}
+		for key, item := range typed {
+			converted[strings.TrimSpace(fmt.Sprint(key))] = item
+		}
+		return converted, true
+	default:
+		return nil, false
+	}
+}
+
+// marshalJSONCWithComments 生成带说明注释的 JSONC，帮助用户理解每个配置项的用途。
+func marshalJSONCWithComments(payload map[string]any) ([]byte, error) {
+	rendered, err := renderConfigJSONCValue(payload, "", 0)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(rendered + "\n"), nil
+}
+
+// renderConfigJSONCValue 递归渲染 JSONC，并把说明注释放在每个配置项后面。
+func renderConfigJSONCValue(value any, parentPath string, indentLevel int) (string, error) {
+	switch typed := value.(type) {
+	case map[string]any:
+		return renderConfigJSONCObject(typed, parentPath, indentLevel)
+	case []any:
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case []string:
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	case [][]string:
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	default:
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	}
+}
+
+// renderConfigJSONCObject 渲染对象并在每个键值后附带注释，便于用户就地理解配置语义。
+func renderConfigJSONCObject(obj map[string]any, parentPath string, indentLevel int) (string, error) {
+	indent := strings.Repeat("  ", indentLevel)
+	childIndent := strings.Repeat("  ", indentLevel+1)
+	keys := orderedConfigKeys(parentPath, obj)
+	if len(keys) == 0 {
+		return "{}", nil
+	}
+	lines := []string{"{"}
+	for idx, key := range keys {
+		fullPath := key
+		if parentPath != "" {
+			fullPath = parentPath + "." + key
+		}
+		renderedValue, err := renderConfigJSONCValue(obj[key], fullPath, indentLevel+1)
+		if err != nil {
+			return "", err
+		}
+		line := childIndent + strconv.Quote(key) + ": " + renderedValue
+		if idx < len(keys)-1 {
+			line += ","
+		}
+		if comment := configCommentForPath(fullPath); comment != "" {
+			line += " // " + comment
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, indent+"}")
+	return strings.Join(lines, "\n"), nil
+}
+
+// orderedConfigKeys 按固定顺序输出键，避免配置文件每次自动补齐后顺序漂移影响可读性。
+func orderedConfigKeys(parentPath string, obj map[string]any) []string {
+	preferred := map[string][]string{
+		"":                               {"server", "auth", "database", "search", "embedding"},
+		"server":                         {"base_url", "listen_addr"},
+		"auth":                           {"jwt_secret"},
+		"database":                       {"driver", "dsn"},
+		"search":                         {"low_confidence_error_hit_limit", "low_confidence_summary_hit_limit", "keyword", "fusion", "cache"},
+		"search.keyword":                 {"mode", "backend", "bm25_k1", "bm25_b", "fields", "field_weights", "synonyms"},
+		"search.keyword.field_weights":   {"title", "summary", "tags", "content", "project_name"},
+		"search.keyword.synonyms":        {"enabled", "groups"},
+		"search.fusion":                  {"enabled", "formula", "keyword_weight", "semantic_weight", "recency_weight", "min_semantic_score"},
+		"search.cache":                   {"enabled", "query_embedding_ttl_seconds", "semantic_hits_ttl_seconds", "max_entries"},
+		"embedding":                      {"base_url", "api_key", "model", "timeout_seconds", "semantic_similarity_threshold", "semantic_candidate_batch_size", "semantic_candidate_max_count", "semantic_hit_fetch_limit", "semantic_window", "decay"},
+		"embedding.semantic_window":      {"mode", "base_max_count", "dynamic_min_count", "dynamic_max_count", "dynamic_ratio", "reference_corpus_size"},
+		"embedding.decay":                {"enabled", "age_weight", "semantic_weight", "half_life_days"},
+		"embedding.decay.half_life_days": {"summary", "error"},
+	}
+	ordered := make([]string, 0, len(obj))
+	used := map[string]struct{}{}
+	if expected, ok := preferred[parentPath]; ok {
+		for _, key := range expected {
+			if _, exists := obj[key]; exists {
+				ordered = append(ordered, key)
+				used[key] = struct{}{}
+			}
+		}
+	}
+	extra := make([]string, 0, len(obj))
+	for key := range obj {
+		if _, ok := used[key]; ok {
+			continue
+		}
+		extra = append(extra, key)
+	}
+	sort.Strings(extra)
+	ordered = append(ordered, extra...)
+	return ordered
+}
+
+// configCommentForPath 返回配置项说明，确保注释跟随每一项输出而不是集中在文件顶部。
+func configCommentForPath(path string) string {
+	comments := map[string]string{
+		"server":                                "服务端监听与对外访问配置",
+		"server.base_url":                       "服务端对外访问地址，客户端会以此作为 API 入口",
+		"server.listen_addr":                    "服务端本地监听地址",
+		"auth":                                  "鉴权相关配置",
+		"auth.jwt_secret":                       "管理后台 JWT 签名密钥，生产环境应替换",
+		"database":                              "数据库连接配置",
+		"database.driver":                       "数据库驱动，支持 sqlite/postgres/postgresql",
+		"database.dsn":                          "数据库连接串，sqlite 为空时使用默认本地文件",
+		"search":                                "搜索层配置",
+		"search.low_confidence_error_hit_limit": "错误记忆中低于 1 分置信度的最大返回条数",
+		"search.low_confidence_summary_hit_limit": "总结记忆中低于 1 分置信度的最大返回条数",
+		"search.keyword":                                  "关键字检索配置",
+		"search.keyword.mode":                             "关键字模式，like 为子串匹配，bm25 为加权相关性排序",
+		"search.keyword.backend":                          "关键字后端类型预留项，默认 auto",
+		"search.keyword.bm25_k1":                          "BM25 的 k1 参数，控制词频饱和速度",
+		"search.keyword.bm25_b":                           "BM25 的 b 参数，控制文档长度归一化强度",
+		"search.keyword.fields":                           "BM25 参与打分字段列表",
+		"search.keyword.field_weights":                    "BM25 各字段权重映射",
+		"search.keyword.field_weights.title":              "标题字段权重",
+		"search.keyword.field_weights.summary":            "摘要字段权重",
+		"search.keyword.field_weights.tags":               "标签字段权重",
+		"search.keyword.field_weights.content":            "正文字段权重",
+		"search.keyword.field_weights.project_name":       "项目名字段权重",
+		"search.keyword.synonyms":                         "同义词扩展配置",
+		"search.keyword.synonyms.enabled":                 "是否启用同义词扩展",
+		"search.keyword.synonyms.groups":                  "同义词分组，每组内词会互相扩展",
+		"search.fusion":                                   "多路打分融合配置",
+		"search.fusion.enabled":                           "是否启用关键字/语义/时效融合评分",
+		"search.fusion.formula":                           "融合公式，当前支持 weighted_sum",
+		"search.fusion.keyword_weight":                    "关键字分在融合中的权重",
+		"search.fusion.semantic_weight":                   "语义分在融合中的权重",
+		"search.fusion.recency_weight":                    "时效分在融合中的权重",
+		"search.fusion.min_semantic_score":                "语义分最低有效阈值，低于该值会被视为弱语义",
+		"search.cache":                                    "搜索缓存配置",
+		"search.cache.enabled":                            "是否启用查询向量与语义结果缓存",
+		"search.cache.query_embedding_ttl_seconds":        "查询向量缓存 TTL（秒）",
+		"search.cache.semantic_hits_ttl_seconds":          "语义命中缓存 TTL（秒）",
+		"search.cache.max_entries":                        "每类缓存的最大条目数",
+		"embedding":                                       "嵌入与语义召回配置",
+		"embedding.base_url":                              "OpenAI 兼容 Embeddings 服务地址",
+		"embedding.api_key":                               "Embeddings 服务鉴权令牌",
+		"embedding.model":                                 "嵌入模型名称",
+		"embedding.timeout_seconds":                       "嵌入请求超时时间（秒）",
+		"embedding.semantic_similarity_threshold":         "语义命中阈值，低于该值不进入候选",
+		"embedding.semantic_candidate_batch_size":         "每批扫描的语义候选数量",
+		"embedding.semantic_candidate_max_count":          "语义扫描候选总上限",
+		"embedding.semantic_hit_fetch_limit":              "语义高分候选回表上限",
+		"embedding.semantic_window":                       "语义候选窗口策略",
+		"embedding.semantic_window.mode":                  "窗口模式，static 固定窗口，dynamic 按语料规模动态计算",
+		"embedding.semantic_window.base_max_count":        "静态模式窗口上限，动态模式下作为兜底值",
+		"embedding.semantic_window.dynamic_min_count":     "动态窗口最小值",
+		"embedding.semantic_window.dynamic_max_count":     "动态窗口最大值",
+		"embedding.semantic_window.dynamic_ratio":         "动态窗口比例因子（候选数≈语料量*比例）",
+		"embedding.semantic_window.reference_corpus_size": "动态窗口参考语料规模预留项",
+		"embedding.decay":                                 "时效衰减配置",
+		"embedding.decay.enabled":                         "是否启用时间衰减融合",
+		"embedding.decay.age_weight":                      "时效分权重",
+		"embedding.decay.semantic_weight":                 "语义分权重",
+		"embedding.decay.half_life_days":                  "不同记忆类型的半衰期配置（天）",
+		"embedding.decay.half_life_days.summary":          "总结记忆半衰期（天）",
+		"embedding.decay.half_life_days.error":            "错误记忆半衰期（天）",
+	}
+	return comments[path]
+}
+
+// stripJSONCComments 在保留字符串字面量的前提下移除 JSONC 注释，避免 http:// 这类内容被误删。
+func stripJSONCComments(input string) string {
+	var builder strings.Builder
+	builder.Grow(len(input))
+	inString := false
+	escaped := false
+	inLineComment := false
+	inBlockComment := false
+	for idx := 0; idx < len(input); idx++ {
+		current := input[idx]
+		next := byte(0)
+		if idx+1 < len(input) {
+			next = input[idx+1]
+		}
+		if inLineComment {
+			if current == '\n' {
+				inLineComment = false
+				builder.WriteByte(current)
+			}
+			continue
+		}
+		if inBlockComment {
+			if current == '*' && next == '/' {
+				inBlockComment = false
+				idx++
+			}
+			continue
+		}
+		if inString {
+			builder.WriteByte(current)
+			if escaped {
+				escaped = false
+				continue
+			}
+			if current == '\\' {
+				escaped = true
+				continue
+			}
+			if current == '"' {
+				inString = false
+			}
+			continue
+		}
+		if current == '"' {
+			inString = true
+			builder.WriteByte(current)
+			continue
+		}
+		if current == '/' && next == '/' {
+			inLineComment = true
+			idx++
+			continue
+		}
+		if current == '/' && next == '*' {
+			inBlockComment = true
+			idx++
+			continue
+		}
+		builder.WriteByte(current)
+	}
+	return builder.String()
 }
 
 // resolveServerBaseURL 统一解析服务端地址，确保脚本侧 HTTP 调用入口稳定。

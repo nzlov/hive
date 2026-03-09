@@ -1,6 +1,11 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // TestResolveServerListenAddr 验证监听地址可从配置读取，避免服务端继续回退到固定端口。
 func TestResolveServerListenAddr(t *testing.T) {
@@ -325,5 +330,95 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 	}
 	if got.CacheMaxEntries != 2000 {
 		t.Fatalf("CacheMaxEntries = %d, want 2000", got.CacheMaxEntries)
+	}
+}
+
+// TestLoadPayloadSupportsJSONCAndAutoFillsMissingKeys 验证 JSONC 配置可解析且会自动补齐缺失键，避免版本升级后仍需手工补字段。
+func TestLoadPayloadSupportsJSONCAndAutoFillsMissingKeys(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{
+  // 只保留基础 server 配置，其他字段让加载流程自动补齐
+  "server": {
+    "base_url": "http://127.0.0.1:19090"
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("写入测试配置失败: %v", err)
+	}
+	payload, err := loadPayload(configPath)
+	if err != nil {
+		t.Fatalf("loadPayload 返回错误: %v", err)
+	}
+	if _, ok := payload["search"]; !ok {
+		t.Fatalf("应自动补齐 search 配置: %#v", payload)
+	}
+	embedding, ok := payload["embedding"].(map[string]any)
+	if !ok {
+		t.Fatalf("应自动补齐 embedding 配置: %#v", payload)
+	}
+	if _, ok := embedding["semantic_window"]; !ok {
+		t.Fatalf("应自动补齐 semantic_window 配置: %#v", embedding)
+	}
+	updated, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("读取补齐后的配置失败: %v", err)
+	}
+	if !strings.Contains(string(updated), "\"base_url\": \"http://127.0.0.1:19090\", //") {
+		t.Fatalf("补齐后配置应把注释放在配置项后面: %s", string(updated))
+	}
+}
+
+// TestLoadPayloadKeepsExistingValuesWhenFillingDefaults 验证自动补齐仅填缺失项，避免覆盖用户现有配置。
+func TestLoadPayloadKeepsExistingValuesWhenFillingDefaults(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{
+  "search": {
+    "low_confidence_error_hit_limit": 3
+  },
+  "embedding": {
+    "base_url": "http://127.0.0.1:11434/v1",
+    "model": "nomic-embed-text"
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("写入测试配置失败: %v", err)
+	}
+	payload, err := loadPayload(configPath)
+	if err != nil {
+		t.Fatalf("loadPayload 返回错误: %v", err)
+	}
+	search, ok := payload["search"].(map[string]any)
+	if !ok {
+		t.Fatalf("search 配置类型异常: %#v", payload["search"])
+	}
+	if got := pickInt(search, searchLowConfidenceErrorHitLimitKeys, 0); got != 3 {
+		t.Fatalf("已有错误命中上限不应被覆盖: got=%d want=3", got)
+	}
+	if got := pickInt(search, searchLowConfidenceSummaryHitLimitKeys, 0); got != defaultSearchSummaryHitLimit {
+		t.Fatalf("缺失的总结命中上限应补默认值: got=%d want=%d", got, defaultSearchSummaryHitLimit)
+	}
+	updated, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("读取补齐后的配置失败: %v", err)
+	}
+	if !strings.Contains(string(updated), "\"low_confidence_error_hit_limit\": 3") {
+		t.Fatalf("补齐后应保留已有配置值: %s", string(updated))
+	}
+}
+
+// TestStripJSONCCommentsKeepsURLLiterals 验证注释清理不会破坏 URL 字符串，避免 base_url 中的 // 被误删。
+func TestStripJSONCCommentsKeepsURLLiterals(t *testing.T) {
+	t.Helper()
+	raw := "{\n  \"url\": \"http://127.0.0.1:8080\", // 注释\n  /* 块注释 */\n  \"ok\": true\n}\n"
+	cleaned := stripJSONCComments(raw)
+	if !strings.Contains(cleaned, "http://127.0.0.1:8080") {
+		t.Fatalf("URL 字符串不应被注释清理破坏: %s", cleaned)
+	}
+	if strings.Contains(cleaned, "注释") {
+		t.Fatalf("注释内容应被清理: %s", cleaned)
 	}
 }
