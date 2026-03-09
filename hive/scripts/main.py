@@ -504,18 +504,17 @@ def render_hits_section(title: str, hits: list[dict[str, Any]]) -> str:
 
 
 def render_search_markdown(response: dict[str, Any], error_hits: list[dict[str, Any]], summary_hits: list[dict[str, Any]]) -> str:
-    """脚本在本地重建 Markdown，保证分支筛选后输出仍与旧格式兼容。"""
-
-    lines = [
-        "# Hive Search Result",
-        f"- query: {response.get('query', '')}",
-        f"- project_name: {response.get('project_name', '')}",
-    ]
+    lines = ["# Hive Search Result"]
     debug_commands = response.get("debug_commands")
     if isinstance(debug_commands, list) and debug_commands:
         lines.extend(["- debug: true", "", "## Debug Commands"])
         lines.extend([f"- `{str(command)}`" for command in debug_commands])
-    lines.extend(["", render_hits_section("Error Hits", error_hits), "", render_hits_section("Summary Hits", summary_hits), ""])
+    if error_hits:
+        lines.extend(["", render_hits_section("Error Hits", error_hits)])
+    if summary_hits:
+        if error_hits:
+            lines.append("")
+        lines.append(render_hits_section("Summary Hits", summary_hits))
     return "\n".join(lines)
 
 
