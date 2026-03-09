@@ -48,11 +48,11 @@ func (s *Service) Search(projectName string, queries []string, debug bool) (Sear
 		debugCommandsRef = &debugCommands
 	}
 	matcher := buildQueryMatcher(queries)
-	errorKeywordHits, err := s.collectHits(store, "error", effectiveProjectName, matcher, debugCommandsRef)
+	errorKeywordHits, err := s.collectHits(store, "error", effectiveProjectName, queries, matcher, debugCommandsRef)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	summaryKeywordHits, err := s.collectHits(store, "summary", effectiveProjectName, matcher, debugCommandsRef)
+	summaryKeywordHits, err := s.collectHits(store, "summary", effectiveProjectName, queries, matcher, debugCommandsRef)
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -225,11 +225,11 @@ func (s *Service) rebuildEmbeddingsWithDB(location Location, store *models.Store
 }
 
 // collectHits 在数据库记录中筛选关键字命中，并按项目名隔离单库里的不同项目数据。
-func (s *Service) collectHits(store *models.Store, source string, projectName string, matcher lineMatcher, debugCommands *[]string) ([]Hit, error) {
+func (s *Service) collectHits(store *models.Store, source string, projectName string, queries []string, matcher lineMatcher, debugCommands *[]string) ([]Hit, error) {
 	if debugCommands != nil {
 		*debugCommands = append(*debugCommands, fmt.Sprintf("%s scan: %s [%s/%s]", store.Driver(), store.SourceLabel(), projectName, source))
 	}
-	storedRows, err := store.ListMemoriesByProjectAndType(projectName, source)
+	storedRows, err := store.SearchMemoriesByProjectAndType(projectName, source, queries)
 	if err != nil {
 		return nil, err
 	}
@@ -276,11 +276,11 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 	if !s.provider.Enabled() {
 		return nil, nil
 	}
-	queryText := BuildQueryEmbeddingText(source, queries)
-	if strings.TrimSpace(queryText) == "" {
+	queryTexts := normalizeEmbeddingQueries(queries)
+	if len(queryTexts) == 0 {
 		return nil, nil
 	}
-	vectors, err := s.provider.EmbedTexts([]string{queryText})
+	vectors, err := s.provider.EmbedTexts(queryTexts)
 	if err != nil || len(vectors) == 0 {
 		return nil, err
 	}
@@ -309,7 +309,7 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 		if !ok {
 			continue
 		}
-		semanticScore := CosineSimilarity(vectors[0], vector)
+		semanticScore := maxSemanticSimilarity(vectors, vector)
 		if semanticScore <= 0.15 {
 			continue
 		}
@@ -325,6 +325,28 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 		return hits[i].Confidence > hits[j].Confidence
 	})
 	return hits, nil
+}
+
+// normalizeEmbeddingQueries 统一裁剪查询词，确保嵌入请求只包含用户真实输入。
+func normalizeEmbeddingQueries(queries []string) []string {
+	out := make([]string, 0, len(queries))
+	for _, query := range queries {
+		if cleaned := strings.TrimSpace(query); cleaned != "" {
+			out = append(out, cleaned)
+		}
+	}
+	return out
+}
+
+// maxSemanticSimilarity 使用多查询向量中的最高分，避免任一查询词被拼接模板稀释。
+func maxSemanticSimilarity(queryVectors [][]float64, target []float64) float64 {
+	best := 0.0
+	for _, vector := range queryVectors {
+		if score := CosineSimilarity(vector, target); score > best {
+			best = score
+		}
+	}
+	return best
 }
 
 // memoryRowFromModel 收敛模型层到业务层的数据映射，避免搜索逻辑直接依赖 GORM 结构体。
