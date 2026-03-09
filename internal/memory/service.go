@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"regexp"
 	"sort"
@@ -118,6 +119,7 @@ func (s *Service) Write(projectName, gitBranch, userID string, items []api.Memor
 		for _, row := range rows {
 			texts = append(texts, BuildMemoryEmbeddingText(row))
 		}
+		log.Printf("开始为 %d 条记忆生成向量...", len(texts))
 		vectors, err := s.provider.EmbedTexts(texts)
 		if err != nil {
 			return "", err
@@ -185,10 +187,12 @@ func (s *Service) rebuildEmbeddingsWithDB(location Location, db *sql.DB, force b
 	for _, row := range rows {
 		texts = append(texts, BuildMemoryEmbeddingText(row))
 	}
+	log.Printf("开始为 %d 条记忆生成向量...", len(texts))
 	vectors, err := s.provider.EmbedTexts(texts)
 	if err != nil {
 		return RebuildResult{}, err
 	}
+	log.Printf("向量生成完成，开始写入数据库...")
 	tx, err := db.Begin()
 	if err != nil {
 		return RebuildResult{}, err
@@ -198,12 +202,16 @@ func (s *Service) rebuildEmbeddingsWithDB(location Location, db *sql.DB, force b
 		return RebuildResult{}, err
 	}
 	rebuiltAt := time.Now().UTC().Format(time.RFC3339Nano)
+	total := len(rows)
 	for idx, row := range rows {
 		if idx >= len(vectors) {
 			break
 		}
 		if err := UpsertMemoryEmbedding(tx, row.ProjectName, row.ID, vectors[idx], rebuiltAt); err != nil {
 			return RebuildResult{}, err
+		}
+		if (idx+1)%100 == 0 || idx+1 == total {
+			log.Printf("索引重建进度: %d/%d (%.1f%%)", idx+1, total, float64(idx+1)*100/float64(total))
 		}
 	}
 	if err := SetMemoryMetadata(tx, embeddingModelMetaKey, s.provider.ModelName(), rebuiltAt); err != nil {
