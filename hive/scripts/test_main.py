@@ -151,5 +151,29 @@ class APITokenConfigTest(unittest.TestCase):
             self.assertEqual(api_token, "project-token")
 
 
+class ConfigBootstrapTest(unittest.TestCase):
+    """覆盖缺省配置文件初始化，避免首次运行时因目录或文件缺失直接失败。"""
+
+    def test_load_config_creates_missing_config_and_parent_dir(self) -> None:
+        """配置文件不存在时应自动创建父目录和默认配置骨架，保证后续读取稳定。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_path = MAIN.CONFIG_PATH
+            config_path = Path(temp_dir) / ".config" / "hive" / "config.json"
+            MAIN.CONFIG_PATH = config_path
+            try:
+                payload = MAIN.load_config()
+            finally:
+                MAIN.CONFIG_PATH = original_path
+
+            self.assertEqual(payload, MAIN.default_config_payload())
+            self.assertTrue(config_path.parent.is_dir())
+            self.assertTrue(config_path.is_file())
+            self.assertEqual(
+                config_path.read_text(encoding="utf-8"),
+                '{\n  "default_server_base_url": "http://127.0.0.1:8080",\n  "api_token": "",\n  "projects": {}\n}\n',
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

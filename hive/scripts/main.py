@@ -17,6 +17,31 @@ DEFAULT_SERVER_BASE_URL = "http://127.0.0.1:8080"
 CONFIG_PATH = Path.home() / ".config" / "hive" / "config.json"
 
 
+def default_config_payload() -> dict[str, Any]:
+    """缺省时写出最小可用配置骨架，帮助用户在首次运行后直接补全必要字段。"""
+
+    return {
+        "default_server_base_url": DEFAULT_SERVER_BASE_URL,
+        "api_token": "",
+        "projects": {},
+    }
+
+
+def ensure_config_file() -> None:
+    """首次运行时自动创建客户端配置和父目录，避免调用链因缺文件直接失败。"""
+
+    if CONFIG_PATH.exists():
+        return
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.write_text(
+            json.dumps(default_config_payload(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        return
+
+
 def build_parser() -> argparse.ArgumentParser:
     """统一定义子命令入口，避免多个脚本重复维护参数协议。"""
 
@@ -42,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
 def load_config() -> dict[str, Any]:
     """脚本只读取本地配置，缺失时回退默认值避免阻塞调用。"""
 
+    ensure_config_file()
     if not CONFIG_PATH.exists():
         return {}
     try:
