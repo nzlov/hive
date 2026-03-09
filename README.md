@@ -2,7 +2,7 @@
 
 `memory-manager` 是一个面向工程分析场景的记忆管理 skill，用来在代码搜索、问题分析、错误排查前后读写项目记忆。
 
-现在它采用“脚本 + HTTP 服务端”模式：`scripts/` 下的 Go 子命令只负责解析参数、识别项目根目录并通过 HTTP 调用服务端；真正的数据库读写、嵌入计算和检索逻辑都由项目根目录的 Gin 服务统一处理。
+现在它采用“脚本 + HTTP 服务端”模式：`scripts/` 下的 Python 脚本只负责解析参数、识别项目根目录并通过 HTTP 调用服务端；真正的数据库读写、嵌入计算和检索逻辑都由项目根目录的 Gin 服务统一处理。
 
 ## 适用场景
 
@@ -19,9 +19,7 @@
 - `SKILL.md`：skill 规则与约束。
 - `../cmd/memory-server/main.go`：Gin 服务端入口。
 - `../internal/memory/`：记忆查询、写入、向量重建等核心业务。
-- `scripts/main.go`：Go 统一入口，通过子命令调用服务端。
-- `scripts/client.go`：HTTP 客户端。
-- `scripts/rebuild.go`：通过 HTTP 触发向量重建。
+- `scripts/main.py`：Python 统一入口，通过子命令调用服务端。
 
 默认记忆目录结构：
 
@@ -52,9 +50,9 @@ go run ./cmd/memory-server
 在项目根目录执行：
 
 ```bash
-go run ./scripts search --query '关键词'
-go run ./scripts search --query '关键词1' --query '关键词2'
-go run ./scripts search --query '["关键词1","关键词2"]'
+python3 scripts/main.py search --query '关键词'
+python3 scripts/main.py search --query '关键词1' --query '关键词2'
+python3 scripts/main.py search --query '["关键词1","关键词2"]'
 ```
 
 常用参数：
@@ -83,14 +81,14 @@ go run ./scripts search --query '["关键词1","关键词2"]'
 - 如果当前会话里之前已经保存过记忆，再次总结时应从上次已保存内容之后开始续写，避免重复总结。
 
 ```bash
-go run ./scripts write \
+python3 scripts/main.py write \
   --type summary \
   --title '自动标题' \
   --tags '业务标签,重要文件,重要方法' \
   --summary '一句话简介' \
   --context '完整Markdown正文'
 
-go run ./scripts write \
+python3 scripts/main.py write \
   --items-json '[
     {
       "type": "summary",
@@ -135,7 +133,7 @@ go run ./scripts write \
 - 如果一次处理里有多个独立错误或多个问题目标，建议拆成多条错误记忆分别保存。
 
 ```bash
-go run ./scripts write \
+python3 scripts/main.py write \
   --type error \
   --title '自动标题' \
   --tags '业务标签,错误类型,相关模块' \
@@ -244,8 +242,8 @@ go run ./scripts write \
 可以手动执行全量重建：
 
 ```bash
-go run ./scripts rebuild-embeddings --root .
-go run ./scripts rebuild-embeddings --root . --force
+python3 scripts/main.py rebuild-embeddings --root .
+python3 scripts/main.py rebuild-embeddings --root . --force
 ```
 
 ## 使用建议
@@ -268,9 +266,9 @@ go run ./scripts rebuild-embeddings --root . --force
 示例：
 
 ```bash
-go run ./scripts search --query '["订单","支付","超时"]'
+python3 scripts/main.py search --query '["订单","支付","超时"]'
 
-go run ./scripts write \
+python3 scripts/main.py write \
   --type summary \
   --title '支付超时排查结论' \
   --tags '支付,超时,订单' \

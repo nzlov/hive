@@ -34,9 +34,9 @@ description: Trigger this skill by default for search or analysis tasks. prior-c
 使用命令：
 
 ```bash
-go run ./scripts search --query '关键词'
-go run ./scripts search --query '关键词1' --query '<关键词2>'
-go run ./scripts search --query '["关键词1","<关键词2>"]'
+python3 scripts/main.py search --query '关键词'
+python3 scripts/main.py search --query '关键词1' --query '<关键词2>'
+python3 scripts/main.py search --query '["关键词1","<关键词2>"]'
 ```
 
 ## 写入总结记忆
@@ -55,7 +55,7 @@ go run ./scripts search --query '["关键词1","<关键词2>"]'
 
 * 单条记忆
 ```bash
-go run ./scripts write \
+python3 scripts/main.py write \
   --type summary \
   --title '自动标题' \
   --tags '业务标签,重要文件,重要方法' \
@@ -65,7 +65,7 @@ go run ./scripts write \
 
 * 多条记忆
 ```bash
-go run ./scripts write \
+python3 scripts/main.py write \
   --items-json '[
     {
       "type": "summary",
@@ -96,7 +96,7 @@ go run ./scripts write \
 使用命令：
 
 ```bash
-go run ./scripts write \
+python3 scripts/main.py write \
   --type error \
   --title '自动标题' \
   --tags '业务标签,错误类型,相关模块' \
