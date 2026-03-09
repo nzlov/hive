@@ -102,6 +102,86 @@ func TestResolveEmbeddingConfigUsesSemanticDefaults(t *testing.T) {
 	if got.SemanticHitFetchLimit != defaultSemanticHitFetchLimit {
 		t.Fatalf("SemanticHitFetchLimit = %d, want %d", got.SemanticHitFetchLimit, defaultSemanticHitFetchLimit)
 	}
+	if got.SemanticWindowMode != defaultSemanticWindowMode {
+		t.Fatalf("SemanticWindowMode = %q, want %q", got.SemanticWindowMode, defaultSemanticWindowMode)
+	}
+	if got.SemanticWindowBaseMaxCount != defaultSemanticCandidateMaxCount {
+		t.Fatalf("SemanticWindowBaseMaxCount = %d, want %d", got.SemanticWindowBaseMaxCount, defaultSemanticCandidateMaxCount)
+	}
+	if got.DecayEnabled != defaultDecayEnabled {
+		t.Fatalf("DecayEnabled = %v, want %v", got.DecayEnabled, defaultDecayEnabled)
+	}
+	if got.DecaySummaryHalfLifeDays != defaultDecaySummaryHalfLifeDays {
+		t.Fatalf("DecaySummaryHalfLifeDays = %v, want %v", got.DecaySummaryHalfLifeDays, defaultDecaySummaryHalfLifeDays)
+	}
+	if got.DecayErrorHalfLifeDays != defaultDecayErrorHalfLifeDays {
+		t.Fatalf("DecayErrorHalfLifeDays = %v, want %v", got.DecayErrorHalfLifeDays, defaultDecayErrorHalfLifeDays)
+	}
+}
+
+// TestResolveEmbeddingConfigParsesSemanticWindowAndDecay 验证语义窗口与时间衰减参数可由配置覆盖，避免后续策略仍写死在代码里。
+func TestResolveEmbeddingConfigParsesSemanticWindowAndDecay(t *testing.T) {
+	t.Helper()
+	payload := map[string]any{
+		"embedding": map[string]any{
+			"base_url": "http://127.0.0.1:11434/v1",
+			"model":    "nomic-embed-text",
+			"semantic_window": map[string]any{
+				"mode":                  "dynamic",
+				"base_max_count":        2048,
+				"dynamic_min_count":     300,
+				"dynamic_max_count":     12000,
+				"dynamic_ratio":         0.35,
+				"reference_corpus_size": 20000,
+			},
+			"decay": map[string]any{
+				"enabled":         false,
+				"age_weight":      0.3,
+				"semantic_weight": 0.7,
+				"half_life_days": map[string]any{
+					"summary": 15,
+					"error":   120,
+				},
+			},
+		},
+	}
+	got := resolveEmbeddingConfig(payload)
+	if got == nil {
+		t.Fatal("resolveEmbeddingConfig() 返回 nil, want 非空配置")
+	}
+	if got.SemanticWindowMode != "dynamic" {
+		t.Fatalf("SemanticWindowMode = %q, want dynamic", got.SemanticWindowMode)
+	}
+	if got.SemanticWindowBaseMaxCount != 2048 {
+		t.Fatalf("SemanticWindowBaseMaxCount = %d, want 2048", got.SemanticWindowBaseMaxCount)
+	}
+	if got.SemanticWindowDynamicMin != 300 {
+		t.Fatalf("SemanticWindowDynamicMin = %d, want 300", got.SemanticWindowDynamicMin)
+	}
+	if got.SemanticWindowDynamicMax != 12000 {
+		t.Fatalf("SemanticWindowDynamicMax = %d, want 12000", got.SemanticWindowDynamicMax)
+	}
+	if got.SemanticWindowDynamicRatio != 0.35 {
+		t.Fatalf("SemanticWindowDynamicRatio = %v, want 0.35", got.SemanticWindowDynamicRatio)
+	}
+	if got.SemanticWindowReferenceSize != 20000 {
+		t.Fatalf("SemanticWindowReferenceSize = %d, want 20000", got.SemanticWindowReferenceSize)
+	}
+	if got.DecayEnabled {
+		t.Fatalf("DecayEnabled = %v, want false", got.DecayEnabled)
+	}
+	if got.DecayAgeWeight != 0.3 {
+		t.Fatalf("DecayAgeWeight = %v, want 0.3", got.DecayAgeWeight)
+	}
+	if got.DecaySemanticWeight != 0.7 {
+		t.Fatalf("DecaySemanticWeight = %v, want 0.7", got.DecaySemanticWeight)
+	}
+	if got.DecaySummaryHalfLifeDays != 15 {
+		t.Fatalf("DecaySummaryHalfLifeDays = %v, want 15", got.DecaySummaryHalfLifeDays)
+	}
+	if got.DecayErrorHalfLifeDays != 120 {
+		t.Fatalf("DecayErrorHalfLifeDays = %v, want 120", got.DecayErrorHalfLifeDays)
+	}
 }
 
 // TestResolveSearchConfig 验证搜索结果上限可从配置读取，避免不同服务实例返回条数不一致。
@@ -137,5 +217,101 @@ func TestResolveSearchConfigUsesDefaults(t *testing.T) {
 	}
 	if got.LowConfidenceSummaryHitLimit != defaultSearchSummaryHitLimit {
 		t.Fatalf("LowConfidenceSummaryHitLimit = %d, want %d", got.LowConfidenceSummaryHitLimit, defaultSearchSummaryHitLimit)
+	}
+	if got.KeywordMode != defaultKeywordMode {
+		t.Fatalf("KeywordMode = %q, want %q", got.KeywordMode, defaultKeywordMode)
+	}
+	if got.FusionFormula != defaultFusionFormula {
+		t.Fatalf("FusionFormula = %q, want %q", got.FusionFormula, defaultFusionFormula)
+	}
+	if got.CacheMaxEntries != defaultCacheMaxEntries {
+		t.Fatalf("CacheMaxEntries = %d, want %d", got.CacheMaxEntries, defaultCacheMaxEntries)
+	}
+}
+
+// TestResolveSearchConfigParsesKeywordFusionCache 验证关键字、融合和缓存参数可由配置控制，避免后续实现出现隐式写死。
+func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
+	t.Helper()
+	payload := map[string]any{
+		"search": map[string]any{
+			"keyword": map[string]any{
+				"mode":    "bm25",
+				"backend": "postgres",
+				"fields":  []string{"title", "content"},
+				"field_weights": map[string]float64{
+					"title":   3,
+					"content": 1,
+				},
+				"synonyms": map[string]any{
+					"enabled": true,
+					"groups": [][]string{
+						{"error", "故障"},
+					},
+				},
+			},
+			"fusion": map[string]any{
+				"enabled":            true,
+				"formula":            "weighted_sum",
+				"keyword_weight":     0.6,
+				"semantic_weight":    0.3,
+				"recency_weight":     0.1,
+				"min_semantic_score": 0.2,
+			},
+			"cache": map[string]any{
+				"enabled":                     true,
+				"query_embedding_ttl_seconds": 300,
+				"semantic_hits_ttl_seconds":   60,
+				"max_entries":                 2000,
+			},
+		},
+	}
+	got := resolveSearchConfig(payload)
+	if got == nil {
+		t.Fatal("resolveSearchConfig() 返回 nil, want 非空配置")
+	}
+	if got.KeywordMode != "bm25" {
+		t.Fatalf("KeywordMode = %q, want bm25", got.KeywordMode)
+	}
+	if got.KeywordBackend != "postgres" {
+		t.Fatalf("KeywordBackend = %q, want postgres", got.KeywordBackend)
+	}
+	if len(got.KeywordFields) != 2 || got.KeywordFields[0] != "title" {
+		t.Fatalf("KeywordFields = %#v, want [title content]", got.KeywordFields)
+	}
+	if got.KeywordFieldWeights["title"] != 3 {
+		t.Fatalf("KeywordFieldWeights[title] = %v, want 3", got.KeywordFieldWeights["title"])
+	}
+	if !got.KeywordSynonymsEnabled {
+		t.Fatalf("KeywordSynonymsEnabled = %v, want true", got.KeywordSynonymsEnabled)
+	}
+	if len(got.KeywordSynonymGroups) != 1 || len(got.KeywordSynonymGroups[0]) != 2 {
+		t.Fatalf("KeywordSynonymGroups = %#v, want [[error 故障]]", got.KeywordSynonymGroups)
+	}
+	if !got.FusionEnabled {
+		t.Fatalf("FusionEnabled = %v, want true", got.FusionEnabled)
+	}
+	if got.FusionKeywordWeight != 0.6 {
+		t.Fatalf("FusionKeywordWeight = %v, want 0.6", got.FusionKeywordWeight)
+	}
+	if got.FusionSemanticWeight != 0.3 {
+		t.Fatalf("FusionSemanticWeight = %v, want 0.3", got.FusionSemanticWeight)
+	}
+	if got.FusionRecencyWeight != 0.1 {
+		t.Fatalf("FusionRecencyWeight = %v, want 0.1", got.FusionRecencyWeight)
+	}
+	if got.FusionMinSemanticScore != 0.2 {
+		t.Fatalf("FusionMinSemanticScore = %v, want 0.2", got.FusionMinSemanticScore)
+	}
+	if !got.CacheEnabled {
+		t.Fatalf("CacheEnabled = %v, want true", got.CacheEnabled)
+	}
+	if got.CacheQueryEmbeddingTTL != 300 {
+		t.Fatalf("CacheQueryEmbeddingTTL = %d, want 300", got.CacheQueryEmbeddingTTL)
+	}
+	if got.CacheSemanticHitsTTL != 60 {
+		t.Fatalf("CacheSemanticHitsTTL = %d, want 60", got.CacheSemanticHitsTTL)
+	}
+	if got.CacheMaxEntries != 2000 {
+		t.Fatalf("CacheMaxEntries = %d, want 2000", got.CacheMaxEntries)
 	}
 }
