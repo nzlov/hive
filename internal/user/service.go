@@ -3,9 +3,7 @@ package user
 import (
 	"crypto/rand"
 	"crypto/sha1"
-	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,7 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nzlov/hive/internal/config"
-	"github.com/nzlov/hive/internal/memory"
+	"github.com/nzlov/hive/internal/models"
 )
 
 // Service 封装用户与鉴权相关能力，避免 HTTP 层直接拼接安全逻辑和 SQL。
@@ -33,18 +31,18 @@ func (s *Service) JWTSecret() string {
 
 // EnsureDefaultAdmin 在首次启动时补齐管理员账号，降低空库下的初始化门槛。
 func (s *Service) EnsureDefaultAdmin() (User, string, error) {
-	db, err := s.openDB()
+	store, err := s.openStore()
 	if err != nil {
 		return User{}, "", err
 	}
-	defer db.Close()
+	defer store.Close()
 
-	var total int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&total); err != nil {
+	total, err := store.CountUsers()
+	if err != nil {
 		return User{}, "", err
 	}
 	if total > 0 {
-		user, err := s.findByUsernameWithDB(db, "admin")
+		user, err := s.findByUsername(store, "admin")
 		if err == nil {
 			return user, "", nil
 		}
@@ -54,7 +52,7 @@ func (s *Service) EnsureDefaultAdmin() (User, string, error) {
 	if err != nil {
 		return User{}, "", err
 	}
-	created, err := s.createUserWithDB(db, CreateInput{
+	created, err := s.createUser(store, CreateInput{
 		Username: "admin",
 		RealName: "系统管理员",
 		Password: password,
@@ -68,12 +66,12 @@ func (s *Service) EnsureDefaultAdmin() (User, string, error) {
 
 // AuthenticateLogin 校验用户名密码，避免管理端登录把密码比对规则散落到控制器里。
 func (s *Service) AuthenticateLogin(username, password string) (User, error) {
-	db, err := s.openDB()
+	store, err := s.openStore()
 	if err != nil {
 		return User{}, err
 	}
-	defer db.Close()
-	user, err := s.findByUsernameWithDB(db, username)
+	defer store.Close()
+	user, err := s.findByUsername(store, username)
 	if err != nil {
 		return User{}, fmt.Errorf("用户名或密码错误")
 	}
@@ -85,37 +83,36 @@ func (s *Service) AuthenticateLogin(username, password string) (User, error) {
 
 // ListUsers 返回用户管理页所需列表，避免前端直接依赖数据库表结构。
 func (s *Service) ListUsers() ([]User, error) {
-	db, err := s.openDB()
+	store, err := s.openStore()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
-	rows, err := db.Query(`SELECT id, userid, username, real_name, password_hash, salt, apitoken, is_admin, created_at, updated_at FROM users ORDER BY created_at DESC, id DESC`)
+	defer store.Close()
+	items, err := store.ListUsers()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	return scanUsers(rows)
+	return toUsers(items), nil
 }
 
 // CreateUser 新增一个用户，并统一生成 UUID 与 API Token 避免调用方绕过安全规则。
 func (s *Service) CreateUser(input CreateInput) (User, error) {
-	db, err := s.openDB()
+	store, err := s.openStore()
 	if err != nil {
 		return User{}, err
 	}
-	defer db.Close()
-	return s.createUserWithDB(db, input)
+	defer store.Close()
+	return s.createUser(store, input)
 }
 
 // UpdateUser 修改用户资料，并在需要时重置密码或 API Token。
 func (s *Service) UpdateUser(id int64, input UpdateInput) (User, error) {
-	db, err := s.openDB()
+	store, err := s.openStore()
 	if err != nil {
 		return User{}, err
 	}
-	defer db.Close()
-	existing, err := s.findByIDWithDB(db, id)
+	defer store.Close()
+	existing, err := s.findByID(store, id)
 	if err != nil {
 		return User{}, err
 	}
@@ -146,59 +143,53 @@ func (s *Service) UpdateUser(id int64, input UpdateInput) (User, error) {
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = db.Exec(`UPDATE users SET username = ?, real_name = ?, password_hash = ?, salt = ?, apitoken = ?, is_admin = ?, updated_at = ? WHERE id = ?`, username, realName, passwordHash, salt, apiToken, boolToInt(input.IsAdmin), now, id)
-	if err != nil {
-		return User{}, err
-	}
-	return s.findByIDWithDB(db, id)
+	return s.saveUser(store, models.User{ID: id, UserID: existing.UserID, Username: username, RealName: realName, PasswordHash: passwordHash, Salt: salt, APIToken: apiToken, IsAdmin: input.IsAdmin, CreatedAt: existing.CreatedAt, UpdatedAt: now})
 }
 
 // DeleteUser 删除指定用户，同时阻止管理员误删自己的当前账号。
 func (s *Service) DeleteUser(id int64, requesterUserID string) error {
-	db, err := s.openDB()
+	store, err := s.openStore()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
-	target, err := s.findByIDWithDB(db, id)
+	defer store.Close()
+	target, err := s.findByID(store, id)
 	if err != nil {
 		return err
 	}
 	if requesterUserID != "" && requesterUserID == target.UserID {
 		return fmt.Errorf("不能删除当前登录用户")
 	}
-	_, err = db.Exec(`DELETE FROM users WHERE id = ?`, id)
-	return err
+	return store.DeleteUserByID(id)
 }
 
 // AuthenticateAPIToken 根据 API Token 解析调用用户，为记忆接口补齐来源追踪信息。
 func (s *Service) AuthenticateAPIToken(apiToken string) (User, error) {
-	db, err := s.openDB()
+	store, err := s.openStore()
 	if err != nil {
 		return User{}, err
 	}
-	defer db.Close()
-	return s.findByAPITokenWithDB(db, apiToken)
+	defer store.Close()
+	return s.findByAPIToken(store, apiToken)
 }
 
 // FindByUserID 供 JWT 中间件在需要时回查用户详情，避免信任过期的令牌内容。
 func (s *Service) FindByUserID(userID string) (User, error) {
-	db, err := s.openDB()
+	store, err := s.openStore()
 	if err != nil {
 		return User{}, err
 	}
-	defer db.Close()
-	return s.findByUserIDWithDB(db, userID)
+	defer store.Close()
+	return s.findByUserID(store, userID)
 }
 
-// openDB 统一复用同一份 SQLite 文件，确保用户和记忆数据共享同一存储位置。
-func (s *Service) openDB() (*sql.DB, error) {
-	location := memory.ResolveLocation(s.config)
-	return memory.ConnectDB(location.MemoryRoot)
+// openStore 统一复用模型层数据库入口，确保用户和记忆数据共享同一存储配置。
+func (s *Service) openStore() (*models.Store, error) {
+	return models.Open(s.config)
 }
 
-// createUserWithDB 在事务边界简单场景下复用同一创建逻辑，避免默认管理员和后台新增出现漂移。
-func (s *Service) createUserWithDB(db *sql.DB, input CreateInput) (User, error) {
+// createUser 在默认管理员和后台新增场景复用同一套持久化逻辑，避免安全规则漂移。
+func (s *Service) createUser(store *models.Store, input CreateInput) (User, error) {
 	username := strings.TrimSpace(input.Username)
 	realName := strings.TrimSpace(input.RealName)
 	password := strings.TrimSpace(input.Password)
@@ -221,65 +212,82 @@ func (s *Service) createUserWithDB(db *sql.DB, input CreateInput) (User, error) 
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	userID := uuid.NewString()
-	result, err := db.Exec(`INSERT INTO users (userid, username, real_name, password_hash, salt, apitoken, is_admin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, userID, username, realName, hashPassword(password, salt), salt, apiToken, boolToInt(input.IsAdmin), now, now)
+	item, err := store.CreateUser(models.User{UserID: userID, Username: username, RealName: realName, PasswordHash: hashPassword(password, salt), Salt: salt, APIToken: apiToken, IsAdmin: input.IsAdmin, CreatedAt: now, UpdatedAt: now})
 	if err != nil {
 		return User{}, err
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return User{}, err
-	}
-	return s.findByIDWithDB(db, id)
+	return toUser(item), nil
 }
 
-// findByUsernameWithDB 统一按用户名读取用户，避免登录和管理逻辑维护多套扫描顺序。
-func (s *Service) findByUsernameWithDB(db *sql.DB, username string) (User, error) {
-	return queryOneUser(db, `SELECT id, userid, username, real_name, password_hash, salt, apitoken, is_admin, created_at, updated_at FROM users WHERE username = ?`, strings.TrimSpace(username))
-}
-
-// findByIDWithDB 统一按主键读取用户，方便更新和删除后的结果回读。
-func (s *Service) findByIDWithDB(db *sql.DB, id int64) (User, error) {
-	return queryOneUser(db, `SELECT id, userid, username, real_name, password_hash, salt, apitoken, is_admin, created_at, updated_at FROM users WHERE id = ?`, id)
-}
-
-// findByUserIDWithDB 统一按业务 UUID 读取用户，避免 JWT 中间件继续暴露内部自增主键。
-func (s *Service) findByUserIDWithDB(db *sql.DB, userID string) (User, error) {
-	return queryOneUser(db, `SELECT id, userid, username, real_name, password_hash, salt, apitoken, is_admin, created_at, updated_at FROM users WHERE userid = ?`, strings.TrimSpace(userID))
-}
-
-// findByAPITokenWithDB 统一按 API Token 解析用户，保证 token 路由与记忆写入共享同一来源身份。
-func (s *Service) findByAPITokenWithDB(db *sql.DB, apiToken string) (User, error) {
-	return queryOneUser(db, `SELECT id, userid, username, real_name, password_hash, salt, apitoken, is_admin, created_at, updated_at FROM users WHERE apitoken = ?`, strings.TrimSpace(apiToken))
-}
-
-// queryOneUser 集中处理单用户查询结果，避免调用方重复判断 sql.ErrNoRows 细节。
-func queryOneUser(db *sql.DB, query string, args ...any) (User, error) {
-	var user User
-	var isAdmin int
-	err := db.QueryRow(query, args...).Scan(&user.ID, &user.UserID, &user.Username, &user.RealName, &user.PasswordHash, &user.Salt, &user.APIToken, &isAdmin, &user.CreatedAt, &user.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
+// findByUsername 统一按用户名读取用户，避免登录和管理逻辑维护多套查询路径。
+func (s *Service) findByUsername(store *models.Store, username string) (User, error) {
+	item, err := store.FindUserByUsername(strings.TrimSpace(username))
+	if err == models.ErrNotFound {
 		return User{}, fmt.Errorf("用户不存在")
 	}
 	if err != nil {
 		return User{}, err
 	}
-	user.IsAdmin = isAdmin == 1
-	return user, nil
+	return toUser(item), nil
 }
 
-// scanUsers 集中转换用户列表，避免不同列表查询重复维护字段顺序。
-func scanUsers(rows *sql.Rows) ([]User, error) {
-	items := make([]User, 0)
-	for rows.Next() {
-		var item User
-		var isAdmin int
-		if err := rows.Scan(&item.ID, &item.UserID, &item.Username, &item.RealName, &item.PasswordHash, &item.Salt, &item.APIToken, &isAdmin, &item.CreatedAt, &item.UpdatedAt); err != nil {
-			return nil, err
-		}
-		item.IsAdmin = isAdmin == 1
-		items = append(items, item)
+// findByIDWithDB 统一按主键读取用户，方便更新和删除后的结果回读。
+func (s *Service) findByID(store *models.Store, id int64) (User, error) {
+	item, err := store.FindUserByID(id)
+	if err == models.ErrNotFound {
+		return User{}, fmt.Errorf("用户不存在")
 	}
-	return items, rows.Err()
+	if err != nil {
+		return User{}, err
+	}
+	return toUser(item), nil
+}
+
+// findByUserIDWithDB 统一按业务 UUID 读取用户，避免 JWT 中间件继续暴露内部自增主键。
+func (s *Service) findByUserID(store *models.Store, userID string) (User, error) {
+	item, err := store.FindUserByUserID(strings.TrimSpace(userID))
+	if err == models.ErrNotFound {
+		return User{}, fmt.Errorf("用户不存在")
+	}
+	if err != nil {
+		return User{}, err
+	}
+	return toUser(item), nil
+}
+
+// findByAPITokenWithDB 统一按 API Token 解析用户，保证 token 路由与记忆写入共享同一来源身份。
+func (s *Service) findByAPIToken(store *models.Store, apiToken string) (User, error) {
+	item, err := store.FindUserByAPIToken(strings.TrimSpace(apiToken))
+	if err == models.ErrNotFound {
+		return User{}, fmt.Errorf("用户不存在")
+	}
+	if err != nil {
+		return User{}, err
+	}
+	return toUser(item), nil
+}
+
+// saveUser 统一把业务层更新后的用户对象落库，避免服务层感知字段级更新细节。
+func (s *Service) saveUser(store *models.Store, item models.User) (User, error) {
+	updated, err := store.SaveUser(item)
+	if err != nil {
+		return User{}, err
+	}
+	return toUser(updated), nil
+}
+
+// toUser 收敛模型层到业务层的映射，避免其他逻辑直接依赖持久化结构体。
+func toUser(item models.User) User {
+	return User{ID: item.ID, UserID: item.UserID, Username: item.Username, RealName: item.RealName, PasswordHash: item.PasswordHash, Salt: item.Salt, APIToken: item.APIToken, IsAdmin: item.IsAdmin, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}
+}
+
+// toUsers 批量转换用户列表，避免管理端查询重复维护字段拷贝逻辑。
+func toUsers(items []models.User) []User {
+	out := make([]User, 0, len(items))
+	for _, item := range items {
+		out = append(out, toUser(item))
+	}
+	return out
 }
 
 // hashPassword 使用 sha1(password+salt) 满足当前兼容要求，同时把算法细节集中在单点方便后续升级。
@@ -295,12 +303,4 @@ func randomString(size int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buffer), nil
-}
-
-// boolToInt 让 SQLite 写入布尔字段时保持显式整数语义，避免驱动差异导致兼容问题。
-func boolToInt(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
 }

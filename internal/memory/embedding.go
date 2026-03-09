@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nzlov/hive/internal/config"
+	"github.com/nzlov/hive/internal/models"
 )
 
 var frontMatterRegexp = regexp.MustCompile(`\A---\n.*?\n---\n?`)
@@ -167,32 +168,6 @@ func BuildMemoryEmbeddingText(row Row) string {
 	})
 }
 
-// BuildQueryEmbeddingText 为查询构造目标导向的模板，减少短关键词直接拼接带来的语义损耗。
-func BuildQueryEmbeddingText(source string, queries []string) string {
-	cleaned := []string{}
-	for _, query := range queries {
-		if item := strings.TrimSpace(query); item != "" {
-			cleaned = append(cleaned, item)
-		}
-	}
-	if len(cleaned) == 0 {
-		return ""
-	}
-	joined := strings.Join(cleaned, "、")
-	if source == "error" {
-		return strings.Join([]string{
-			"查询类型: 错误排查记忆检索",
-			"关注问题: " + joined,
-			"检索目标: 查找相似的错误现象、触发条件、根因和修复结论。",
-		}, "\n")
-	}
-	return strings.Join([]string{
-		"查询类型: 总结记忆检索",
-		"关注主题: " + joined,
-		"检索目标: 查找相关主题、关键结论、约束条件和实现经验。",
-	}, "\n")
-}
-
 // CosineSimilarity 用余弦相似度衡量语义接近度，避免向量长度差异带来偏置。
 func CosineSimilarity(left, right []float64) float64 {
 	if len(left) == 0 || len(left) != len(right) {
@@ -214,7 +189,7 @@ func CosineSimilarity(left, right []float64) float64 {
 
 // formatEmbeddingTags 把标签整理成自然文本，减少 JSON 符号给向量引入无意义噪声。
 func formatEmbeddingTags(raw string) string {
-	return strings.Join(DecodeTags(raw), "、")
+	return strings.Join(models.DecodeTags(raw), "、")
 }
 
 // stripFrontMatter 去掉持久化内容中的 YAML 头部，避免元数据重复稀释正文语义。
