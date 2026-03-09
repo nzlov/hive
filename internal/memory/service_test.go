@@ -102,7 +102,9 @@ func seedSemanticMemory(t *testing.T, store *models.Store, projectName, memType,
 	if err := store.UpsertMemoryEmbeddings([]models.MemoryEmbedding{{
 		MemoryID:    items[0].ID,
 		ProjectName: projectName,
+		Type:        memType,
 		Vector:      models.EncodeVector(vector),
+		Timestamp:   timestamp,
 		UpdatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
 	}}); err != nil {
 		t.Fatalf("写入语义测试向量失败: %v", err)
@@ -389,6 +391,82 @@ func TestServiceEnsureEmbeddingsReadyRebuildsOnModelMismatch(t *testing.T) {
 	}
 	if len(vector) != 2 || math.Abs(vector[0]-0) > 1e-9 || math.Abs(vector[1]-1) > 1e-9 {
 		t.Fatalf("向量未按新模型重建: %+v", vector)
+	}
+}
+
+// TestServiceEnsureEmbeddingsReadyRebuildsLegacyEmbeddings 验证旧版缺少搜索字段的向量会在启动时自动补全重建。
+func TestServiceEnsureEmbeddingsReadyRebuildsLegacyEmbeddings(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
+	ctx := testContextWithStore(t, service.config)
+	provider := &stubEmbeddingProvider{enabled: true, model: "legacy-compatible-model", vector: []float64{0.2, 0.8}}
+	service.provider = provider
+
+	if _, err := service.Write(ctx, "legacy-project", "", "", []api.MemoryWriteItem{{
+		Type:    "summary",
+		Title:   "旧版向量记忆",
+		Tags:    []string{"迁移"},
+		Summary: "先写入一条完整向量，再模拟旧版字段缺失。",
+		Context: "## Summary\n\n- 详情: 需要触发补全重建。",
+	}}); err != nil {
+		t.Fatalf("写入旧版测试记忆失败: %v", err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("初次写入应生成一次向量，实际次数=%d", provider.calls)
+	}
+
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		t.Fatalf("读取模型存储失败: %v", err)
+	}
+
+	if err := store.WithTx(func(txStore *models.Store) error {
+		items, err := txStore.ListAllMemories()
+		if err != nil {
+			return err
+		}
+		if len(items) != 1 {
+			return fmt.Errorf("测试数据数量异常: %d", len(items))
+		}
+		return txStore.UpsertMemoryEmbeddings([]models.MemoryEmbedding{{
+			MemoryID:    items[0].ID,
+			ProjectName: items[0].ProjectName,
+			Type:        items[0].Type,
+			Vector:      models.EncodeVector([]float64{0.9, 0.1}),
+			UpdatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+		}})
+	}); err != nil {
+		t.Fatalf("模拟旧版向量失败: %v", err)
+	}
+
+	result, err := service.EnsureEmbeddingsReady(ctx)
+	if err != nil {
+		t.Fatalf("启动校验旧版向量失败: %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("旧版缺少字段的向量应触发重建: %+v", result)
+	}
+	if provider.calls != 2 {
+		t.Fatalf("旧版向量应额外执行一次重建，实际次数=%d", provider.calls)
+	}
+
+	missingCount, err := store.CountMemoryEmbeddingsMissingSearchFields()
+	if err != nil {
+		t.Fatalf("统计缺失搜索字段失败: %v", err)
+	}
+	if missingCount != 0 {
+		t.Fatalf("重建后不应再有缺失搜索字段的向量: %d", missingCount)
+	}
+
+	items, err := store.ListSemanticEmbeddingCandidates("legacy-project", "summary", 10, 0)
+	if err != nil {
+		t.Fatalf("读取语义候选失败: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("语义候选数量异常: %+v", items)
+	}
+	if items[0].Timestamp == "" {
+		t.Fatalf("重建后语义候选时间戳不应为空: %+v", items[0])
 	}
 }
 

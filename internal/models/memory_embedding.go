@@ -17,8 +17,10 @@ type MemoryEmbeddingCandidate struct {
 // MemoryEmbedding 对应 memory_embeddings 表，保存记忆向量和项目隔离维度。
 type MemoryEmbedding struct {
 	MemoryID    int64  `gorm:"column:memory_id;primaryKey"`
-	ProjectName string `gorm:"column:project_name;type:text;not null;default:'';index:idx_memory_embeddings_project_memory,priority:1"`
+	ProjectName string `gorm:"column:project_name;type:text;not null;default:'';index:idx_memory_embeddings_project_type_timestamp,priority:1"`
+	Type        string `gorm:"column:type;type:text;not null;default:'';check:type IN ('summary','error');index:idx_memory_embeddings_project_type_timestamp,priority:2"`
 	Vector      string `gorm:"column:vector;type:text;not null"`
+	Timestamp   string `gorm:"column:timestamp;type:text;not null;default:'';index:idx_memory_embeddings_project_type_timestamp,priority:3"`
 	UpdatedAt   string `gorm:"column:updated_at;type:text;not null"`
 }
 
@@ -34,7 +36,7 @@ func (s *Store) UpsertMemoryEmbeddings(items []MemoryEmbedding) error {
 	}
 	return s.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "memory_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"project_name", "vector", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"project_name", "type", "vector", "timestamp", "updated_at"}),
 	}).Create(&items).Error
 }
 
@@ -47,6 +49,13 @@ func (s *Store) DeleteAllMemoryEmbeddings() error {
 func (s *Store) CountMemoryEmbeddings() (int64, error) {
 	var total int64
 	err := s.db.Model(&MemoryEmbedding{}).Count(&total).Error
+	return total, err
+}
+
+// CountMemoryEmbeddingsMissingSearchFields 返回缺少搜索筛选字段的向量数，确保迁移后能触发一次补全重建。
+func (s *Store) CountMemoryEmbeddingsMissingSearchFields() (int64, error) {
+	var total int64
+	err := s.db.Model(&MemoryEmbedding{}).Where("type = '' OR timestamp = ''").Count(&total).Error
 	return total, err
 }
 
@@ -75,12 +84,11 @@ func (s *Store) ListSemanticEmbeddingCandidates(projectName, memType string, lim
 		return []MemoryEmbeddingCandidate{}, nil
 	}
 	var items []MemoryEmbeddingCandidate
-	err := s.db.Table("memory_embeddings AS me").
-		Select("me.memory_id, me.vector, m.timestamp").
-		Joins("JOIN memories AS m ON m.id = me.memory_id").
-		Where("me.project_name = ? AND m.project_name = ? AND m.type = ?", projectName, projectName, memType).
-		Order("m.timestamp DESC").
-		Order("me.memory_id DESC").
+	err := s.db.Model(&MemoryEmbedding{}).
+		Select("memory_id, vector, timestamp").
+		Where("project_name = ? AND type = ?", projectName, memType).
+		Order("timestamp DESC").
+		Order("memory_id DESC").
 		Limit(limit).
 		Offset(offset).
 		Scan(&items).Error

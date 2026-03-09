@@ -129,7 +129,7 @@ func (s *Service) Write(ctx context.Context, projectName, gitBranch, userID stri
 			if idx >= len(vectors) {
 				break
 			}
-			embeddings = append(embeddings, models.MemoryEmbedding{MemoryID: row.ID, ProjectName: effectiveProjectName, Vector: models.EncodeVector(vectors[idx]), UpdatedAt: updatedAt})
+			embeddings = append(embeddings, models.MemoryEmbedding{MemoryID: row.ID, ProjectName: effectiveProjectName, Type: row.Type, Vector: models.EncodeVector(vectors[idx]), Timestamp: row.Timestamp, UpdatedAt: updatedAt})
 		}
 		if err := txStore.UpsertMemoryEmbeddings(embeddings); err != nil {
 			return err
@@ -173,7 +173,11 @@ func (s *Service) rebuildEmbeddingsWithDB(location Location, store *models.Store
 	if err != nil {
 		return RebuildResult{}, err
 	}
-	if currentModel == s.provider.ModelName() && embeddingCount == int64(len(rows)) && !force {
+	missingSearchFieldCount, err := store.CountMemoryEmbeddingsMissingSearchFields()
+	if err != nil {
+		return RebuildResult{}, err
+	}
+	if currentModel == s.provider.ModelName() && embeddingCount == int64(len(rows)) && missingSearchFieldCount == 0 && !force {
 		return RebuildResult{Changed: false, Message: fmt.Sprintf("嵌入模型未变化，继续使用 %s。", s.provider.ModelName())}, nil
 	}
 	texts := make([]string, 0, len(rows))
@@ -197,7 +201,7 @@ func (s *Service) rebuildEmbeddingsWithDB(location Location, store *models.Store
 			if idx >= len(vectors) {
 				break
 			}
-			embeddings = append(embeddings, models.MemoryEmbedding{MemoryID: row.ID, ProjectName: row.ProjectName, Vector: models.EncodeVector(vectors[idx]), UpdatedAt: rebuiltAt})
+			embeddings = append(embeddings, models.MemoryEmbedding{MemoryID: row.ID, ProjectName: row.ProjectName, Type: row.Type, Vector: models.EncodeVector(vectors[idx]), Timestamp: row.Timestamp, UpdatedAt: rebuiltAt})
 			if (idx+1)%100 == 0 || idx+1 == total {
 				log.Printf("索引重建进度: %d/%d (%.1f%%)", idx+1, total, float64(idx+1)*100/float64(total))
 			}
