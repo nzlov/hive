@@ -61,8 +61,13 @@ def build_parser() -> argparse.ArgumentParser:
     write_parser.add_argument("--root", default=".", help="项目根目录")
     write_parser.add_argument(
         "--items-json",
-        required=True,
+        default="",
         help="记忆对象 JSON 数组，单次可混合写入多条 summary/error",
+    )
+    write_parser.add_argument(
+        "--items-file",
+        default="",
+        help="记忆对象 JSON 数组文件路径，写入成功后会自动删除该文件",
     )
 
     return parser
@@ -283,11 +288,23 @@ def normalize_tags(raw_tags: object) -> list[str]:
 def parse_write_items(args: argparse.Namespace) -> list[dict[str, Any]]:
     """写入只接受记忆数组，避免继续维护单条与批量两套协议。"""
 
-    if not args.items_json.strip():
-        raise SystemExit("--items-json 不能为空，且必须是记忆对象数组")
+    items_json = str(getattr(args, "items_json", "")).strip()
+    items_file = str(getattr(args, "items_file", "")).strip()
+    if bool(items_json) == bool(items_file):
+        raise SystemExit("--items-json 与 --items-file 必须二选一")
+
+    if items_file:
+        file_path = Path(items_file).expanduser()
+        try:
+            items_json = file_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise SystemExit(f"--items-file 读取失败: {file_path}") from exc
+
+    if not items_json.strip():
+        raise SystemExit("记忆内容不能为空，且必须是记忆对象数组")
 
     try:
-        payload = json.loads(args.items_json)
+        payload = json.loads(items_json)
     except json.JSONDecodeError as exc:
         raise SystemExit("--items-json 必须是合法 JSON") from exc
 
@@ -632,6 +649,13 @@ def run_write(
         ),
         api_token=api_token,
     )
+    items_file = str(getattr(args, "items_file", "")).strip()
+    if items_file:
+        file_path = Path(items_file).expanduser()
+        try:
+            file_path.unlink()
+        except OSError as exc:
+            raise SystemExit(f"记忆写入成功，但删除文件失败: {file_path}") from exc
     return 0
 
 

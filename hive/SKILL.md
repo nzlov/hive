@@ -32,9 +32,22 @@ description: Trigger this skill by default for search or analysis tasks. prior-c
 python3 scripts/main.py search --root '<项目根目录>' --query '["关键词","<描述>"]'
 ```
 
+PowerShell：
+
+```powershell
+python scripts/main.py search --root "<项目根目录>" --query '["关键词","<描述>"]'
+```
+
+cmd：
+
+```cmd
+python scripts\main.py search --root "<项目根目录>" --query "[\"关键词\",\"<描述>\"]"
+```
+
 ## 写入总结记忆
 
 - 只有当用户明确要求“总结并记忆”“保存记忆”“写入总结记忆”等语义时，才调用脚本写入总结记忆。
+- 总结整理记忆时一定要详细。
 - 一次总结可以拆成多条记忆，按不同目标、问题、模块或结论分别写入，避免把无关内容混成一条。
 - 如果当前会话里之前已经保存过记忆，那么再次总结时应从上次记忆之后的新内容开始续写，不要重复总结已保存部分。
 - `context` 字段传入最终 Markdown 正文，注意 shell 环境转义。
@@ -67,6 +80,23 @@ python3 scripts/main.py write \
   ]'
 ```
 
+PowerShell（建议优先使用 `--items-file`，避免长 JSON 转义不稳定）：
+
+```powershell
+python scripts/main.py write --root "<项目根目录>" --items-file ".\memory-items.json"
+```
+
+cmd（建议优先使用 `--items-file`，避免长 JSON 转义不稳定）：
+
+```cmd
+python scripts\main.py write --root "<项目根目录>" --items-file ".\memory-items.json"
+```
+
+说明：
+
+- `--items-json` 与 `--items-file` 必须二选一。
+- 使用 `--items-file` 时，写入成功后脚本会自动删除该文件，避免敏感记忆内容残留在磁盘。
+
 ## 写入错误记忆
 
 1. 出现错误先检索错误记忆。
@@ -80,6 +110,7 @@ python3 scripts/main.py write \
 
 ```bash
 python3 scripts/main.py write \
+  --root '<项目根目录>' \
   --items-json '[
     {
       "type": "error",
@@ -91,11 +122,25 @@ python3 scripts/main.py write \
   ]'
 ```
 
-## Shell 注意事项
+PowerShell：
+
+```powershell
+python scripts/main.py write --root "<项目根目录>" --items-file ".\error-items.json"
+```
+
+cmd：
+
+```cmd
+python scripts\main.py write --root "<项目根目录>" --items-file ".\error-items.json"
+```
+
+## 执行环境注意事项
 
 1. `--items-json` 中若包含反引号 `` `...` ``，shell 可能误执行。
 2. 建议用单引号包裹 `--items-json`；若 JSON 字符串内含单引号，先做 shell 转义。
 3. 通过 OpenCode `bash` 工具调用时，始终提供 `command` 与 `description`。
+4. Windows 下优先用 `python`（不是 `python3`），并优先使用 `--items-file`。
+5. 复杂 JSON 建议写入临时文件后通过 `--items-file` 传入。临时文件写入成功会自动清理。
 
 ## 正文生成样例
 

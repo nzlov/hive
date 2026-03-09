@@ -151,6 +151,69 @@ class APITokenConfigTest(unittest.TestCase):
             self.assertEqual(api_token, "project-token")
 
 
+class WriteItemsFileTest(unittest.TestCase):
+    """覆盖 --items-file 输入和写入后清理，保证 Windows 场景下批量写入稳定。"""
+
+    def test_parse_write_items_reads_items_file(self) -> None:
+        """通过文件传入 JSON 时应正确解析记忆数组，避免命令行转义干扰。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            items_path = Path(temp_dir) / "items.json"
+            items_path.write_text(
+                '[{"type":"summary","title":"标题","tags":["标签"],"summary":"简介","context":"正文"}]',
+                encoding="utf-8",
+            )
+            args = type("Args", (), {"items_json": "", "items_file": str(items_path)})()
+
+            items = MAIN.parse_write_items(args)
+
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["type"], "summary")
+            self.assertEqual(items[0]["title"], "标题")
+
+    def test_parse_write_items_requires_exactly_one_source(self) -> None:
+        """--items-json 与 --items-file 同时提供或同时缺失都应报错，避免来源歧义。"""
+
+        args_both = type("Args", (), {"items_json": "[]", "items_file": "items.json"})()
+        with self.assertRaises(SystemExit):
+            MAIN.parse_write_items(args_both)
+
+        args_none = type("Args", (), {"items_json": "", "items_file": ""})()
+        with self.assertRaises(SystemExit):
+            MAIN.parse_write_items(args_none)
+
+    def test_run_write_deletes_items_file_after_success(self) -> None:
+        """写入成功后应自动删除记忆文件，避免明文内容残留到本地磁盘。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            items_path = Path(temp_dir) / "items.json"
+            items_path.write_text(
+                '[{"type":"error","title":"标题","tags":[],"summary":"","context":"正文"}]',
+                encoding="utf-8",
+            )
+
+            original_post_json = MAIN.post_json
+            original_resolve_current_git_branch = MAIN.resolve_current_git_branch
+            try:
+                MAIN.post_json = lambda *args, **kwargs: {}
+                MAIN.resolve_current_git_branch = lambda *_args, **_kwargs: ""
+                args = type(
+                    "Args",
+                    (),
+                    {"items_json": "", "items_file": str(items_path)},
+                )()
+
+                self.assertEqual(
+                    MAIN.run_write(args, ".", "http://127.0.0.1:8080", "demo", "token"),
+                    0,
+                )
+            finally:
+                MAIN.post_json = original_post_json
+                MAIN.resolve_current_git_branch = original_resolve_current_git_branch
+
+            self.assertFalse(items_path.exists())
+
+
 class SearchRenderTest(unittest.TestCase):
     """覆盖搜索结果渲染，避免脚本继续依赖已移除的旧返回字段。"""
 
