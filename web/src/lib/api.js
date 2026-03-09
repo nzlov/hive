@@ -61,3 +61,24 @@ export function updateUser(id, payload) {
 export function deleteUser(id) {
   return request(`/api/v1/users/${id}`, { method: 'DELETE' })
 }
+
+// fetchMemories 拉取后台记忆分页列表，确保管理页与服务端共享同一筛选协议。
+export function fetchMemories(page = 1, pageSize = 10, queries = []) {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  queries.forEach((query) => {
+    if (String(query || '').trim()) {
+      params.append('queries', String(query).trim())
+    }
+  })
+  return request(`/api/v1/memories?${params.toString()}`)
+}
+
+// fetchMemoryDetail 读取单条记忆详情，避免列表页为了抽屉展示预取整段正文。
+export function fetchMemoryDetail(id) {
+  return request(`/api/v1/memories/${id}`)
+}
+
+// deleteMemory 删除记忆并触发后端同步清理向量，保持索引与主记录一致。
+export function deleteMemory(id) {
+  return request(`/api/v1/memories/${id}`, { method: 'DELETE' })
+}

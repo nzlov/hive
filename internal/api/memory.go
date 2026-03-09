@@ -109,3 +109,52 @@ type UserMutationResponse struct {
 	Item  UserSummary `json:"item,omitempty"`
 	Error string      `json:"error,omitempty"`
 }
+
+// MemoryListRequest 描述后台记忆列表查询参数，确保分页和关键字筛选协议稳定。
+type MemoryListRequest struct {
+	Page     int      `form:"page"`
+	PageSize int      `form:"page_size"`
+	Queries  []string `form:"queries"`
+}
+
+// MemoryItem 描述记忆列表展示项，避免列表接口返回过大的正文内容。
+type MemoryItem struct {
+	ID          int64    `json:"id"`
+	ProjectName string   `json:"project_name"`
+	Title       string   `json:"title"`
+	Tags        []string `json:"tags"`
+	Summary     string   `json:"summary"`
+	UserID      string   `json:"userid"`
+	CreatedAt   string   `json:"created_at"`
+}
+
+// MemoryDetail 描述单条记忆详情，供管理端查看完整上下文而不额外拼装字段。
+type MemoryDetail struct {
+	ID          int64    `json:"id"`
+	ProjectName string   `json:"project_name"`
+	GitBranch   string   `json:"git_branch"`
+	Type        string   `json:"type"`
+	Title       string   `json:"title"`
+	Tags        []string `json:"tags"`
+	Summary     string   `json:"summary"`
+	Content     string   `json:"content"`
+	UserID      string   `json:"userid"`
+	Timestamp   string   `json:"timestamp"`
+	CreatedAt   string   `json:"created_at"`
+}
+
+// MemoryListResponse 统一返回分页结果，避免前端自行推断总页数。
+type MemoryListResponse struct {
+	Items     []MemoryItem `json:"items"`
+	Total     int64        `json:"total"`
+	Page      int          `json:"page"`
+	PageSize  int          `json:"page_size"`
+	TotalPage int          `json:"total_page"`
+	Error     string       `json:"error,omitempty"`
+}
+
+// MemoryDetailResponse 承接单条记忆详情响应，便于接口错误时保持统一结构。
+type MemoryDetailResponse struct {
+	Item  MemoryDetail `json:"item,omitempty"`
+	Error string       `json:"error,omitempty"`
+}
