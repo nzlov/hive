@@ -7,14 +7,15 @@ BINARY := bin/hive-server
 # help 统一展示常用命令，避免团队成员需要先阅读脚本内容才知道入口。
 help:
 	@printf "可用命令:\n"
-	@printf "  make -f Markfile deps        # 安装前后端依赖\n"
-	@printf "  make -f Markfile build-ui    # 构建 Vue 前端\n"
-	@printf "  make -f Markfile build       # 构建前端并编译 Go 服务\n"
-	@printf "  make -f Markfile test        # 运行 Go 测试\n"
-	@printf "  make -f Markfile dev-server  # 启动 Go 服务\n"
-	@printf "  make -f Markfile dev-ui      # 启动 Vue 开发服务\n"
-	@printf "  make -f Markfile dev         # 同时启动前后端开发服务\n"
-	@printf "  make -f Markfile release     # 构建可发布产物\n"
+	@printf "  make deps          # 安装前后端依赖\n"
+	@printf "  make build-ui      # 构建 Vue 前端\n"
+	@printf "  make build         # 构建前端并编译 Go 服务\n"
+	@printf "  make test          # 运行 Go 测试\n"
+	@printf "  make dev-server    # 启动 Go 服务\n"
+	@printf "  make dev-ui        # 启动 Vue 开发服务\n"
+	@printf "  make dev           # 同时启动前后端开发服务\n"
+	@printf "  make clean         # 清理构建产物\n"
+	@printf "  make release       # 构建可发布产物\n"
 
 # deps 统一安装项目依赖，避免打包前遗漏前端开发依赖或 Go 模块更新。
 deps: deps-ui
