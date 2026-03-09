@@ -20,11 +20,11 @@
       <section class="panel p-6 sm:p-8 lg:p-10">
         <p class="text-xs uppercase tracking-[0.4em] text-slate-400">Admin Login</p>
         <h2 class="mt-4 text-3xl font-semibold text-ink">登录管理后台</h2>
-        <p class="mt-3 text-sm text-slate-500">首次启动没有用户时，服务端会自动创建 `admin` 并在日志打印随机密码。</p>
+        <p class="mt-3 text-sm text-slate-500">请输入你的账号与密码登录管理后台。</p>
         <form class="mt-8 space-y-4" @submit.prevent="handleSubmit">
           <label class="block space-y-2">
             <span class="text-sm font-medium text-slate-700">用户名</span>
-            <input v-model="form.username" class="field" autocomplete="username" placeholder="admin" />
+            <input v-model="form.username" class="field" autocomplete="username" placeholder="请输入用户名" />
           </label>
           <label class="block space-y-2">
             <span class="text-sm font-medium text-slate-700">密码</span>
@@ -49,16 +49,26 @@ const router = useRouter()
 const loading = ref(false)
 const errorMessage = ref('')
 const form = reactive({
-  username: 'admin',
+  username: '',
   password: '',
 })
 
 // handleSubmit 统一处理登录状态与错误提示，避免表单重复提交造成界面抖动。
 async function handleSubmit() {
+  const username = form.username.trim()
+  const password = form.password.trim()
+  if (!username) {
+    errorMessage.value = '请输入用户名'
+    return
+  }
+  if (!password) {
+    errorMessage.value = '请输入密码'
+    return
+  }
   loading.value = true
   errorMessage.value = ''
   try {
-    await login(form.username, form.password)
+    await login(username, password)
     router.push('/admin')
   } catch (error) {
     errorMessage.value = error.message
