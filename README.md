@@ -1,170 +1,62 @@
-# memory-manager
+# Hive
 
-`memory-manager` 是一个面向工程分析场景的记忆管理 skill，用来在代码搜索、问题分析、错误排查前后读写项目记忆。
+`Hive` 是一个面向工程分析场景的项目记忆系统，使用 `Python CLI + Go HTTP Server + SQLite` 管理总结记忆与错误记忆。
 
-现在它采用“脚本 + HTTP 服务端”模式：`scripts/` 下的 Python 脚本只负责解析参数、识别项目根目录并通过 HTTP 调用服务端；真正的数据库读写、嵌入计算和检索逻辑都由项目根目录的 Gin 服务统一处理。
+当前版本采用单服务单库模型：
 
-## 适用场景
+- 服务端配置只读取当前工作目录下的 `./config.json`
+- 服务端只维护一份记忆库：`./.memory/memory.db`
+- 不再区分项目内记忆与外挂记忆
+- 多项目通过 `project_name` 做检索隔离
 
-- 在开始代码搜索、文件定位、逻辑梳理前，先检索历史记忆。
-- 在问题解决后，写入可复用的总结记忆。
-- 在错误修复后，补充错误记忆，记录现象、根因和修复结论。
-- 在多个项目间复用统一记忆目录时，通过配置开启外挂记忆。
-- 在配置嵌入模型后，同时使用 OpenAI 兼容接口生成向量，提升不同措辞下的命中率。
+## 核心能力
+
+- 支持两类记忆：`summary` 与 `error`
+- 支持关键字检索与可选语义检索
+- 支持批量写入多条记忆
+- 支持记录 `git_branch`，客户端会过滤当前分支未合入的记忆
+- 支持通过项目别名把同一服务端记忆库隔离为多个项目视图
 
 ## 目录结构
 
-当前 skill 主要文件：
-
-- `SKILL.md`：skill 规则与约束。
-- `../cmd/memory-server/main.go`：Gin 服务端入口。
-- `../internal/memory/`：记忆查询、写入、向量重建等核心业务。
-- `scripts/main.py`：Python 统一入口，通过子命令调用服务端。
-
-默认记忆目录结构：
-
 ```text
-.memory/
-  memory.db
+.
+├── cmd/hive-server/          # Go 服务端入口
+├── internal/
+│   ├── api/                  # HTTP 请求/响应结构
+│   ├── config/               # 服务端配置加载
+│   ├── memory/               # 存储、检索、向量与记忆构建逻辑
+│   └── server/               # Gin 路由
+├── hive/
+│   ├── SKILL.md              # Skill 规则说明
+│   ├── agents/openai.yaml    # Agent 展示元数据
+│   ├── references/           # 记忆模板参考
+│   └── scripts/main.py       # Python 客户端入口
+└── README.md
 ```
 
-数据库会在需要时自动补充两类表：
+## 工作方式
 
-- `memory_embeddings`：保存每条记忆对应的向量。
-- `memory_metadata`：保存当前数据库对应的嵌入模型名。
+1. 客户端读取本地客户端配置，确定服务端地址与项目别名。
+2. 客户端在本地推导 `project_name`，再把 `project_name`、查询词或写入内容通过 HTTP 发给服务端。
+3. 服务端统一把所有项目的记忆写入同一个 SQLite 数据库。
+4. 搜索时服务端按 `project_name` 严格过滤，只返回当前项目的数据。
+5. 客户端再根据当前 Git 分支过滤未合入分支的历史记忆。
 
-其中数据库只保存嵌入模型名，不保存服务地址和 `api_key`；服务端配置仍然只来自本地配置文件。
+## 运行依赖
 
-## 启动服务端
+- Go `1.25+`
+- Python `3.10+`
+- 可选：OpenAI 兼容 Embeddings 服务
 
-在仓库根目录执行：
+## 快速开始
 
-```bash
-go run ./cmd/memory-server
-```
+### 1. 准备服务端配置
 
-服务默认监听 `:8080`，也可以通过配置文件里的 `server.listen_addr` 调整监听地址；脚本通过 `server.base_url` 访问服务端。
-
-## 如何检索记忆
-
-在项目根目录执行：
-
-```bash
-python3 scripts/main.py search --query '关键词'
-python3 scripts/main.py search --query '关键词1' --query '关键词2'
-python3 scripts/main.py search --query '["关键词1","关键词2"]'
-```
-
-常用参数：
-
-- `--root`：指定项目根目录，默认当前目录。
-- `--query`：必填，支持多个关键词或 JSON 数组。
-- `--debug`：输出实际执行的搜索命令。
-
-返回结果包含：
-
-- `query`：本次查询词。
-- `search_root`：本次实际搜索根目录。
-- `Error Hits` / `Summary Hits`：命中的错误记忆与总结记忆。
-- `snippets`：命中的片段与行号。
-- `file_content`：当标题命中时返回完整记忆内容。
-- `project`：写入和检索时都会自动附带当前项目名，用于共享库隔离。
-
-如果配置了嵌入模型，服务端会在原有关键字匹配之外额外进行语义召回，并自动合并结果；当前查询不再限制返回条数。
-
-## 如何写入总结记忆
-
-总结记忆建议遵循这些规则：
-
-- 只有在用户明确要求“总结并记忆”时再写入总结记忆，避免把普通执行结果都落成长期记忆。
-- 一次总结可以拆成多条记忆，分别覆盖不同目标、问题、模块或结论。
-- 如果当前会话里之前已经保存过记忆，再次总结时应从上次已保存内容之后开始续写，避免重复总结。
-
-```bash
-  --items-json '[
-    {
-      "type": "summary",
-      "title": "支付超时排查结论",
-      "tags": ["支付", "超时", "订单"],
-      "summary": "记录支付超时排查后的核心结论。",
-      "context": "## Summary\n\n- 详情: 支付超时主要由重试任务堆积导致。"
-    },
-    {
-      "type": "summary",
-      "title": "重试队列优化建议",
-      "tags": ["支付", "重试", "性能"],
-      "summary": "补充后续优化方向。",
-      "context": "## Summary\n\n- 详情: 需要扩容消费者并限制单批任务数量。"
-    }
-  ]'
-```
-
-`--items-json` 只支持对象数组，单次请求里可以混合写入多条 `summary` / `error` 记忆。
-
-建议正文结构：
-
-```markdown
-## Summary
-
-- 详情: 先写本次结论。
-
-## src/example.py
-
-- 详情: 说明关键文件承担的职责、约束或依赖。
-
-## ExampleMethod
-
-- 详情: 说明关键逻辑为什么这样实现。
-```
-
-## 如何写入错误记忆
-
-错误记忆规则：
-
-- 会话里出现的错误，只要最终已定位或修复，就必须写入错误记忆。
-- 如果一次处理里有多个独立错误或多个问题目标，建议拆成多条错误记忆分别保存。
-
-```bash
-python3 scripts/main.py write \
-  --items-json '[
-    {
-      "type": "error",
-      "title": "自动标题",
-      "tags": ["业务标签", "错误类型", "相关模块"],
-      "summary": "一句话简介",
-      "context": "完整Markdown正文"
-    }
-  ]'
-```
-
-建议至少包含：
-
-- 错误现象
-- 触发条件
-- 根因
-- 修复结论
-- 验证结果
-
-## 外挂记忆配置
-
-脚本和服务端都会自动检测：
-
-```text
-~/.config/memorymanager/config.json
-```
-
-脚本请求服务端时会优先读取默认服务地址和项目配置：
+在服务端启动目录创建 `config.json`：
 
 ```json
 {
-  "memory_storage_path": "/home/当前用户/.local/share/memorymanager",
-  "default_server_base_url": "http://127.0.0.1:8080",
-  "projects": {
-    "/path/to/project": {
-      "server_url": "http://127.0.0.1:18080",
-      "alias": "project-alias"
-    }
-  },
   "server": {
     "base_url": "http://127.0.0.1:8080",
     "listen_addr": ":8080"
@@ -178,27 +70,76 @@ python3 scripts/main.py write \
 }
 ```
 
-对应的默认外挂记忆数据库文件为：
+### 2. 启动服务端
 
-```text
-~/.local/share/memorymanager/.memory/memory.db
+```bash
+go run ./cmd/hive-server
 ```
 
-示例配置：
+默认会在当前目录使用：
+
+```text
+./config.json
+./.memory/memory.db
+```
+
+### 3. 健康检查
+
+```bash
+curl http://127.0.0.1:8080/healthz
+```
+
+返回：
+
+```json
+{"status":"ok"}
+```
+
+### 4. 客户端搜索示例
+
+```bash
+python3 hive/scripts/main.py search --root . --query "向量重建"
+```
+
+### 5. 客户端写入示例
+
+```bash
+python3 hive/scripts/main.py write \
+  --root . \
+  --items-json '[
+    {
+      "type": "summary",
+      "title": "Hive 接入方式",
+      "tags": ["hive", "接入"],
+      "summary": "说明如何启动服务和调用客户端。",
+      "context": "## Summary\n\n- 详情: Hive 通过 Python 脚本调用 Go 服务端。"
+    }
+  ]'
+```
+
+## 服务端配置
+
+### 配置文件位置
+
+服务端只读取当前工作目录下的：
+
+```text
+./config.json
+```
+
+不会再读取：
+
+- `~/.config/hive/config.json`
+- 项目目录下的其他配置文件
+- 外挂记忆目录配置
+
+### 服务端配置示例
 
 ```json
 {
-  "memory_storage_path": "/data/memories",
-  "default_server_base_url": "http://127.0.0.1:19090",
-  "projects": {
-    "/home/dev/workspaces/payment-service": {
-      "server_url": "http://10.0.0.12:28080",
-      "alias": "payment-service-prod"
-    }
-  },
   "server": {
-    "base_url": "http://127.0.0.1:19090",
-    "listen_addr": ":19090"
+    "base_url": "http://127.0.0.1:8080",
+    "listen_addr": ":8080"
   },
   "embedding": {
     "base_url": "https://api.openai.com/v1",
@@ -209,80 +150,304 @@ python3 scripts/main.py write \
 }
 ```
 
-字段说明：
+### 配置字段
 
-- `memory_storage_path`：外挂记忆根目录。
-- `default_server_base_url`：脚本默认请求的服务地址；项目未单独配置时使用它。
-- `projects`：项目级请求配置，key 建议使用项目绝对路径。
-- `projects.<项目>.server_url`：该项目请求时覆盖默认服务地址。
-- `projects.<项目>.alias`：该项目请求远程服务时附带的项目别名，对应请求里的 `project_name`。
-- `server.base_url`：记忆服务端地址，`scripts/` 子命令通过它访问 Gin 服务。
-- `server.listen_addr`：Gin 服务端监听地址，默认 `:8080`。
-- `embedding.base_url`：嵌入服务地址，使用 OpenAI Embeddings API 路径结构。
-- `embedding.api_key`：嵌入服务的认证令牌。
-- `embedding.model`：要使用的嵌入模型名。
-- `embedding.timeout_seconds`：请求超时时间，默认 `30` 秒。
+- `server.base_url`：服务端对外访问地址，主要用于展示和客户端默认配置参考
+- `server.listen_addr`：Gin 实际监听地址
+- `embedding.base_url`：OpenAI 兼容 Embeddings 服务根地址
+- `embedding.api_key`：嵌入服务认证令牌
+- `embedding.model`：嵌入模型名
+- `embedding.timeout_seconds`：嵌入请求超时秒数
 
-记忆位置规则如下：
+### 服务端数据文件
 
-- 如果当前项目根目录已经存在 `.memory/`，脚本使用当前项目根目录下的 `./.memory/memory.db`
-- 如果当前项目根目录不存在 `.memory/`，脚本回退到外挂记忆目录下的共享数据库
-
-回退到外挂目录后，实际记忆目录为：
+服务端始终只维护一份数据库：
 
 ```text
-记忆存储路径/.memory/memory.db
+./.memory/memory.db
 ```
 
-例如：
+这里的 `./` 指启动 `hive-server` 时的当前工作目录。
+
+## 客户端配置
+
+客户端配置仍由 Python 脚本读取，默认路径：
 
 ```text
-/data/memories/.memory/memory.db
+~/.config/hive/config.json
 ```
 
-此时所有外挂项目共用同一个 SQLite 文件，但每条记录都会自动写入当前项目名；检索时也会自动按当前项目名过滤，因此不会串项目。
+客户端配置只负责：
 
-## 嵌入模型工作方式
+- 决定默认请求哪个服务端
+- 为不同项目指定不同服务地址
+- 为不同项目指定 `project_name` / `alias`
 
-- 如果未配置 `embedding` 或配置不完整，服务端继续只使用原有关键字写入与查询流程。
-- 如果配置了 `embedding`，服务端在写入记忆后会同步写入该条记录的向量。
-- 如果配置了 `embedding`，服务端在关键字检索之外还会追加语义召回，并合并结果返回。
-- 每次脚本触发查询或写入时，服务端都会检查配置文件中的嵌入模型是否与数据库元数据中的模型名一致。
-- 如果模型名不一致，服务端会自动触发向量全量重建，并把数据库中的模型名更新为当前配置。
-- 如果模型名未变化但历史向量缺失，脚本也会自动补建，避免升级后出现部分记录没有向量。
-- 嵌入文本会把标签整理为自然语言而不是 JSON，并剔除持久化内容里的 YAML 头部，减少重复噪声。
-- 总结记忆和错误记忆使用不同模板：前者突出主题、摘要和结论，后者突出问题、现象摘要和排障记录。
+客户端不控制服务端数据库位置。
 
-## 使用建议
+### 客户端配置示例
 
-- 在任何搜索、分析、排查任务开始前先执行一次检索。
-- `--items-json` 里的 `context` 建议使用 Markdown，方便后续按标题检索。
-- 标题尽量使用具体文件名、方法名、业务结论，避免泛化标题。
-- 若 shell 参数中包含反引号或单引号，注意转义。
-- 如果希望项目独立存储记忆，先在项目根目录创建 `.memory/` 目录。
-- 配置文件读取失败时，脚本会回退到默认外挂目录配置或项目内 `.memory/`，不会中断执行。
-- 嵌入模型切换后无需手动迁移，脚本会在启动时自动完成向量重建。
+```json
+{
+  "default_server_base_url": "http://127.0.0.1:8080",
+  "projects": {
+    "/home/dev/workspaces/payment-service": {
+      "server_url": "http://127.0.0.1:8080",
+      "alias": "payment-service"
+    },
+    "order-service": {
+      "server": {
+        "base_url": "http://127.0.0.1:18080"
+      },
+      "project_alias": "order-service-dev"
+    }
+  }
+}
+```
 
-## 一个完整流程示例
+### 客户端字段
 
-1. 检索历史记忆。
-2. 进行代码搜索、分析或修复。
-3. 只有在用户明确要求总结并记忆时，才写入总结记忆；必要时可一次写入多条。
-4. 如果过程中出现过错误并已修复，再补写错误记忆；这一步不可跳过。
+- `default_server_base_url`：默认请求地址
+- `projects`：项目级覆盖配置
+- `projects.<key>.server_url`：项目覆盖默认服务地址
+- `projects.<key>.server.base_url`：同样可覆盖默认服务地址
+- `projects.<key>.alias` / `project_alias`：请求里附带的 `project_name`
 
-示例：
+## 项目隔离规则
+
+Hive 不再通过“每个项目各自一个数据库”来隔离，而是通过 `project_name` 在单库中隔离。
+
+规则如下：
+
+- 如果客户端配置了 `alias` / `project_alias`，则优先使用该值作为 `project_name`
+- 如果未配置别名且当前目录是 Git 仓库，则使用 Git 仓库地址，并忽略协议差异
+- 如果不是 Git 仓库，则回退到项目文件夹名称
+- 写入和搜索都会使用同一套 `project_name` 规则
+- 搜索时只返回当前 `project_name` 对应的记忆
+
+这意味着两个项目即使共用同一个服务端和同一个数据库，只要 `project_name` 不同，结果就不会串项目。
+
+## 服务端接口
+
+### `GET /healthz`
+
+健康检查。
+
+### `POST /api/v1/memories/search`
+
+请求示例：
+
+```json
+{
+  "project_name": "payment-service",
+  "queries": ["支付超时", "重试队列"],
+  "debug": true
+}
+```
+
+返回字段：
+
+- `query`
+- `project_name`
+- `debug_commands`
+- `error_hits`
+- `summary_hits`
+- `markdown`
+
+### `POST /api/v1/memories/write`
+
+请求示例：
+
+```json
+{
+  "project_name": "payment-service",
+  "git_branch": "feature/order-timeout",
+  "items": [
+    {
+      "type": "error",
+      "title": "支付超时排查",
+      "tags": ["支付", "超时", "订单"],
+      "summary": "记录支付超时的根因与修复结论。",
+      "context": "## Summary\n\n- 详情: 超时由重试积压引起。"
+    }
+  ]
+}
+```
+
+返回示例：
+
+```json
+{}
+```
+
+### `POST /api/v1/memories/rebuild-embeddings`
+
+请求示例：
+
+```json
+{
+  "force": true
+}
+```
+
+返回示例：
+
+```json
+{
+  "changed": true,
+  "message": "已使用模型 text-embedding-3-small 重建 42 条向量。"
+}
+```
+
+## 客户端使用说明
+
+客户端入口：`hive/scripts/main.py`
+
+### 搜索
 
 ```bash
-python3 scripts/main.py search --query '["订单","支付","超时"]'
-
-python3 scripts/main.py write \
-  --items-json '[
-    {
-      "type": "summary",
-      "title": "支付超时排查结论",
-      "tags": ["支付", "超时", "订单"],
-      "summary": "记录支付超时排查后的核心结论。",
-      "context": "## Summary\n\n- 详情: 支付超时主要由重试任务堆积导致。\n\n## retry_worker.py\n\n- 详情: 重试队列消费速度不足是核心瓶颈。"
-    }
-  ]'
+python3 hive/scripts/main.py search --root . --query "关键词"
+python3 hive/scripts/main.py search --root . --query "关键词1" --query "关键词2"
+python3 hive/scripts/main.py search --root . --query '["关键词1","关键词2"]'
 ```
+
+参数说明：
+
+- `--root`：项目根目录，默认当前目录
+- `--query`：必填，支持多个参数或 JSON 数组
+- `--debug`：输出调试信息
+
+### 写入
+
+```bash
+python3 hive/scripts/main.py write --root . --items-json '[
+  {
+    "type": "summary",
+    "title": "订单对账流程",
+    "tags": ["订单", "对账"],
+    "summary": "记录对账流程中的关键约束。",
+    "context": "## Summary\n\n- 详情: 对账任务依赖支付成功后的状态流转。"
+  },
+  {
+    "type": "error",
+    "title": "连接池耗尽",
+    "tags": ["数据库", "连接池", "重试"],
+    "summary": "记录连接泄漏的触发条件与修复方案。",
+    "context": "## Summary\n\n- 详情: 异常路径未归还连接。"
+  }
+]'
+```
+
+约束：
+
+- `--items-json` 必须是对象数组
+- `type` 只能是 `summary` 或 `error`
+- 每项都必须提供 `title` 和 `context`
+- `tags` 支持数组，也兼容逗号分隔字符串
+
+### 分支过滤
+
+客户端会读取当前 Git 分支，并过滤掉尚未合入当前分支的历史记忆：
+
+- 当前分支记忆：保留
+- 已合入当前分支的历史分支记忆：保留
+- 未合入当前分支的分支记忆：过滤
+- 未记录分支的记忆：保留
+
+## 嵌入与语义检索
+
+当服务端 `embedding.base_url`、`embedding.api_key`、`embedding.model` 三项同时配置完整时，会启用语义检索。
+
+启用后行为：
+
+- 写入时同步写入向量
+- 搜索时在关键字命中外追加语义召回
+- 模型切换时自动重建全部向量
+- 历史向量缺失时自动补建
+
+嵌入服务需兼容 OpenAI Embeddings API：
+
+```text
+POST <base_url>/embeddings
+```
+
+## 记忆正文建议
+
+### 总结记忆
+
+```markdown
+## Summary
+
+- 详情: 先写核心结论。
+
+## src/order/service.go
+
+- 详情: 说明关键文件职责、依赖或约束。
+
+## BuildOrderSnapshot
+
+- 详情: 说明关键方法为什么这样设计。
+```
+
+### 错误记忆
+
+```markdown
+## Summary
+
+- 详情: 描述错误现象和影响。
+
+## src/pay/retry.go
+
+- 详情: 标记问题出现位置与影响范围。
+
+## RetryPayment
+
+- 详情: 记录触发条件。
+
+## 连接未归还导致连接池泄漏
+
+- 根因: 异常路径缺少释放逻辑。
+- 修复动作: 补充 `defer conn.Close()`。
+- 验证结果: 压测后连接数恢复稳定。
+```
+
+参考模板：`hive/references/memory_template.md`
+
+## 开发与测试
+
+运行 Go 测试：
+
+```bash
+go test ./...
+```
+
+运行 Python 测试：
+
+```bash
+python3 -m unittest hive/scripts/test_main.py
+```
+
+## 常见问题
+
+### 为什么不同项目会共用一个数据库？
+
+- 这是当前版本的设计目标
+- 服务端只维护 `./.memory/memory.db`
+- 项目隔离不再依赖数据库文件路径，而是依赖 `project_name`
+
+### 为什么搜索结果为空？
+
+- 检查写入和搜索时使用的 `project_name` 是否一致
+- 检查客户端 `alias` / `project_alias` 是否改动过
+- 检查服务端是否连到了你预期的当前目录 `./config.json`
+
+### 为什么服务端没有读取 `~/.config/hive/config.json`？
+
+- 因为现在服务端只读取启动目录下的 `./config.json`
+- `~/.config/hive/config.json` 仅作为客户端配置使用
+
+## 仓库信息
+
+- Go module：`github.com/nzlov/hive`
+- 服务端入口：`cmd/hive-server`
+- 客户端入口：`hive/scripts/main.py`

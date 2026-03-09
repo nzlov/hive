@@ -1,5 +1,5 @@
 ---
-name: memory-manager
+name: hive
 description: Trigger this skill by default for search or analysis tasks. prior-context recall, file/method/logic/module lookup, code reading, root-cause analysis, recurring-error troubleshooting, and continuation of earlier fixes. Always retrieve relevant memory before any code search, code analysis, or edits. Only write summary memories when the user explicitly asks to summarize and remember them, but always persist resolved session errors to avoid repeating the same mistake.
 ---
 
@@ -24,12 +24,12 @@ description: Trigger this skill by default for search or analysis tasks. prior-c
 4. 返回包含：
 
 - `query`
-- `search_root`
+- `project_name`
 - 命中记录（含 `source/path/timestamp/confidence`）
 - `snippets`（数组，含 `line_range.start/end` 与 `content`）
 - `file_content`（仅 `title` 命中时返回完整文件）
 
-在调用脚本前，确保仓库根目录的服务端已启动：`go run ./cmd/memory-server`。
+在调用脚本前，确保仓库根目录的服务端已启动：`go run ./cmd/hive-server`。
 
 使用命令：
 

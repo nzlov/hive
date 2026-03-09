@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"memory-manager/internal/api"
-	"memory-manager/internal/config"
+	"github.com/nzlov/hive/internal/api"
+	"github.com/nzlov/hive/internal/config"
 )
 
 const embeddingModelMetaKey = "embedding_model"
@@ -32,9 +32,9 @@ func NewService(cfg config.AppConfig) *Service {
 	return &Service{config: cfg, provider: NewEmbeddingProvider(cfg.EmbeddingConfig)}
 }
 
-// Search 执行记忆检索并返回结构化结果，方便脚本按分支状态做二次筛选。
-func (s *Service) Search(projectRoot, projectName string, queries []string, debug bool) (SearchResult, error) {
-	location, db, err := s.openProjectDB(projectRoot)
+// Search 执行记忆检索并返回结构化结果，统一仅按项目名隔离单库中的不同项目数据。
+func (s *Service) Search(projectName string, queries []string, debug bool) (SearchResult, error) {
+	location, db, err := s.openProjectDB()
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -42,8 +42,7 @@ func (s *Service) Search(projectRoot, projectName string, queries []string, debu
 	if _, err := s.rebuildEmbeddingsWithDB(location, db, false); err != nil {
 		return SearchResult{}, err
 	}
-	allowLegacyBlankProject := !location.ExternalEnabled
-	effectiveProjectName := resolveProjectName(location, projectName)
+	effectiveProjectName := normalizeProjectName(projectName)
 	var debugCommands []string
 	var debugCommandsRef *[]string
 	if debug {
@@ -51,25 +50,25 @@ func (s *Service) Search(projectRoot, projectName string, queries []string, debu
 		debugCommandsRef = &debugCommands
 	}
 	matcher := buildQueryMatcher(queries)
-	errorKeywordHits, err := s.collectHits(db, "error", location, effectiveProjectName, allowLegacyBlankProject, matcher, debugCommandsRef)
+	errorKeywordHits, err := s.collectHits(db, "error", location, effectiveProjectName, matcher, debugCommandsRef)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	summaryKeywordHits, err := s.collectHits(db, "summary", location, effectiveProjectName, allowLegacyBlankProject, matcher, debugCommandsRef)
+	summaryKeywordHits, err := s.collectHits(db, "summary", location, effectiveProjectName, matcher, debugCommandsRef)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	errorSemanticHits, err := s.collectSemanticHits(db, "error", location, effectiveProjectName, allowLegacyBlankProject, queries)
+	errorSemanticHits, err := s.collectSemanticHits(db, "error", location, effectiveProjectName, queries)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	summarySemanticHits, err := s.collectSemanticHits(db, "summary", location, effectiveProjectName, allowLegacyBlankProject, queries)
+	summarySemanticHits, err := s.collectSemanticHits(db, "summary", location, effectiveProjectName, queries)
 	if err != nil {
 		return SearchResult{}, err
 	}
 	result := SearchResult{
 		Query:         strings.Join(queries, ", "),
-		SearchRoot:    location.SearchRoot,
+		ProjectName:   effectiveProjectName,
 		DebugCommands: debugCommands,
 		ErrorHits:     mergeHits(errorKeywordHits, errorSemanticHits),
 		SummaryHits:   mergeHits(summaryKeywordHits, summarySemanticHits),
@@ -77,9 +76,9 @@ func (s *Service) Search(projectRoot, projectName string, queries []string, debu
 	return result, nil
 }
 
-// Write 写入总结或错误记忆，并返回最终落盘数据库路径方便脚本直接输出。
-func (s *Service) Write(projectRoot, projectName, gitBranch string, items []api.MemoryWriteItem) (string, error) {
-	location, db, err := s.openProjectDB(projectRoot)
+// Write 写入总结或错误记忆，并统一按项目名落到单库中。
+func (s *Service) Write(projectName, gitBranch string, items []api.MemoryWriteItem) (string, error) {
+	location, db, err := s.openProjectDB()
 	if err != nil {
 		return "", err
 	}
@@ -95,7 +94,7 @@ func (s *Service) Write(projectRoot, projectName, gitBranch string, items []api.
 
 	now := time.Now().UTC()
 	timestampSeed := now.Unix()
-	effectiveProjectName := resolveProjectName(location, projectName)
+	effectiveProjectName := normalizeProjectName(projectName)
 	normalizedGitBranch := normalizeGitBranch(gitBranch)
 	rows := make([]Row, 0, len(items))
 	ids := make([]int64, 0, len(items))
@@ -145,8 +144,8 @@ func (s *Service) Write(projectRoot, projectName, gitBranch string, items []api.
 }
 
 // RebuildEmbeddings 对外暴露向量重建能力，让脚本和 HTTP 维护入口共享同一实现。
-func (s *Service) RebuildEmbeddings(projectRoot string, force bool) (RebuildResult, error) {
-	location, db, err := s.openProjectDB(projectRoot)
+func (s *Service) RebuildEmbeddings(force bool) (RebuildResult, error) {
+	location, db, err := s.openProjectDB()
 	if err != nil {
 		return RebuildResult{}, err
 	}
@@ -154,12 +153,9 @@ func (s *Service) RebuildEmbeddings(projectRoot string, force bool) (RebuildResu
 	return s.rebuildEmbeddingsWithDB(location, db, force)
 }
 
-// openProjectDB 统一完成项目位置解析和数据库连接，避免重复打开逻辑散落在各能力中。
-func (s *Service) openProjectDB(projectRoot string) (Location, *sql.DB, error) {
-	location, err := ResolveLocation(s.config, projectRoot)
-	if err != nil {
-		return Location{}, nil, err
-	}
+// openProjectDB 统一完成数据库连接，避免重复打开逻辑散落在各能力中。
+func (s *Service) openProjectDB() (Location, *sql.DB, error) {
+	location := ResolveLocation(s.config)
 	db, err := ConnectDB(location.MemoryRoot)
 	if err != nil {
 		return Location{}, nil, err
@@ -222,12 +218,12 @@ func (s *Service) rebuildEmbeddingsWithDB(location Location, db *sql.DB, force b
 	return RebuildResult{Changed: true, Message: fmt.Sprintf("已使用模型 %s 重建 %d 条向量。", s.provider.ModelName(), len(vectors))}, nil
 }
 
-// collectHits 在数据库记录中筛选关键字命中，并保留旧输出结构。
-func (s *Service) collectHits(db *sql.DB, source string, location Location, projectName string, allowLegacyBlankProject bool, matcher lineMatcher, debugCommands *[]string) ([]Hit, error) {
+// collectHits 在数据库记录中筛选关键字命中，并按项目名隔离单库里的不同项目数据。
+func (s *Service) collectHits(db *sql.DB, source string, location Location, projectName string, matcher lineMatcher, debugCommands *[]string) ([]Hit, error) {
 	if debugCommands != nil {
 		*debugCommands = append(*debugCommands, fmt.Sprintf("sqlite scan: %s [%s/%s]", DBPath(location.MemoryRoot), projectName, source))
 	}
-	rows, err := FetchMemoryRows(db, projectName, source, allowLegacyBlankProject)
+	rows, err := FetchMemoryRows(db, projectName, source)
 	if err != nil {
 		return nil, err
 	}
@@ -265,8 +261,8 @@ func (s *Service) collectHits(db *sql.DB, source string, location Location, proj
 	return hits, nil
 }
 
-// collectSemanticHits 在关键字检索之外补充语义召回，减少措辞变化带来的漏检。
-func (s *Service) collectSemanticHits(db *sql.DB, source string, location Location, projectName string, allowLegacyBlankProject bool, queries []string) ([]Hit, error) {
+// collectSemanticHits 在关键字检索之外补充语义召回，并继续按项目名隔离结果。
+func (s *Service) collectSemanticHits(db *sql.DB, source string, location Location, projectName string, queries []string) ([]Hit, error) {
 	if !s.provider.Enabled() {
 		return nil, nil
 	}
@@ -278,7 +274,7 @@ func (s *Service) collectSemanticHits(db *sql.DB, source string, location Locati
 	if err != nil || len(vectors) == 0 {
 		return nil, err
 	}
-	rows, err := FetchMemoryRows(db, projectName, source, allowLegacyBlankProject)
+	rows, err := FetchMemoryRows(db, projectName, source)
 	if err != nil {
 		return nil, err
 	}
@@ -441,8 +437,8 @@ func sanitizeTitle(title string) string {
 }
 
 // renderResultMarkdown 输出最终 Markdown，兼容现有 skill 的结果消费方式。
-func renderResultMarkdown(query, searchRoot string, errorHits, summaryHits []Hit, debugCommands []string) string {
-	lines := []string{"# Memory Search Result", "- query: " + query, "- search_root: " + searchRoot}
+func renderResultMarkdown(query, projectName string, errorHits, summaryHits []Hit, debugCommands []string) string {
+	lines := []string{"# Hive Search Result", "- query: " + query, "- project_name: " + projectName}
 	if len(debugCommands) > 0 {
 		lines = append(lines, "- debug: true", "", "## Debug Commands")
 		for _, cmd := range debugCommands {
@@ -455,7 +451,7 @@ func renderResultMarkdown(query, searchRoot string, errorHits, summaryHits []Hit
 
 // Markdown 让结构化搜索结果继续输出兼容旧脚本的 Markdown 文本。
 func (r SearchResult) Markdown() string {
-	return renderResultMarkdown(r.Query, r.SearchRoot, r.ErrorHits, r.SummaryHits, r.DebugCommands)
+	return renderResultMarkdown(r.Query, r.ProjectName, r.ErrorHits, r.SummaryHits, r.DebugCommands)
 }
 
 // renderHitsSection 统一渲染分类结果，让空结果也显式可见避免歧义。
@@ -620,12 +616,13 @@ func matchHeaderFields(header map[string]any, matcher lineMatcher) bool {
 	return false
 }
 
-// resolveProjectName 优先使用请求显式传入的项目名，避免共享库远程写入时只能依赖目录名。
-func resolveProjectName(location Location, override string) string {
-	if normalized := sanitizeProjectName(override); normalized != "default-project" || strings.TrimSpace(override) != "" {
-		return normalized
+// normalizeProjectName 统一裁剪项目名，避免空值污染单库隔离维度。
+func normalizeProjectName(projectName string) string {
+	cleaned := strings.Trim(strings.TrimSpace(projectName), "./")
+	if cleaned == "" {
+		return "default-project"
 	}
-	return location.ProjectName
+	return cleaned
 }
 
 // normalizeGitBranch 统一裁剪分支名，避免头部记录被无意义空白污染。

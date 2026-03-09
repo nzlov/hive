@@ -25,14 +25,13 @@ type EmbeddingConfig struct {
 // AppConfig 统一描述脚本与服务端共用配置，降低多入口行为漂移风险。
 type AppConfig struct {
 	ConfigPath       string
-	StorageRoot      string
+	MemoryRoot       string
 	ServerBaseURL    string
 	ServerListenAddr string
 	EmbeddingConfig  *EmbeddingConfig
 }
 
 var (
-	storagePathKeys      = []string{"memory_storage_path", "memoryStorePath", "storage_path", "storagePath"}
 	serverSectionKeys    = []string{"server"}
 	serverBaseURLKeys    = []string{"base_url", "baseUrl", "url", "address"}
 	serverListenAddrKeys = []string{"listen_addr", "listenAddr", "listen_address", "listenAddress", "bind", "bind_addr", "bindAddr"}
@@ -55,13 +54,13 @@ func Load() (AppConfig, error) {
 	if err != nil {
 		return AppConfig{}, err
 	}
-	storageRoot, err := defaultStorageRoot()
+	memoryRoot, err := defaultMemoryRoot(configPath)
 	if err != nil {
 		return AppConfig{}, err
 	}
 	config := AppConfig{
 		ConfigPath:       configPath,
-		StorageRoot:      resolveStorageRoot(payload, filepath.Dir(configPath), storageRoot),
+		MemoryRoot:       memoryRoot,
 		ServerBaseURL:    resolveServerBaseURL(payload),
 		ServerListenAddr: resolveServerListenAddr(payload),
 	}
@@ -69,22 +68,22 @@ func Load() (AppConfig, error) {
 	return config, nil
 }
 
-// defaultConfigPath 统一配置文件位置，避免不同入口拼接出不一致路径。
+// defaultConfigPath 固定读取当前工作目录下的配置，避免服务端再受用户目录配置干扰。
 func defaultConfigPath() (string, error) {
-	home, err := os.UserHomeDir()
+	workdir, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "memorymanager", "config.json"), nil
+	return filepath.Join(workdir, "config.json"), nil
 }
 
-// defaultStorageRoot 提供默认外挂存储目录，保证项目外共享库位置稳定。
-func defaultStorageRoot() (string, error) {
-	home, err := os.UserHomeDir()
+// defaultMemoryRoot 固定把服务端数据库放在配置文件同级目录下，保证服务只维护一份记忆库。
+func defaultMemoryRoot(configPath string) (string, error) {
+	resolved, err := filepath.Abs(filepath.Join(filepath.Dir(configPath), ".memory"))
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "share", "memorymanager"), nil
+	return resolved, nil
 }
 
 // loadPayload 负责读取配置文件并在缺失时补默认模板，减少首次运行阻塞。
@@ -110,14 +109,9 @@ func loadPayload(configPath string) (map[string]any, error) {
 	return payload, nil
 }
 
-// buildDefaultPayload 构造统一默认配置，避免脚本与服务端首次启动时默认值分叉。
+// buildDefaultPayload 构造统一默认配置，避免服务端首次启动时必须手工建文件。
 func buildDefaultPayload() (map[string]any, error) {
-	storageRoot, err := defaultStorageRoot()
-	if err != nil {
-		return nil, err
-	}
 	return map[string]any{
-		"memory_storage_path": storageRoot,
 		"server": map[string]any{
 			"base_url":    defaultServerBaseURL,
 			"listen_addr": defaultServerListenAddr,
@@ -141,21 +135,6 @@ func writeDefaultPayload(configPath string, payload map[string]any) error {
 		return err
 	}
 	return os.WriteFile(configPath, append(data, '\n'), 0o644)
-}
-
-// resolveStorageRoot 兼容多种字段命名和相对路径写法，减少历史配置迁移成本。
-func resolveStorageRoot(payload map[string]any, baseDir, fallback string) string {
-	for _, key := range storagePathKeys {
-		value := pickString(payload, key)
-		if value == "" {
-			continue
-		}
-		resolved := expandPath(value, baseDir)
-		if resolved != "" {
-			return resolved
-		}
-	}
-	return fallback
 }
 
 // resolveServerBaseURL 统一解析服务端地址，确保脚本侧 HTTP 调用入口稳定。
@@ -274,33 +253,7 @@ func pickFloat(payload map[string]any, keys []string, fallback float64) float64 
 	return fallback
 }
 
-// expandPath 统一展开相对路径和家目录写法，避免不同平台下解析结果不一致。
-func expandPath(pathValue, baseDir string) string {
-	trimmed := strings.TrimSpace(pathValue)
-	if trimmed == "" {
-		return ""
-	}
-	if strings.HasPrefix(trimmed, "~/") || trimmed == "~" {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			if trimmed == "~" {
-				trimmed = home
-			} else {
-				trimmed = filepath.Join(home, strings.TrimPrefix(trimmed, "~/"))
-			}
-		}
-	}
-	if !filepath.IsAbs(trimmed) {
-		trimmed = filepath.Join(baseDir, trimmed)
-	}
-	resolved, err := filepath.Abs(trimmed)
-	if err != nil {
-		return ""
-	}
-	return resolved
-}
-
 // String 方便调试输出配置摘要，避免直接暴露完整敏感配置内容。
 func (c AppConfig) String() string {
-	return fmt.Sprintf("config=%s storage=%s server=%s listen=%s", c.ConfigPath, c.StorageRoot, c.ServerBaseURL, c.ServerListenAddr)
+	return fmt.Sprintf("config=%s memory=%s server=%s listen=%s", c.ConfigPath, c.MemoryRoot, c.ServerBaseURL, c.ServerListenAddr)
 }

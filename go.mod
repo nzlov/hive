@@ -1,4 +1,4 @@
-module memory-manager
+module github.com/nzlov/hive
 
 go 1.25.0
 

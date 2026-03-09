@@ -2,7 +2,6 @@ package api
 
 // SearchRequest 统一搜索接口入参，避免脚本和服务端各自维护字段协议。
 type SearchRequest struct {
-	ProjectRoot string   `json:"project_root"`
 	ProjectName string   `json:"project_name"`
 	Queries     []string `json:"queries"`
 	Debug       bool     `json:"debug"`
@@ -30,11 +29,12 @@ type SearchHit struct {
 // SearchResponse 直接返回渲染后的 Markdown，减少脚本侧的结果拼装逻辑。
 type SearchResponse struct {
 	Query         string      `json:"query"`
-	SearchRoot    string      `json:"search_root"`
+	ProjectName   string      `json:"project_name"`
 	DebugCommands []string    `json:"debug_commands,omitempty"`
 	ErrorHits     []SearchHit `json:"error_hits"`
 	SummaryHits   []SearchHit `json:"summary_hits"`
 	Markdown      string      `json:"markdown"`
+	Error         string      `json:"error,omitempty"`
 }
 
 // MemoryWriteItem 描述单条待写入记忆，便于批量写入沿用统一结构。
@@ -48,25 +48,24 @@ type MemoryWriteItem struct {
 
 // WriteRequest 承接写入接口请求体，让脚本只传递必要业务参数。
 type WriteRequest struct {
-	ProjectRoot string            `json:"project_root"`
 	ProjectName string            `json:"project_name"`
 	GitBranch   string            `json:"git_branch"`
 	Items       []MemoryWriteItem `json:"items"`
 }
 
-// WriteResponse 返回最终落盘数据库路径，方便脚本保持旧输出习惯。
+// WriteResponse 统一承接写入接口出参，成功时不再暴露数据库路径等内部细节。
 type WriteResponse struct {
-	DatabasePath string `json:"database_path"`
+	Error string `json:"error,omitempty"`
 }
 
 // RebuildRequest 描述向量重建请求，让脚本可以通过 HTTP 触发服务端维护动作。
 type RebuildRequest struct {
-	ProjectRoot string `json:"project_root"`
-	Force       bool   `json:"force"`
+	Force bool `json:"force"`
 }
 
 // RebuildResponse 返回是否执行与说明信息，方便命令行直接展示结果。
 type RebuildResponse struct {
 	Changed bool   `json:"changed"`
 	Message string `json:"message"`
+	Error   string `json:"error,omitempty"`
 }

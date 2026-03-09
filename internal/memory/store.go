@@ -207,13 +207,10 @@ func FetchAllMemories(db *sql.DB) ([]Row, error) {
 	return scanRows(rows)
 }
 
-// FetchMemoryRows 按项目和类型读取候选记录，让搜索逻辑只关注匹配规则本身。
-func FetchMemoryRows(db *sql.DB, projectName, memType string, allowLegacyBlankProject bool) ([]Row, error) {
+// FetchMemoryRows 按项目名和类型读取候选记录，让单库模式仍能稳定隔离不同项目记忆。
+func FetchMemoryRows(db *sql.DB, projectName, memType string) ([]Row, error) {
 	query := `SELECT id, project_name, type, title, tags, summary, content, timestamp, created_at FROM memories WHERE project_name = ? AND type = ? ORDER BY timestamp DESC, id DESC`
 	args := []any{projectName, memType}
-	if allowLegacyBlankProject {
-		query = `SELECT id, project_name, type, title, tags, summary, content, timestamp, created_at FROM memories WHERE (project_name = ? OR project_name = '') AND type = ? ORDER BY timestamp DESC, id DESC`
-	}
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err

@@ -5,20 +5,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from urllib import error, request
 
 
 DEFAULT_SERVER_BASE_URL = "http://127.0.0.1:8080"
-CONFIG_PATH = Path.home() / ".config" / "memorymanager" / "config.json"
+CONFIG_PATH = Path.home() / ".config" / "hive" / "config.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
     """统一定义子命令入口，避免多个脚本重复维护参数协议。"""
 
-    parser = argparse.ArgumentParser(prog="memory-manager")
+    parser = argparse.ArgumentParser(prog="hive")
     subparsers = parser.add_subparsers(dest="command")
 
     search_parser = subparsers.add_parser("search")
@@ -84,11 +86,52 @@ def lookup_project_config(config: dict[str, Any], project_root: str) -> dict[str
         return {}
 
     project_name = Path(project_root).name
-    for key in (project_root, str(Path(project_root)), project_name):
+    remote_project_name = resolve_git_remote_project_name(project_root)
+    for key in (project_root, str(Path(project_root)), remote_project_name, project_name):
+        if not key:
+            continue
         value = projects.get(key)
         if isinstance(value, dict):
             return value
     return {}
+
+
+def normalize_git_remote(raw_remote: str) -> str:
+    """统一裁剪 Git 仓库地址，只保留稳定仓库标识，避免协议差异影响项目隔离。"""
+
+    text = raw_remote.strip()
+    if not text:
+        return ""
+    if "://" in text:
+        parsed = urlsplit(text)
+        host = parsed.netloc
+        path = parsed.path.lstrip("/")
+        if "@" in host:
+            host = host.split("@", 1)[1]
+        return "/".join(part for part in (host, path) if part).strip("/")
+    if "@" in text and ":" in text:
+        text = text.split("@", 1)[1]
+        host, path = text.split(":", 1)
+        return f"{host}/{path.lstrip('/')}".strip("/")
+    return re.sub(r"^[A-Za-z0-9_.-]+@", "", text).strip("/")
+
+
+def resolve_git_remote_project_name(project_root: str) -> str:
+    """优先从 Git 远端推导项目名，保证同一仓库在不同本地路径下仍命中同一记忆空间。"""
+
+    remote = run_git_command(project_root, ["remote", "get-url", "origin"])
+    if not remote:
+        remotes = run_git_command(project_root, ["remote"])
+        first_remote = next((line.strip() for line in remotes.splitlines() if line.strip()), "")
+        if first_remote:
+            remote = run_git_command(project_root, ["remote", "get-url", first_remote])
+    return normalize_git_remote(remote)
+
+
+def resolve_default_project_name(project_root: str) -> str:
+    """统一推导项目名，优先使用 Git 仓库地址，其次回退到目录名。"""
+
+    return resolve_git_remote_project_name(project_root) or Path(project_root).name
 
 
 def resolve_server_value(payload: dict[str, Any]) -> str:
@@ -128,13 +171,13 @@ def resolve_project_alias(project_config: dict[str, Any]) -> str:
 
 
 def resolve_request_target(config: dict[str, Any], root: str) -> tuple[str, str, str]:
-    """根据项目配置决定请求地址和远程项目名，保证本地与远程路由一致。"""
+    """根据项目配置和本地仓库信息决定请求地址与项目名，保证单库隔离稳定。"""
 
     project_root = resolve_project_root(root)
     project_config = lookup_project_config(config, project_root)
     base_url = resolve_server_value(project_config) or resolve_default_server_base_url(config)
-    project_alias = resolve_project_alias(project_config)
-    return project_root, base_url, project_alias
+    project_name = resolve_project_alias(project_config) or resolve_default_project_name(project_root)
+    return project_root, base_url, project_name
 
 
 def parse_queries(raw_queries: list[str]) -> list[str]:
@@ -240,16 +283,16 @@ def post_json(base_url: str, path: str, payload: dict[str, Any]) -> dict[str, An
         raise SystemExit("服务端返回了无法解析的 JSON") from exc
     if not isinstance(payload, dict):
         raise SystemExit("服务端返回格式不正确")
+    message = payload.get("error")
+    if isinstance(message, str) and message.strip():
+        raise SystemExit(message.strip())
     return payload
 
 
-def build_request_payload(project_root: str, project_alias: str, **extra: Any) -> dict[str, Any]:
-    """只在配置了项目别名时传远程项目名，避免影响未升级的本地调用。"""
+def build_request_payload(project_name: str, **extra: Any) -> dict[str, Any]:
+    """统一只向服务端传项目名，避免数据库隔离规则再依赖本地路径。"""
 
-    payload: dict[str, Any] = {"project_root": project_root, **extra}
-    if project_alias:
-        payload["project_name"] = project_alias
-    return payload
+    return {"project_name": project_name, **extra}
 
 
 def run_git_command(project_root: str, args: list[str]) -> str:
@@ -414,9 +457,9 @@ def render_search_markdown(response: dict[str, Any], error_hits: list[dict[str, 
     """脚本在本地重建 Markdown，保证分支筛选后输出仍与旧格式兼容。"""
 
     lines = [
-        "# Memory Search Result",
+        "# Hive Search Result",
         f"- query: {response.get('query', '')}",
-        f"- search_root: {response.get('search_root', '')}",
+        f"- project_name: {response.get('project_name', '')}",
     ]
     debug_commands = response.get("debug_commands")
     if isinstance(debug_commands, list) and debug_commands:
@@ -426,7 +469,7 @@ def render_search_markdown(response: dict[str, Any], error_hits: list[dict[str, 
     return "\n".join(lines)
 
 
-def run_search(args: argparse.Namespace, project_root: str, base_url: str, project_alias: str) -> int:
+def run_search(args: argparse.Namespace, project_root: str, base_url: str, project_name: str) -> int:
     """搜索子命令只整理输入并打印服务端返回结果，保持脚本职责轻量。"""
 
     queries = parse_queries(args.query)
@@ -436,8 +479,7 @@ def run_search(args: argparse.Namespace, project_root: str, base_url: str, proje
         base_url,
         "/api/v1/memories/search",
         build_request_payload(
-            project_root,
-            project_alias,
+            project_name,
             queries=queries,
             debug=bool(args.debug),
         ),
@@ -457,16 +499,15 @@ def run_search(args: argparse.Namespace, project_root: str, base_url: str, proje
     return 0
 
 
-def run_write(args: argparse.Namespace, project_root: str, base_url: str, project_alias: str) -> int:
+def run_write(args: argparse.Namespace, project_root: str, base_url: str, project_name: str) -> int:
     """写入子命令只负责参数兼容和输出结果，把持久化逻辑完全留给服务端。"""
 
     current_branch = resolve_current_git_branch(project_root)
-    response = post_json(
+    post_json(
         base_url,
         "/api/v1/memories/write",
-        build_request_payload(project_root, project_alias, git_branch=current_branch, items=parse_write_items(args)),
+        build_request_payload(project_name, git_branch=current_branch, items=parse_write_items(args)),
     )
-    print(str(response.get("database_path", "")))
     return 0
 
 
@@ -479,11 +520,11 @@ def main() -> int:
         parser.print_help()
         return 1
 
-    project_root, base_url, project_alias = resolve_request_target(load_config(), args.root)
+    project_root, base_url, project_name = resolve_request_target(load_config(), args.root)
     if args.command == "search":
-        return run_search(args, project_root, base_url, project_alias)
+        return run_search(args, project_root, base_url, project_name)
     if args.command == "write":
-        return run_write(args, project_root, base_url, project_alias)
+        return run_write(args, project_root, base_url, project_name)
     parser.print_help()
     return 1
 

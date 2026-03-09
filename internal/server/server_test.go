@@ -8,23 +8,21 @@ import (
 	"strings"
 	"testing"
 
-	"memory-manager/internal/api"
-	"memory-manager/internal/config"
-	"memory-manager/internal/memory"
+	"github.com/nzlov/hive/internal/api"
+	"github.com/nzlov/hive/internal/config"
+	"github.com/nzlov/hive/internal/memory"
 )
 
 // TestRouterWriteAndSearch 验证 HTTP 路由能正确透传到服务层，避免接口协议改动后脚本调用失效。
 func TestRouterWriteAndSearch(t *testing.T) {
 	t.Helper()
 	service := memory.NewService(config.AppConfig{
-		StorageRoot:      t.TempDir(),
+		MemoryRoot:       t.TempDir(),
 		ServerBaseURL:    "http://127.0.0.1:19090",
 		ServerListenAddr: ":19090",
 	})
 	router := NewRouter(service)
-	projectRoot := t.TempDir()
-
-	writeBody, err := json.Marshal(api.WriteRequest{ProjectRoot: projectRoot, ProjectName: "router-alias", GitBranch: "feature/router", Items: []api.MemoryWriteItem{{
+	writeBody, err := json.Marshal(api.WriteRequest{ProjectName: "router-alias", GitBranch: "feature/router", Items: []api.MemoryWriteItem{{
 		Type:    "error",
 		Title:   "HTTP接口测试",
 		Tags:    []string{"HTTP", "测试"},
@@ -42,7 +40,7 @@ func TestRouterWriteAndSearch(t *testing.T) {
 		t.Fatalf("写入接口返回状态异常: %d, body=%s", writeRecorder.Code, writeRecorder.Body.String())
 	}
 
-	searchBody, err := json.Marshal(api.SearchRequest{ProjectRoot: projectRoot, ProjectName: "router-alias", Queries: []string{"HTTP接口测试"}, Debug: false})
+	searchBody, err := json.Marshal(api.SearchRequest{ProjectName: "router-alias", Queries: []string{"HTTP接口测试"}, Debug: false})
 	if err != nil {
 		t.Fatalf("构造搜索请求失败: %v", err)
 	}
@@ -68,5 +66,34 @@ func TestRouterWriteAndSearch(t *testing.T) {
 	}
 	if searchResponse.ErrorHits[0].GitBranch != "feature/router" {
 		t.Fatalf("搜索响应未返回 git 分支: %+v", searchResponse.ErrorHits[0])
+	}
+	if searchResponse.Error != "" {
+		t.Fatalf("成功响应不应返回 error 字段内容: %+v", searchResponse)
+	}
+}
+
+// TestRouterReturnsErrorField 验证接口失败时会通过统一 error 字段返回错误，避免客户端继续依赖非结构化响应。
+func TestRouterReturnsErrorField(t *testing.T) {
+	t.Helper()
+	service := memory.NewService(config.AppConfig{
+		MemoryRoot:       t.TempDir(),
+		ServerBaseURL:    "http://127.0.0.1:19090",
+		ServerListenAddr: ":19090",
+	})
+	router := NewRouter(service)
+
+	searchRequest := httptest.NewRequest(http.MethodPost, "/api/v1/memories/search", bytes.NewReader([]byte(`{"project_name":123}`)))
+	searchRequest.Header.Set("Content-Type", "application/json")
+	searchRecorder := httptest.NewRecorder()
+	router.ServeHTTP(searchRecorder, searchRequest)
+	if searchRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("错误请求返回状态异常: %d, body=%s", searchRecorder.Code, searchRecorder.Body.String())
+	}
+	var searchResponse api.SearchResponse
+	if err := json.Unmarshal(searchRecorder.Body.Bytes(), &searchResponse); err != nil {
+		t.Fatalf("解析错误响应失败: %v", err)
+	}
+	if strings.TrimSpace(searchResponse.Error) == "" {
+		t.Fatalf("错误响应未返回 error 字段: %+v", searchResponse)
 	}
 }

@@ -1,4 +1,4 @@
 interface:
-  display_name: "Memory Manager"
+  display_name: "Hive"
   short_description: "Default for search/analysis tasks: retrieve .memory first, then perform file-method-logic lookup, code analysis, and error troubleshooting."
   default_prompt: "For any search, analysis, or edit request, first retrieve relevant memories from .memory (body+title+tags+summary), then proceed with code work and persist reusable conclusions when resolved. For memory writes, do not include certainty/created_at in YAML header; use filename timestamp as the only time source. If using OpenCode bash tool, always provide both command and description arguments."

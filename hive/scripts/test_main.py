@@ -88,6 +88,36 @@ class BranchFilterTest(unittest.TestCase):
 
         self.assertEqual([hit["path"] for hit in filtered], ["1", "2", "4"])
 
+    def test_resolve_default_project_name_prefers_git_remote(self) -> None:
+        """存在 Git 远端时应优先使用仓库地址，避免不同本地路径下项目名漂移。"""
+
+        env = os.environ | {
+            "GIT_AUTHOR_NAME": "OpenCode",
+            "GIT_AUTHOR_EMAIL": "opencode@example.com",
+            "GIT_COMMITTER_NAME": "OpenCode",
+            "GIT_COMMITTER_EMAIL": "opencode@example.com",
+        }
+        self.run_git("remote", "add", "origin", "https://github.com/nzlov/hive.git", env=env)
+
+        self.assertEqual(MAIN.resolve_default_project_name(str(self.repo)), "github.com/nzlov/hive.git")
+
+    def test_normalize_git_remote_supports_ssh_style(self) -> None:
+        """SSH 风格仓库地址也应转成稳定的 host/path 形式，避免协议差异影响项目隔离。"""
+
+        self.assertEqual(MAIN.normalize_git_remote("git@github.com:nzlov/hive.git"), "github.com/nzlov/hive.git")
+
+
+class ProjectNameFallbackTest(unittest.TestCase):
+    """覆盖非 Git 项目的项目名回退规则，避免客户端在普通目录下生成空项目名。"""
+
+    def test_resolve_default_project_name_falls_back_to_folder_name(self) -> None:
+        """没有 Git 远端时应回退到项目文件夹名称，保证搜索与写入仍可隔离。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir) / "demo-project"
+            project_root.mkdir()
+            self.assertEqual(MAIN.resolve_default_project_name(str(project_root)), "demo-project")
+
 
 if __name__ == "__main__":
     unittest.main()

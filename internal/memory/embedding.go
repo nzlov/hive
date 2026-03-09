@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"memory-manager/internal/config"
+	"github.com/nzlov/hive/internal/config"
 )
 
 var frontMatterRegexp = regexp.MustCompile(`\A---\n.*?\n---\n?`)

@@ -2,13 +2,9 @@ package memory
 
 import "time"
 
-// Location 描述当前项目使用的记忆目录和检索维度，避免路径决策散落在多个层次。
+// Location 描述当前服务使用的记忆目录，避免数据库路径决策散落在多个层次。
 type Location struct {
-	ProjectRoot     string
-	ProjectName     string
-	SearchRoot      string
-	MemoryRoot      string
-	ExternalEnabled bool
+	MemoryRoot string
 }
 
 // Row 统一描述数据库里的记忆记录，避免搜索和写入层重复维护字段。
@@ -54,7 +50,7 @@ type RebuildResult struct {
 // SearchResult 统一承接搜索输出，避免服务端和脚本各自维护一套结果结构。
 type SearchResult struct {
 	Query         string
-	SearchRoot    string
+	ProjectName   string
 	DebugCommands []string
 	ErrorHits     []Hit
 	SummaryHits   []Hit
