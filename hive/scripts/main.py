@@ -452,15 +452,6 @@ def render_hit(hit: dict[str, Any], index: int) -> list[str]:
     """统一渲染单条命中，保证脚本筛选后仍保持服务端原有展示结构。"""
 
     lines = [f"### Record {index}", f"- source: {hit.get('source', '')}"]
-    path = str(hit.get("path", "")).strip()
-    if path:
-        lines.append(f"- path: {path}")
-    project_name = str(hit.get("project_name", "")).strip()
-    if project_name:
-        lines.append(f"- project: {project_name}")
-    git_branch = normalize_git_branch(str(hit.get("git_branch", "")))
-    if git_branch:
-        lines.append(f"- git_branch: {git_branch}")
     lines.append(f"- timestamp: {hit.get('timestamp', '')}")
     lines.append(f"- confidence: {float(hit.get('confidence', 0.0)):.3f}")
     file_content = str(hit.get("file_content", "")).strip()
@@ -547,6 +538,11 @@ def run_search(args: argparse.Namespace, project_root: str, base_url: str, proje
         project_root,
         current_branch,
     )
+    for hit in error_hits + summary_hits:
+        hit.pop("git_branch", None)
+        hit.pop("project", None)
+        hit.pop("path", None)
+        hit.pop("project_name", None)
     print(render_search_markdown(response, error_hits, summary_hits), end="")
     return 0
 
