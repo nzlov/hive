@@ -19,7 +19,39 @@
   },
   "search": {
     "low_confidence_error_hit_limit": 10,
-    "low_confidence_summary_hit_limit": 10
+    "low_confidence_summary_hit_limit": 10,
+    "keyword": {
+      "mode": "like",
+      "backend": "auto",
+      "bm25_k1": 1.2,
+      "bm25_b": 0.75,
+      "fields": ["title", "summary", "tags", "content", "project_name"],
+      "field_weights": {
+        "title": 2.0,
+        "summary": 1.5,
+        "tags": 1.5,
+        "content": 1.0,
+        "project_name": 0.8
+      },
+      "synonyms": {
+        "enabled": true,
+        "groups": []
+      }
+    },
+    "fusion": {
+      "enabled": true,
+      "formula": "weighted_sum",
+      "keyword_weight": 0.55,
+      "semantic_weight": 0.45,
+      "recency_weight": 0.1,
+      "min_semantic_score": 0.15
+    },
+    "cache": {
+      "enabled": false,
+      "query_embedding_ttl_seconds": 600,
+      "semantic_hits_ttl_seconds": 120,
+      "max_entries": 5000
+    }
   },
   "embedding": {
     "base_url": "",
@@ -29,7 +61,24 @@
     "semantic_similarity_threshold": 0.15,
     "semantic_candidate_batch_size": 256,
     "semantic_candidate_max_count": 1024,
-    "semantic_hit_fetch_limit": 64
+    "semantic_hit_fetch_limit": 64,
+    "semantic_window": {
+      "mode": "static",
+      "base_max_count": 1024,
+      "dynamic_min_count": 256,
+      "dynamic_max_count": 20000,
+      "dynamic_ratio": 0.2,
+      "reference_corpus_size": 10000
+    },
+    "decay": {
+      "enabled": true,
+      "age_weight": 0.5,
+      "semantic_weight": 0.5,
+      "half_life_days": {
+        "summary": 30,
+        "error": 90
+      }
+    }
   }
 }
 ```
