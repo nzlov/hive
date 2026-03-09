@@ -1,6 +1,9 @@
 package server
 
 import (
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
 	"mime"
 	"net/http"
@@ -59,10 +62,12 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 
 	protectedGroup := router.Group("/api/v1/users")
 	protectedGroup.Use(buildJWTMiddleware(userService))
+	adminUserGroup := protectedGroup.Group("")
+	adminUserGroup.Use(buildAdminOnlyMiddleware())
 	protectedGroup.POST("/auth/logout", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
-	protectedGroup.GET("", func(c *gin.Context) {
+	adminUserGroup.GET("", func(c *gin.Context) {
 		var request api.UserListRequest
 		if err := c.ShouldBindQuery(&request); err != nil {
 			c.JSON(http.StatusBadRequest, api.UserListResponse{Error: err.Error()})
@@ -93,7 +98,7 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		}
 		c.JSON(http.StatusOK, response)
 	})
-	protectedGroup.POST("", func(c *gin.Context) {
+	adminUserGroup.POST("", func(c *gin.Context) {
 		var request api.CreateUserRequest
 		if err := c.ShouldBindJSON(&request); err != nil {
 			c.JSON(http.StatusBadRequest, api.UserMutationResponse{Error: err.Error()})
@@ -111,7 +116,7 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		}
 		c.JSON(http.StatusOK, api.UserMutationResponse{Item: userToSummary(item)})
 	})
-	protectedGroup.PUT("/:id", func(c *gin.Context) {
+	adminUserGroup.PUT("/:id", func(c *gin.Context) {
 		id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, api.UserMutationResponse{Error: "无效的用户ID"})
@@ -135,7 +140,7 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		}
 		c.JSON(http.StatusOK, api.UserMutationResponse{Item: userToSummary(item)})
 	})
-	protectedGroup.DELETE("/:id", func(c *gin.Context) {
+	adminUserGroup.DELETE("/:id", func(c *gin.Context) {
 		id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, api.UserMutationResponse{Error: "无效的用户ID"})
@@ -151,13 +156,56 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 	protectedGroup.GET("/me", func(c *gin.Context) {
 		c.JSON(http.StatusOK, api.UserMutationResponse{Item: userToSummary(mustCurrentUser(c))})
 	})
+	protectedGroup.PUT("/me/password", func(c *gin.Context) {
+		currentUser := mustCurrentUser(c)
+		var request api.ChangePasswordRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, api.UserMutationResponse{Error: err.Error()})
+			return
+		}
+		if strings.TrimSpace(request.NewPassword) == "" {
+			c.JSON(http.StatusBadRequest, api.UserMutationResponse{Error: "新密码不能为空"})
+			return
+		}
+		store, err := models.StoreFromContext(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.UserMutationResponse{Error: err.Error()})
+			return
+		}
+		existing, err := store.FindUserByID(currentUser.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.UserMutationResponse{Error: err.Error()})
+			return
+		}
+		salt, err := randomString(8)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.UserMutationResponse{Error: err.Error()})
+			return
+		}
+		passwordHash := hashPasswordBySalt(request.NewPassword, salt)
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		updated, err := store.SaveUser(models.User{
+			ID:           existing.ID,
+			UserID:       existing.UserID,
+			Username:     existing.Username,
+			RealName:     existing.RealName,
+			PasswordHash: passwordHash,
+			Salt:         salt,
+			APIToken:     existing.APIToken,
+			IsAdmin:      existing.IsAdmin,
+			CreatedAt:    existing.CreatedAt,
+			UpdatedAt:    now,
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.UserMutationResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.UserMutationResponse{Item: userToSummary(toUser(updated))})
+	})
 
 	protectedAPIGroup := router.Group("/api/v1")
 	protectedAPIGroup.Use(buildJWTMiddleware(userService))
 	protectedAPIGroup.GET("/memories", func(c *gin.Context) {
-		if !ensureAdmin(c) {
-			return
-		}
 		var request api.MemoryListRequest
 		if err := c.ShouldBindQuery(&request); err != nil {
 			c.JSON(http.StatusBadRequest, api.MemoryListResponse{Error: err.Error()})
@@ -196,9 +244,6 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		c.JSON(http.StatusOK, response)
 	})
 	protectedAPIGroup.GET("/memories/:id", func(c *gin.Context) {
-		if !ensureAdmin(c) {
-			return
-		}
 		id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, api.MemoryDetailResponse{Error: "无效的记忆ID"})
@@ -225,10 +270,7 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		}
 		c.JSON(http.StatusOK, api.MemoryDetailResponse{Item: memoryToDetail(item, creatorNameMap[item.UserID])})
 	})
-	protectedAPIGroup.DELETE("/memories/:id", func(c *gin.Context) {
-		if !ensureAdmin(c) {
-			return
-		}
+	protectedAPIGroup.DELETE("/memories/:id", buildAdminOnlyMiddleware(), func(c *gin.Context) {
 		id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, api.UserMutationResponse{Error: "无效的记忆ID"})
@@ -257,6 +299,17 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		}
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
+}
+
+// buildAdminOnlyMiddleware 统一拦截非管理员访问敏感接口，避免在每个处理器中重复权限分支。
+func buildAdminOnlyMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if mustCurrentUser(c).IsAdmin {
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "仅管理员可访问"})
+	}
 }
 
 // registerTokenMemoryRoutes 把记忆查询与写入统一挂到 API Token 路由下，避免和管理接口的 JWT 语义混淆。
@@ -401,15 +454,6 @@ func mustCurrentUser(c *gin.Context) user.User {
 	return currentUser
 }
 
-// ensureAdmin 统一拦截非管理员访问后台敏感接口，避免每个处理器重复手写权限分支。
-func ensureAdmin(c *gin.Context) bool {
-	if mustCurrentUser(c).IsAdmin {
-		return true
-	}
-	c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可访问"})
-	return false
-}
-
 // userToSummary 统一裁剪对外返回字段，避免密码哈希等敏感数据泄漏给前端。
 func userToSummary(item user.User) api.UserSummary {
 	return api.UserSummary{
@@ -521,4 +565,35 @@ func contentTypeByPath(assetPath string) string {
 		return "application/octet-stream"
 	}
 	return contentType
+}
+
+// hashPasswordBySalt 使用 sha1(password+salt) 对密码进行哈希，与服务层保持一致的加密方式。
+func hashPasswordBySalt(password, salt string) string {
+	sum := sha1.Sum([]byte(strings.TrimSpace(password) + strings.TrimSpace(salt)))
+	return hex.EncodeToString(sum[:])
+}
+
+// randomString 统一生成随机字符串，用于生成密码盐值等场景。
+func randomString(size int) (string, error) {
+	buffer := make([]byte, size)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buffer), nil
+}
+
+// toUser 将数据库用户模型转换为业务层用户对象，避免控制器直接依赖持久化结构。
+func toUser(item models.User) user.User {
+	return user.User{
+		ID:           item.ID,
+		UserID:       item.UserID,
+		Username:     item.Username,
+		RealName:     item.RealName,
+		PasswordHash: item.PasswordHash,
+		Salt:         item.Salt,
+		APIToken:     item.APIToken,
+		IsAdmin:      item.IsAdmin,
+		CreatedAt:    item.CreatedAt,
+		UpdatedAt:    item.UpdatedAt,
+	}
 }
