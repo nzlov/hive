@@ -8,11 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	glebarezsqlite "github.com/glebarez/sqlite"
 	"github.com/nzlov/hive/internal/config"
 	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	_ "modernc.org/sqlite"
 )
 
 // ErrNotFound 统一收敛查询未命中的语义，避免业务层直接依赖 GORM 的错误细节。
@@ -101,7 +100,7 @@ func buildDialector(cfg config.AppConfig) (string, gorm.Dialector, string, error
 	case "sqlite":
 		if strings.TrimSpace(cfg.DatabaseConfig.DSN) != "" {
 			dsn := strings.TrimSpace(cfg.DatabaseConfig.DSN)
-			return "sqlite", sqlite.Dialector{DriverName: "sqlite", DSN: dsn}, dsn, nil
+			return "sqlite", glebarezsqlite.Open(dsn), dsn, nil
 		}
 		return buildSQLiteDialector(cfg.MemoryRoot)
 	case "postgres":
@@ -121,7 +120,7 @@ func buildSQLiteDialector(memoryRoot string) (string, gorm.Dialector, string, er
 		return "", nil, "", err
 	}
 	path := MemoryDBPath(memoryRoot)
-	return "sqlite", sqlite.Dialector{DriverName: "sqlite", DSN: path}, path, nil
+	return "sqlite", glebarezsqlite.Open(path), path, nil
 }
 
 // normalizeDriver 收敛驱动别名，避免配置层出现 postgres 和 postgresql 两套判断。
