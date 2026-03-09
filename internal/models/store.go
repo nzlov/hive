@@ -1,6 +1,7 @@
 package models
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -24,6 +25,8 @@ type Store struct {
 	sourceLabel string
 }
 
+type storeContextKey struct{}
+
 // MemoryDBPath 统一 SQLite 数据库文件位置，避免路径拼接规则散落在业务层。
 func MemoryDBPath(memoryRoot string) string {
 	return filepath.Join(memoryRoot, "memory.db")
@@ -43,6 +46,23 @@ func Open(cfg config.AppConfig) (*Store, error) {
 	if err := store.migrate(); err != nil {
 		_ = store.Close()
 		return nil, err
+	}
+	return store, nil
+}
+
+// StoreToContext 把共享 Store 注入上下文，避免业务层继续显式透传数据库依赖。
+func StoreToContext(ctx context.Context, store *Store) context.Context {
+	return context.WithValue(ctx, storeContextKey{}, store)
+}
+
+// StoreFromContext 从上下文提取共享 Store，确保服务层通过统一入口获取数据库连接。
+func StoreFromContext(ctx context.Context) (*Store, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context 为空")
+	}
+	store, ok := ctx.Value(storeContextKey{}).(*Store)
+	if !ok || store == nil {
+		return nil, fmt.Errorf("context 中缺少 store")
 	}
 	return store, nil
 }

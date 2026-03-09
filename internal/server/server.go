@@ -13,6 +13,7 @@ import (
 
 	"github.com/nzlov/hive/internal/api"
 	"github.com/nzlov/hive/internal/memory"
+	"github.com/nzlov/hive/internal/models"
 	"github.com/nzlov/hive/internal/user"
 	webui "github.com/nzlov/hive/web"
 )
@@ -20,8 +21,9 @@ import (
 const currentUserContextKey = "current_user"
 
 // NewRouter 构造 HTTP 路由，把管理端鉴权、记忆接口鉴权和前端静态资源入口统一收敛到一处。
-func NewRouter(memoryService *memory.Service, userService *user.Service) *gin.Engine {
+func NewRouter(memoryService *memory.Service, userService *user.Service, store *models.Store) *gin.Engine {
 	router := gin.Default()
+	router.Use(buildDBStoreMiddleware(store))
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -41,7 +43,7 @@ func registerUserRoutes(router *gin.Engine, userService *user.Service) {
 			c.JSON(http.StatusBadRequest, api.LoginResponse{Error: err.Error()})
 			return
 		}
-		currentUser, err := userService.AuthenticateLogin(request.Username, request.Password)
+		currentUser, err := userService.AuthenticateLogin(c.Request.Context(), request.Username, request.Password)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, api.LoginResponse{Error: err.Error()})
 			return
@@ -60,7 +62,7 @@ func registerUserRoutes(router *gin.Engine, userService *user.Service) {
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
 	protectedGroup.GET("", func(c *gin.Context) {
-		items, err := userService.ListUsers()
+		items, err := userService.ListUsers(c.Request.Context())
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, api.UserListResponse{Error: err.Error()})
 			return
@@ -77,7 +79,7 @@ func registerUserRoutes(router *gin.Engine, userService *user.Service) {
 			c.JSON(http.StatusBadRequest, api.UserMutationResponse{Error: err.Error()})
 			return
 		}
-		item, err := userService.CreateUser(user.CreateInput{
+		item, err := userService.CreateUser(c.Request.Context(), user.CreateInput{
 			Username: request.Username,
 			RealName: request.RealName,
 			Password: request.Password,
@@ -100,7 +102,7 @@ func registerUserRoutes(router *gin.Engine, userService *user.Service) {
 			c.JSON(http.StatusBadRequest, api.UserMutationResponse{Error: err.Error()})
 			return
 		}
-		item, err := userService.UpdateUser(id, user.UpdateInput{
+		item, err := userService.UpdateUser(c.Request.Context(), id, user.UpdateInput{
 			Username:        request.Username,
 			RealName:        request.RealName,
 			Password:        request.Password,
@@ -120,7 +122,7 @@ func registerUserRoutes(router *gin.Engine, userService *user.Service) {
 			return
 		}
 		currentUser := mustCurrentUser(c)
-		if err := userService.DeleteUser(id, currentUser.UserID); err != nil {
+		if err := userService.DeleteUser(c.Request.Context(), id, currentUser.UserID); err != nil {
 			c.JSON(http.StatusBadRequest, api.UserMutationResponse{Error: err.Error()})
 			return
 		}
@@ -141,7 +143,7 @@ func registerTokenMemoryRoutes(router *gin.Engine, memoryService *memory.Service
 			c.JSON(http.StatusBadRequest, api.SearchResponse{Error: err.Error()})
 			return
 		}
-		result, err := memoryService.Search(request.ProjectName, request.Queries, request.Debug)
+		result, err := memoryService.Search(c.Request.Context(), request.ProjectName, request.Queries, request.Debug)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, api.SearchResponse{Error: err.Error()})
 			return
@@ -162,13 +164,21 @@ func registerTokenMemoryRoutes(router *gin.Engine, memoryService *memory.Service
 			return
 		}
 		currentUser := mustCurrentUser(c)
-		_, err := memoryService.Write(request.ProjectName, request.GitBranch, currentUser.UserID, request.Items)
+		_, err := memoryService.Write(c.Request.Context(), request.ProjectName, request.GitBranch, currentUser.UserID, request.Items)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, api.WriteResponse{Error: err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, api.WriteResponse{})
 	})
+}
+
+// buildDBStoreMiddleware 把共享数据库连接注入请求上下文，确保服务层通过 context 统一取用。
+func buildDBStoreMiddleware(store *models.Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Request = c.Request.WithContext(models.StoreToContext(c.Request.Context(), store))
+		c.Next()
+	}
 }
 
 // buildJWTMiddleware 统一校验 Bearer JWT，并把当前用户注入上下文避免控制器重复解析令牌。
@@ -185,7 +195,7 @@ func buildJWTMiddleware(userService *user.Service) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
 		}
-		currentUser, err := userService.FindByUserID(claims.UserID)
+		currentUser, err := userService.FindByUserID(c.Request.Context(), claims.UserID)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
@@ -203,7 +213,7 @@ func buildAPITokenMiddleware(userService *user.Service) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "缺少 X-API-Token"})
 			return
 		}
-		currentUser, err := userService.AuthenticateAPIToken(apiToken)
+		currentUser, err := userService.AuthenticateAPIToken(c.Request.Context(), apiToken)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
