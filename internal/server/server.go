@@ -246,7 +246,6 @@ func buildSearchHits(hits []memory.Hit) []api.SearchHit {
 		}
 		result = append(result, api.SearchHit{
 			Source:      hit.Source,
-			Path:        hit.Path,
 			ProjectName: hit.ProjectName,
 			GitBranch:   hit.GitBranch,
 			Timestamp:   hit.Timestamp.Format(time.RFC3339),

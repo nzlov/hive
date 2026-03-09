@@ -138,6 +138,49 @@ func TestServiceSearchReturnsBranchMetadata(t *testing.T) {
 	}
 }
 
+// TestServiceSearchSnippetIncludesTitleAndTags 验证服务端返回片段时会补齐标题与标签，避免片段脱离上下文后难以理解。
+func TestServiceSearchSnippetIncludesTitleAndTags(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
+
+	if _, err := service.Write("snippet-project", "feature/snippet", "", []api.MemoryWriteItem{{
+		Type:    "summary",
+		Title:   "连接池复用策略",
+		Tags:    []string{"数据库", "连接池"},
+		Summary: "记录连接池复用的调优经验。",
+		Context: "## Summary\n\n- 现象: 查询高峰期连接数抖动。\n\n## Fix\n\n- 方案: 统一复用长连接池，避免频繁创建连接。",
+	}}); err != nil {
+		t.Fatalf("写入片段记忆失败: %v", err)
+	}
+
+	result, err := service.Search("snippet-project", []string{"长连接池"}, false)
+	if err != nil {
+		t.Fatalf("搜索片段记忆失败: %v", err)
+	}
+	if len(result.SummaryHits) != 1 {
+		t.Fatalf("片段搜索结果数量异常: %+v", result.SummaryHits)
+	}
+	if len(result.SummaryHits[0].Snippets) == 0 {
+		t.Fatalf("片段搜索结果未返回 snippets: %+v", result.SummaryHits[0])
+	}
+	content := result.SummaryHits[0].Snippets[0].Content
+	if !strings.Contains(content, "title: 连接池复用策略") {
+		t.Fatalf("片段缺少标题上下文: %s", content)
+	}
+	if !strings.Contains(content, "tags: 数据库, 连接池") {
+		t.Fatalf("片段缺少标签上下文: %s", content)
+	}
+	if !strings.Contains(content, "长连接池") {
+		t.Fatalf("片段缺少命中正文: %s", content)
+	}
+	if strings.Contains(result.Markdown(), "- path:") {
+		t.Fatalf("Markdown 不应再渲染 path 字段: %s", result.Markdown())
+	}
+	if result.SummaryHits[0].Path == "" {
+		t.Fatalf("服务内部命中仍应保留 Path 供内部逻辑使用: %+v", result.SummaryHits[0])
+	}
+}
+
 // TestServiceSearchIsolatedByProjectName 验证单库模式下不同项目仍会按项目名隔离搜索结果，避免跨项目串记忆。
 func TestServiceSearchIsolatedByProjectName(t *testing.T) {
 	t.Helper()

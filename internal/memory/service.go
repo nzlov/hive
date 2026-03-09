@@ -245,10 +245,10 @@ func (s *Service) collectHits(db *sql.DB, source string, location Location, proj
 		if headerTitleMatch {
 			hit.FileContent = strings.TrimSpace(row.Content)
 		} else if len(bodyMatches) > 0 {
-			hit.Snippets = buildBodySectionSnippets(lines, bodyStart, bodyMatches, matcher)
+			hit.Snippets = enrichSnippetsWithHeader(buildBodySectionSnippets(lines, bodyStart, bodyMatches, matcher), header)
 		}
 		if len(hit.Snippets) == 0 && hit.FileContent == "" {
-			hit.Snippets = buildHeaderSnippets(lines, header, matcher, headerLineMatches)
+			hit.Snippets = enrichSnippetsWithHeader(buildHeaderSnippets(lines, header, matcher, headerLineMatches), header)
 		}
 		if len(hit.Snippets) == 0 && hit.FileContent == "" {
 			continue
@@ -472,7 +472,7 @@ func renderHitsSection(title string, hits []Hit) string {
 
 // renderHitMarkdown 渲染单条命中记录，保持 CLI 输出稳定且易于扫描。
 func renderHitMarkdown(hit Hit, index int) string {
-	lines := []string{fmt.Sprintf("### Record %d", index), "- source: " + hit.Source, "- path: " + hit.Path}
+	lines := []string{fmt.Sprintf("### Record %d", index), "- source: " + hit.Source}
 	if hit.ProjectName != "" {
 		lines = append(lines, "- project: "+hit.ProjectName)
 	}
@@ -727,6 +727,45 @@ func buildBodySectionSnippets(lines []string, bodyStart int, matchLines []int, m
 		snippets = append(snippets, Snippet{Start: absStart, End: absEnd, Content: content})
 	}
 	return snippets
+}
+
+// enrichSnippetsWithHeader 为片段补充标题与标签，避免脱离原记忆时难以理解命中上下文。
+func enrichSnippetsWithHeader(snippets []Snippet, header map[string]any) []Snippet {
+	if len(snippets) == 0 {
+		return nil
+	}
+	prefixLines := []string{}
+	if title, ok := header["title"].(string); ok {
+		title = strings.TrimSpace(title)
+		if title != "" {
+			prefixLines = append(prefixLines, "title: "+title)
+		}
+	}
+	if tags, ok := header["tags"].([]string); ok && len(tags) > 0 {
+		cleanedTags := make([]string, 0, len(tags))
+		for _, tag := range tags {
+			tag = strings.TrimSpace(tag)
+			if tag != "" {
+				cleanedTags = append(cleanedTags, tag)
+			}
+		}
+		if len(cleanedTags) > 0 {
+			prefixLines = append(prefixLines, "tags: "+strings.Join(cleanedTags, ", "))
+		}
+	}
+	if len(prefixLines) == 0 {
+		return snippets
+	}
+	prefix := strings.Join(prefixLines, "\n") + "\n\n"
+	decorated := make([]Snippet, 0, len(snippets))
+	for _, snippet := range snippets {
+		decorated = append(decorated, Snippet{
+			Start:   snippet.Start,
+			End:     snippet.End,
+			Content: prefix + snippet.Content,
+		})
+	}
+	return decorated
 }
 
 // sectionEndIndex 找到当前标题块的结束位置，避免截取过多无关内容。
