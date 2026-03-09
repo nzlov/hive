@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	_ "github.com/ncruces/go-sqlite3/embed"
 	"github.com/ncruces/go-sqlite3/gormlite"
 	"github.com/nzlov/hive/internal/config"
+	_ "github.com/nzlov/hive/internal/sqlitevecembed"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -24,6 +24,7 @@ type Store struct {
 	db          *gorm.DB
 	driver      string
 	sourceLabel string
+	vector      VectorBackend
 }
 
 type storeContextKey struct{}
@@ -44,6 +45,7 @@ func Open(cfg config.AppConfig) (*Store, error) {
 		return nil, err
 	}
 	store := &Store{db: db, driver: driver, sourceLabel: sourceLabel}
+	store.vector = newVectorBackend(db, driver)
 	if err := store.migrate(); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -102,7 +104,9 @@ func (s *Store) WithTx(fn func(*Store) error) error {
 		return fmt.Errorf("store 未初始化")
 	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		return fn(&Store{db: tx, driver: s.driver, sourceLabel: s.sourceLabel})
+		txStore := &Store{db: tx, driver: s.driver, sourceLabel: s.sourceLabel}
+		txStore.vector = newVectorBackend(tx, s.driver)
+		return fn(txStore)
 	})
 }
 

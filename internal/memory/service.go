@@ -202,6 +202,9 @@ func (s *Service) EnsureEmbeddingsReady(ctx context.Context) (RebuildResult, err
 	if err != nil {
 		return RebuildResult{}, err
 	}
+	if err := store.EnsureVectorBackendReady(); err != nil {
+		return RebuildResult{}, err
+	}
 	location := ResolveLocation(s.config)
 	return s.rebuildEmbeddingsWithDB(location, store, false)
 }
@@ -227,11 +230,7 @@ func (s *Service) rebuildEmbeddingsWithDB(location Location, store *models.Store
 	if err != nil {
 		return RebuildResult{}, err
 	}
-	missingSearchFieldCount, err := store.CountMemoryEmbeddingsMissingSearchFields()
-	if err != nil {
-		return RebuildResult{}, err
-	}
-	if currentModel == s.provider.ModelName() && embeddingCount == int64(len(rows)) && missingSearchFieldCount == 0 && !force {
+	if currentModel == s.provider.ModelName() && embeddingCount == int64(len(rows)) && !force {
 		return RebuildResult{Changed: false, Message: fmt.Sprintf("嵌入模型未变化，继续使用 %s。", s.provider.ModelName())}, nil
 	}
 	texts := make([]string, 0, len(rows))
@@ -331,12 +330,7 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 	if err != nil || len(vectors) == 0 {
 		return nil, err
 	}
-	now := time.Now().UTC()
-	candidates, err := s.collectSemanticCandidates(store, source, projectName, vectors, now)
-	if err != nil {
-		return nil, err
-	}
-	hits, err := s.buildSemanticHits(store, source, projectName, candidates)
+	hits, err := s.buildSemanticHitsFromBackend(store, source, projectName, vectors)
 	if err != nil {
 		return nil, err
 	}
@@ -346,6 +340,58 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 		}
 		return hits[i].Confidence > hits[j].Confidence
 	})
+	return hits, nil
+}
+
+// buildSemanticHitsFromBackend 使用数据库向量能力完成检索，避免服务层再做全量候选扫描。
+func (s *Service) buildSemanticHitsFromBackend(store *models.Store, source string, projectName string, queryVectors [][]float64) ([]Hit, error) {
+	hitFetchLimit := s.semanticHitFetchLimit()
+	bestByID := map[int64]float64{}
+	for _, queryVector := range queryVectors {
+		items, err := store.SearchMemoryEmbeddingsByVector(projectName, source, queryVector, hitFetchLimit)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			if item.Similarity <= s.semanticSimilarityThreshold() {
+				continue
+			}
+			if item.Similarity > bestByID[item.MemoryID] {
+				bestByID[item.MemoryID] = item.Similarity
+			}
+		}
+	}
+	if len(bestByID) == 0 {
+		return nil, nil
+	}
+	memoryIDs := make([]int64, 0, len(bestByID))
+	for memoryID := range bestByID {
+		memoryIDs = append(memoryIDs, memoryID)
+	}
+	memoryItems, err := store.ListMemoryLitesByProjectTypeAndIDs(projectName, source, memoryIDs)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	hits := make([]Hit, 0, len(memoryItems))
+	for _, item := range memoryItems {
+		semanticScore, ok := bestByID[item.ID]
+		if !ok {
+			continue
+		}
+		ts := parseTimestamp(item.Timestamp)
+		ageScore := confidenceByAge(ts, now)
+		hits = append(hits, Hit{
+			ID:          item.ID,
+			Source:      source,
+			GitBranch:   item.GitBranch,
+			Title:       item.Title,
+			Tags:        models.DecodeTags(item.Tags),
+			Timestamp:   ts,
+			Confidence:  math.Max(semanticScore, ageScore*0.5+semanticScore*0.5),
+			FileContent: strings.TrimSpace(item.Content),
+		})
+	}
 	return hits, nil
 }
 
