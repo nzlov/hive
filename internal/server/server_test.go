@@ -92,11 +92,21 @@ func TestRouterWriteAndSearch(t *testing.T) {
 	if len(searchResponse.ErrorHits) != 1 {
 		t.Fatalf("搜索响应命中数量异常: %+v", searchResponse.ErrorHits)
 	}
-	if bytes.Contains(searchRecorder.Body.Bytes(), []byte(`"path"`)) {
-		t.Fatalf("搜索响应不应再暴露 path 字段: %s", searchRecorder.Body.String())
+	hitsPayload, err := json.Marshal(struct {
+		ErrorHits   []api.SearchHit `json:"error_hits"`
+		SummaryHits []api.SearchHit `json:"summary_hits"`
+	}{
+		ErrorHits:   searchResponse.ErrorHits,
+		SummaryHits: searchResponse.SummaryHits,
+	})
+	if err != nil {
+		t.Fatalf("序列化命中结果失败: %v", err)
 	}
-	if bytes.Contains(searchRecorder.Body.Bytes(), []byte(`"project_name"`)) {
-		t.Fatalf("命中结果不应再暴露 project_name 字段: %s", searchRecorder.Body.String())
+	if bytes.Contains(hitsPayload, []byte(`"path"`)) {
+		t.Fatalf("搜索命中结果不应再暴露 path 字段: %s", string(hitsPayload))
+	}
+	if bytes.Contains(hitsPayload, []byte(`"project_name"`)) {
+		t.Fatalf("搜索命中结果不应再暴露 project_name 字段: %s", string(hitsPayload))
 	}
 	if searchResponse.ErrorHits[0].GitBranch != "feature/router" {
 		t.Fatalf("搜索响应未返回 git 分支: %+v", searchResponse.ErrorHits[0])

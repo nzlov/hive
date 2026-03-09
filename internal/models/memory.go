@@ -3,7 +3,10 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 // Memory 对应 memories 表，集中维护记忆记录的结构和索引声明。
@@ -44,6 +47,38 @@ func (s *Store) ListAllMemories() ([]Memory, error) {
 	return items, err
 }
 
+// GetMemoryByID 读取单条记忆详情，避免管理端为查看详情自行拼接查询条件。
+func (s *Store) GetMemoryByID(id int64) (Memory, error) {
+	var item Memory
+	err := normalizeNotFound(s.db.Where("id = ?", id).First(&item).Error)
+	return item, err
+}
+
+// DeleteMemoryByID 删除单条记忆，供管理端和后续清理流程复用同一持久化入口。
+func (s *Store) DeleteMemoryByID(id int64) error {
+	return s.db.Delete(&Memory{}, id).Error
+}
+
+// ListMemoriesPaginated 提供后台管理的分页列表，复用统一关键字搜索逻辑避免筛选口径不一致。
+func (s *Store) ListMemoriesPaginated(page, pageSize int, queries []string) ([]Memory, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+	pageSize = int(math.Min(float64(pageSize), 100))
+
+	db := applyMemoryKeywordFilters(s.db.Model(&Memory{}), queries)
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var items []Memory
+	err := db.Order("timestamp DESC").Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items).Error
+	return items, total, err
+}
+
 // ListMemoriesByProjectAndType 按项目和类型筛选记忆，维持单库模式下的项目隔离。
 func (s *Store) ListMemoriesByProjectAndType(projectName, memType string) ([]Memory, error) {
 	var items []Memory
@@ -57,14 +92,20 @@ func (s *Store) SearchMemoriesByProjectAndType(projectName, memType string, quer
 	if len(cleaned) == 0 {
 		return []Memory{}, nil
 	}
-	db := s.db.Where("project_name = ? AND type = ?", strings.TrimSpace(projectName), strings.TrimSpace(memType))
+	db := applyMemoryKeywordFilters(s.db.Where("project_name = ? AND type = ?", strings.TrimSpace(projectName), strings.TrimSpace(memType)), cleaned)
+	var items []Memory
+	err := db.Order("timestamp DESC").Order("id DESC").Find(&items).Error
+	return items, err
+}
+
+// applyMemoryKeywordFilters 统一关键字筛选条件，避免搜索记忆和管理列表在字段口径上分叉。
+func applyMemoryKeywordFilters(db *gorm.DB, queries []string) *gorm.DB {
+	cleaned := normalizeKeywordQueries(queries)
 	for _, query := range cleaned {
 		likeValue := "%" + escapeLike(query) + "%"
 		db = db.Where(buildKeywordWhereClause(), likeValue, likeValue, likeValue, likeValue, likeValue)
 	}
-	var items []Memory
-	err := db.Order("timestamp DESC").Order("id DESC").Find(&items).Error
-	return items, err
+	return db
 }
 
 // buildKeywordWhereClause 统一描述关键字搜索条件，避免 SQLite 和 PostgreSQL 下查询字段漂移。

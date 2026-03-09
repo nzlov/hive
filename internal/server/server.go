@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"mime"
 	"net/http"
 	"path"
@@ -130,6 +131,110 @@ func registerUserRoutes(router *gin.Engine, userService *user.Service) {
 	})
 	protectedGroup.GET("/me", func(c *gin.Context) {
 		c.JSON(http.StatusOK, api.UserMutationResponse{Item: userToSummary(mustCurrentUser(c))})
+	})
+
+	protectedAPIGroup := router.Group("/api/v1")
+	protectedAPIGroup.Use(buildJWTMiddleware(userService))
+	protectedAPIGroup.GET("/memories", func(c *gin.Context) {
+		if !ensureAdmin(c) {
+			return
+		}
+		var request api.MemoryListRequest
+		if err := c.ShouldBindQuery(&request); err != nil {
+			c.JSON(http.StatusBadRequest, api.MemoryListResponse{Error: err.Error()})
+			return
+		}
+		queries, err := memory.ParseQueries(c.QueryArray("queries"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, api.MemoryListResponse{Error: err.Error()})
+			return
+		}
+		store, err := models.StoreFromContext(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.MemoryListResponse{Error: err.Error()})
+			return
+		}
+		items, total, err := store.ListMemoriesPaginated(request.Page, request.PageSize, queries)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.MemoryListResponse{Error: err.Error()})
+			return
+		}
+		page := request.Page
+		if page < 1 {
+			page = 1
+		}
+		pageSize := request.PageSize
+		if pageSize < 1 {
+			pageSize = 10
+		}
+		response := api.MemoryListResponse{
+			Items:     make([]api.MemoryItem, 0, len(items)),
+			Total:     total,
+			Page:      page,
+			PageSize:  pageSize,
+			TotalPage: buildTotalPages(total, pageSize),
+		}
+		for _, item := range items {
+			response.Items = append(response.Items, memoryToItem(item))
+		}
+		c.JSON(http.StatusOK, response)
+	})
+	protectedAPIGroup.GET("/memories/:id", func(c *gin.Context) {
+		if !ensureAdmin(c) {
+			return
+		}
+		id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, api.MemoryDetailResponse{Error: "无效的记忆ID"})
+			return
+		}
+		store, err := models.StoreFromContext(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.MemoryDetailResponse{Error: err.Error()})
+			return
+		}
+		item, err := store.GetMemoryByID(id)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, models.ErrNotFound) {
+				status = http.StatusNotFound
+			}
+			c.JSON(status, api.MemoryDetailResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.MemoryDetailResponse{Item: memoryToDetail(item)})
+	})
+	protectedAPIGroup.DELETE("/memories/:id", func(c *gin.Context) {
+		if !ensureAdmin(c) {
+			return
+		}
+		id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, api.UserMutationResponse{Error: "无效的记忆ID"})
+			return
+		}
+		store, err := models.StoreFromContext(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.UserMutationResponse{Error: err.Error()})
+			return
+		}
+		if err := store.WithTx(func(txStore *models.Store) error {
+			if _, err := txStore.GetMemoryByID(id); err != nil {
+				return err
+			}
+			if err := txStore.DeleteMemoryEmbeddingByMemoryID(id); err != nil {
+				return err
+			}
+			return txStore.DeleteMemoryByID(id)
+		}); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, models.ErrNotFound) {
+				status = http.StatusNotFound
+			}
+			c.JSON(status, api.UserMutationResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
 }
 
@@ -275,6 +380,15 @@ func mustCurrentUser(c *gin.Context) user.User {
 	return currentUser
 }
 
+// ensureAdmin 统一拦截非管理员访问后台敏感接口，避免每个处理器重复手写权限分支。
+func ensureAdmin(c *gin.Context) bool {
+	if mustCurrentUser(c).IsAdmin {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可访问"})
+	return false
+}
+
 // userToSummary 统一裁剪对外返回字段，避免密码哈希等敏感数据泄漏给前端。
 func userToSummary(item user.User) api.UserSummary {
 	return api.UserSummary{
@@ -285,6 +399,47 @@ func userToSummary(item user.User) api.UserSummary {
 		APIToken: item.APIToken,
 		IsAdmin:  item.IsAdmin,
 	}
+}
+
+// memoryToItem 统一裁剪列表字段，避免前端列表场景误传完整正文造成响应膨胀。
+func memoryToItem(item models.Memory) api.MemoryItem {
+	return api.MemoryItem{
+		ID:          item.ID,
+		ProjectName: item.ProjectName,
+		Title:       item.Title,
+		Tags:        models.DecodeTags(item.Tags),
+		Summary:     item.Summary,
+		UserID:      item.UserID,
+		CreatedAt:   item.CreatedAt,
+	}
+}
+
+// memoryToDetail 统一构造详情视图数据，保证抽屉展示与列表数据来自同一映射口径。
+func memoryToDetail(item models.Memory) api.MemoryDetail {
+	return api.MemoryDetail{
+		ID:          item.ID,
+		ProjectName: item.ProjectName,
+		GitBranch:   item.GitBranch,
+		Type:        item.Type,
+		Title:       item.Title,
+		Tags:        models.DecodeTags(item.Tags),
+		Summary:     item.Summary,
+		Content:     item.Content,
+		UserID:      item.UserID,
+		Timestamp:   item.Timestamp,
+		CreatedAt:   item.CreatedAt,
+	}
+}
+
+// buildTotalPages 统一分页页数计算，避免前后端分别实现导致边界行为不一致。
+func buildTotalPages(total int64, pageSize int) int {
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	if total == 0 {
+		return 0
+	}
+	return int((total + int64(pageSize) - 1) / int64(pageSize))
 }
 
 // userServiceSecret 统一读取 JWT 密钥，避免服务端各层自己决定签名配置来源。

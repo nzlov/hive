@@ -36,6 +36,11 @@ func (s *Store) DeleteAllMemoryEmbeddings() error {
 	return s.db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&MemoryEmbedding{}).Error
 }
 
+// DeleteMemoryEmbeddingByMemoryID 删除单条记忆对应的向量，避免后台删除记录后留下孤儿索引。
+func (s *Store) DeleteMemoryEmbeddingByMemoryID(memoryID int64) error {
+	return s.db.Delete(&MemoryEmbedding{}, "memory_id = ?", memoryID).Error
+}
+
 // CountMemoryEmbeddings 返回向量总数，供启动时快速判断是否需要重建。
 func (s *Store) CountMemoryEmbeddings() (int64, error) {
 	var total int64
