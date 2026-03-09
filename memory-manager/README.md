@@ -17,10 +17,9 @@
 当前 skill 主要文件：
 
 - `SKILL.md`：skill 规则与约束。
-- `scripts/search_memory.py`：检索记忆。
-- `scripts/write_memory.py`：写入总结或错误记忆。
+- `scripts/main.go`：Go 统一入口，通过子命令执行检索、写入和重建。
 - `scripts/memory_config.py`：解析外挂记忆配置。
-- `scripts/rebuild_memory_embeddings.py`：重建全部记忆向量。
+- `scripts/rebuild_memory_embeddings.go`：重建全部记忆向量。
 - `scripts/embedding_provider.py`：嵌入接口与 OpenAI 兼容实现。
 
 默认记忆目录结构：
@@ -42,9 +41,9 @@
 在项目根目录执行：
 
 ```bash
-python3 scripts/search_memory.py --query '关键词'
-python3 scripts/search_memory.py --query '关键词1' '关键词2'
-python3 scripts/search_memory.py --query '["关键词1","关键词2"]'
+go run ./scripts search-memory --query '关键词'
+go run ./scripts search-memory --query '关键词1' --query '关键词2'
+go run ./scripts search-memory --query '["关键词1","关键词2"]'
 ```
 
 常用参数：
@@ -73,14 +72,14 @@ python3 scripts/search_memory.py --query '["关键词1","关键词2"]'
 - 如果当前会话里之前已经保存过记忆，再次总结时应从上次已保存内容之后开始续写，避免重复总结。
 
 ```bash
-python3 scripts/write_memory.py \
+go run ./scripts write-memory \
   --type summary \
   --title '自动标题' \
   --tags '业务标签,重要文件,重要方法' \
   --summary '一句话简介' \
   --context '完整Markdown正文'
 
-python3 scripts/write_memory.py \
+go run ./scripts write-memory \
   --items-json '[
     {
       "type": "summary",
@@ -125,7 +124,7 @@ python3 scripts/write_memory.py \
 - 如果一次处理里有多个独立错误或多个问题目标，建议拆成多条错误记忆分别保存。
 
 ```bash
-python3 scripts/write_memory.py \
+go run ./scripts write-memory \
   --type error \
   --title '自动标题' \
   --tags '业务标签,错误类型,相关模块' \
@@ -216,7 +215,7 @@ python3 scripts/write_memory.py \
 - 如果配置了 `embedding`，`write_memory.py` 在写入记忆后会同步写入该条记录的向量。
 - 如果配置了 `embedding`，`search_memory.py` 在关键字检索之外还会追加语义召回，并合并结果返回。
 - 每次脚本启动时都会检查配置文件中的嵌入模型是否与数据库元数据中的模型名一致。
-- 如果模型名不一致，脚本会自动触发 `scripts/rebuild_memory_embeddings.py` 对现有记忆做全量重建，并把数据库中的模型名更新为当前配置。
+- 如果模型名不一致，脚本会自动触发 `go run ./scripts rebuild-memory-embeddings` 对现有记忆做全量重建，并把数据库中的模型名更新为当前配置。
 - 如果模型名未变化但历史向量缺失，脚本也会自动补建，避免升级后出现部分记录没有向量。
 - 嵌入文本会把标签整理为自然语言而不是 JSON，并剔除持久化内容里的 YAML 头部，减少重复噪声。
 - 总结记忆和错误记忆使用不同模板：前者突出主题、摘要和结论，后者突出问题、现象摘要和排障记录。
@@ -224,8 +223,8 @@ python3 scripts/write_memory.py \
 可以手动执行全量重建：
 
 ```bash
-python3 scripts/rebuild_memory_embeddings.py --root .
-python3 scripts/rebuild_memory_embeddings.py --root . --force
+go run ./scripts rebuild-memory-embeddings --root .
+go run ./scripts rebuild-memory-embeddings --root . --force
 ```
 
 ## 使用建议
@@ -248,9 +247,9 @@ python3 scripts/rebuild_memory_embeddings.py --root . --force
 示例：
 
 ```bash
-python3 scripts/search_memory.py --query '["订单","支付","超时"]'
+go run ./scripts search-memory --query '["订单","支付","超时"]'
 
-python3 scripts/write_memory.py \
+go run ./scripts write-memory \
   --type summary \
   --title '支付超时排查结论' \
   --tags '支付,超时,订单' \
