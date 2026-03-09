@@ -62,7 +62,9 @@ func (p OpenAIEmbeddingProvider) EmbedTexts(texts []string) ([][]float64, error)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+p.Config.APIKey)
+	if strings.TrimSpace(p.Config.APIKey) != "" {
+		req.Header.Set("Authorization", "Bearer "+p.Config.APIKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{Timeout: time.Duration(p.Config.TimeoutSeconds * float64(time.Second)), Transport: buildTransport(p.Config.BaseURL)}
 	resp, err := client.Do(req)

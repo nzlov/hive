@@ -179,13 +179,13 @@ func resolveServerListenAddr(payload map[string]any) string {
 	return defaultServerListenAddr
 }
 
-// resolveEmbeddingConfig 只有在配置完整时才启用嵌入，避免半配置状态误触发远程调用。
+// resolveEmbeddingConfig 只要求地址和模型存在，兼容本地 Ollama 这类无需鉴权的嵌入服务。
 func resolveEmbeddingConfig(payload map[string]any) *EmbeddingConfig {
 	section := findSection(payload, embeddingSectionKeys)
 	baseURL := strings.TrimRight(pickStrings(section, embeddingBaseURLKeys), "/")
 	apiKey := pickStrings(section, embeddingAPIKeyKeys)
 	model := pickStrings(section, embeddingModelKeys)
-	if baseURL == "" || apiKey == "" || model == "" {
+	if baseURL == "" || model == "" {
 		return nil
 	}
 	timeout := pickFloat(section, embeddingTimeoutKeys, 30)
