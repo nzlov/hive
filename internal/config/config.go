@@ -23,6 +23,12 @@ type EmbeddingConfig struct {
 	TimeoutSeconds float64
 }
 
+// DatabaseConfig 统一描述数据库连接信息，兼容本地 SQLite 和远端 PostgreSQL 两种模式。
+type DatabaseConfig struct {
+	Driver string
+	DSN    string
+}
+
 // AppConfig 统一描述脚本与服务端共用配置，降低多入口行为漂移风险。
 type AppConfig struct {
 	ConfigPath       string
@@ -30,6 +36,7 @@ type AppConfig struct {
 	ServerBaseURL    string
 	ServerListenAddr string
 	JWTSecret        string
+	DatabaseConfig   *DatabaseConfig
 	EmbeddingConfig  *EmbeddingConfig
 }
 
@@ -46,6 +53,11 @@ var (
 	embeddingTimeoutKeys = []string{"timeout_seconds", "timeoutSeconds"}
 	authSectionKeys      = []string{"auth"}
 	authJWTSecretKeys    = []string{"jwt_secret", "jwtSecret"}
+	databaseSectionKeys  = []string{"database", "db"}
+	databaseDriverKeys   = []string{"driver", "dialect", "type"}
+	databaseDSNKeys      = []string{"dsn", "url", "uri"}
+	databaseFlatDriver   = []string{"database_driver", "databaseDriver", "db_driver", "dbDriver"}
+	databaseFlatDSN      = []string{"database_dsn", "databaseDsn", "db_dsn", "dbDsn", "database_url", "databaseUrl"}
 )
 
 // Load 读取并标准化配置，缺失时自动补默认配置降低首次使用门槛。
@@ -68,6 +80,7 @@ func Load() (AppConfig, error) {
 		ServerBaseURL:    resolveServerBaseURL(payload),
 		ServerListenAddr: resolveServerListenAddr(payload),
 		JWTSecret:        resolveJWTSecret(payload),
+		DatabaseConfig:   resolveDatabaseConfig(payload),
 	}
 	config.EmbeddingConfig = resolveEmbeddingConfig(payload)
 	return config, nil
@@ -126,6 +139,10 @@ func buildDefaultPayload() (map[string]any, error) {
 			"api_key":         "",
 			"model":           "",
 			"timeout_seconds": 30,
+		},
+		"database": map[string]any{
+			"driver": "sqlite",
+			"dsn":    "",
 		},
 		"auth": map[string]any{
 			"jwt_secret": defaultJWTSecret,
@@ -204,6 +221,23 @@ func resolveJWTSecret(payload map[string]any) string {
 	return defaultJWTSecret
 }
 
+// resolveDatabaseConfig 统一解析数据库配置，未配置时继续沿用默认 SQLite 行为。
+func resolveDatabaseConfig(payload map[string]any) *DatabaseConfig {
+	section := findSection(payload, databaseSectionKeys)
+	driver := pickStrings(section, databaseDriverKeys)
+	if driver == "" {
+		driver = pickStrings(payload, databaseFlatDriver)
+	}
+	dsn := pickStrings(section, databaseDSNKeys)
+	if dsn == "" {
+		dsn = pickStrings(payload, databaseFlatDSN)
+	}
+	if driver == "" && dsn == "" {
+		return nil
+	}
+	return &DatabaseConfig{Driver: driver, DSN: dsn}
+}
+
 // findSection 优先读取嵌套配置，必要时兼容平铺结构减少升级摩擦。
 func findSection(payload map[string]any, keys []string) map[string]any {
 	for _, key := range keys {
@@ -272,5 +306,9 @@ func pickFloat(payload map[string]any, keys []string, fallback float64) float64 
 
 // String 方便调试输出配置摘要，避免直接暴露完整敏感配置内容。
 func (c AppConfig) String() string {
-	return fmt.Sprintf("config=%s memory=%s server=%s listen=%s", c.ConfigPath, c.MemoryRoot, c.ServerBaseURL, c.ServerListenAddr)
+	driver := "sqlite"
+	if c.DatabaseConfig != nil && strings.TrimSpace(c.DatabaseConfig.Driver) != "" {
+		driver = strings.TrimSpace(c.DatabaseConfig.Driver)
+	}
+	return fmt.Sprintf("config=%s memory=%s server=%s listen=%s db=%s", c.ConfigPath, c.MemoryRoot, c.ServerBaseURL, c.ServerListenAddr, driver)
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/nzlov/hive/internal/api"
 	"github.com/nzlov/hive/internal/config"
+	"github.com/nzlov/hive/internal/models"
 )
 
 // stubEmbeddingProvider 伪造稳定向量返回，避免测试依赖外部嵌入服务可用性。
@@ -81,14 +82,18 @@ func TestServiceWriteAndSearch(t *testing.T) {
 	if result.SummaryHits[0].GitBranch != "feature/test-branch" {
 		t.Fatalf("Search 结果未返回 git 分支: %+v", result.SummaryHits[0])
 	}
-	_, db, err := service.openProjectDB()
+	_, store, err := service.openProjectStore()
 	if err != nil {
-		t.Fatalf("打开数据库失败: %v", err)
+		t.Fatalf("打开模型存储失败: %v", err)
 	}
-	defer db.Close()
-	rows, err := FetchAllMemories(db)
+	defer store.Close()
+	items, err := store.ListAllMemories()
 	if err != nil {
 		t.Fatalf("读取记忆失败: %v", err)
+	}
+	rows := make([]Row, 0, len(items))
+	for _, item := range items {
+		rows = append(rows, memoryRowFromModel(item))
 	}
 	if len(rows) != 1 || rows[0].UserID != "test-userid" {
 		t.Fatalf("写入记忆未落库 userid: %+v", rows)
@@ -220,27 +225,31 @@ func TestServiceEnsureEmbeddingsReadyRebuildsOnModelMismatch(t *testing.T) {
 		t.Fatalf("模型切换后应执行一次重建，实际次数=%d", newProvider.calls)
 	}
 
-	_, db, err := service.openProjectDB()
+	_, store, err := service.openProjectStore()
 	if err != nil {
-		t.Fatalf("打开数据库失败: %v", err)
+		t.Fatalf("打开模型存储失败: %v", err)
 	}
-	defer db.Close()
+	defer store.Close()
 
-	currentModel, err := GetMemoryMetadata(db, embeddingModelMetaKey)
+	currentModel, err := store.GetMemoryMetadata(embeddingModelMetaKey)
 	if err != nil {
 		t.Fatalf("读取模型元数据失败: %v", err)
 	}
 	if currentModel != "new-model" {
 		t.Fatalf("模型元数据未更新: %s", currentModel)
 	}
-	rows, err := FetchAllMemories(db)
+	items, err := store.ListAllMemories()
 	if err != nil {
 		t.Fatalf("读取记忆失败: %v", err)
+	}
+	rows := make([]Row, 0, len(items))
+	for _, item := range items {
+		rows = append(rows, memoryRowFromModel(item))
 	}
 	if len(rows) != 1 {
 		t.Fatalf("测试数据数量异常: %d", len(rows))
 	}
-	embeddings, err := FetchMemoryEmbeddings(db, "rebuild-project", []int64{rows[0].ID})
+	embeddings, err := store.ListMemoryEmbeddings("rebuild-project", []int64{rows[0].ID})
 	if err != nil {
 		t.Fatalf("读取向量失败: %v", err)
 	}
@@ -279,22 +288,26 @@ func TestFetchMemoryEmbeddingsIsolatedByProjectName(t *testing.T) {
 		t.Fatalf("写入项目B记忆失败: %v", err)
 	}
 
-	_, db, err := service.openProjectDB()
+	_, store, err := service.openProjectStore()
 	if err != nil {
-		t.Fatalf("打开数据库失败: %v", err)
+		t.Fatalf("打开模型存储失败: %v", err)
 	}
-	defer db.Close()
+	defer store.Close()
 
-	rows, err := FetchAllMemories(db)
+	items, err := store.ListAllMemories()
 	if err != nil {
 		t.Fatalf("读取记忆失败: %v", err)
+	}
+	rows := make([]Row, 0, len(items))
+	for _, item := range items {
+		rows = append(rows, memoryRowFromModel(item))
 	}
 	if len(rows) != 2 {
 		t.Fatalf("测试数据数量异常: %d", len(rows))
 	}
 	allIDs := []int64{rows[0].ID, rows[1].ID}
 
-	embeddings, err := FetchMemoryEmbeddings(db, "project-a", allIDs)
+	embeddings, err := store.ListMemoryEmbeddings("project-a", allIDs)
 	if err != nil {
 		t.Fatalf("按项目读取向量失败: %v", err)
 	}
@@ -302,10 +315,12 @@ func TestFetchMemoryEmbeddingsIsolatedByProjectName(t *testing.T) {
 		t.Fatalf("项目A查询不应读到其他项目向量: %+v", embeddings)
 	}
 
-	projectARows, err := FetchMemoryRows(db, "project-a", "summary")
+	projectAItems, err := store.ListMemoriesByProjectAndType("project-a", "summary")
 	if err != nil {
 		t.Fatalf("读取项目A记忆失败: %v", err)
 	}
+	projectARows := make([]models.Memory, 0, len(projectAItems))
+	projectARows = append(projectARows, projectAItems...)
 	if len(projectARows) != 1 {
 		t.Fatalf("项目A记忆数量异常: %d", len(projectARows))
 	}

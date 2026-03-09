@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/nzlov/hive/internal/api"
 	"github.com/nzlov/hive/internal/config"
+	"github.com/nzlov/hive/internal/models"
 )
 
 const embeddingModelMetaKey = "embedding_model"
@@ -35,11 +35,11 @@ func NewService(cfg config.AppConfig) *Service {
 
 // Search 执行记忆检索并返回结构化结果，统一仅按项目名隔离单库中的不同项目数据。
 func (s *Service) Search(projectName string, queries []string, debug bool) (SearchResult, error) {
-	location, db, err := s.openProjectDB()
+	_, store, err := s.openProjectStore()
 	if err != nil {
 		return SearchResult{}, err
 	}
-	defer db.Close()
+	defer store.Close()
 	effectiveProjectName := normalizeProjectName(projectName)
 	var debugCommands []string
 	var debugCommandsRef *[]string
@@ -48,19 +48,19 @@ func (s *Service) Search(projectName string, queries []string, debug bool) (Sear
 		debugCommandsRef = &debugCommands
 	}
 	matcher := buildQueryMatcher(queries)
-	errorKeywordHits, err := s.collectHits(db, "error", location, effectiveProjectName, matcher, debugCommandsRef)
+	errorKeywordHits, err := s.collectHits(store, "error", effectiveProjectName, matcher, debugCommandsRef)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	summaryKeywordHits, err := s.collectHits(db, "summary", location, effectiveProjectName, matcher, debugCommandsRef)
+	summaryKeywordHits, err := s.collectHits(store, "summary", effectiveProjectName, matcher, debugCommandsRef)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	errorSemanticHits, err := s.collectSemanticHits(db, "error", location, effectiveProjectName, queries)
+	errorSemanticHits, err := s.collectSemanticHits(store, "error", effectiveProjectName, queries)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	summarySemanticHits, err := s.collectSemanticHits(db, "summary", location, effectiveProjectName, queries)
+	summarySemanticHits, err := s.collectSemanticHits(store, "summary", effectiveProjectName, queries)
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -76,45 +76,44 @@ func (s *Service) Search(projectName string, queries []string, debug bool) (Sear
 
 // Write 写入总结或错误记忆，并把写入人 userid 一并落库以便后续追溯来源。
 func (s *Service) Write(projectName, gitBranch, userID string, items []api.MemoryWriteItem) (string, error) {
-	location, db, err := s.openProjectDB()
+	_, store, err := s.openProjectStore()
 	if err != nil {
 		return "", err
 	}
-	defer db.Close()
-	tx, err := db.Begin()
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
+	defer store.Close()
 
 	now := time.Now().UTC()
 	timestampSeed := now.Unix()
 	effectiveProjectName := normalizeProjectName(projectName)
 	normalizedGitBranch := normalizeGitBranch(gitBranch)
 	rows := make([]Row, 0, len(items))
-	ids := make([]int64, 0, len(items))
+	memories := make([]models.Memory, 0, len(items))
 	for idx, item := range items {
 		itemTime := time.Unix(timestampSeed+int64(idx), 0).UTC()
-		row := Row{
+		memories = append(memories, models.Memory{
 			UserID:      strings.TrimSpace(userID),
 			ProjectName: effectiveProjectName,
 			Type:        strings.TrimSpace(item.Type),
 			Title:       sanitizeTitle(item.Title),
-			Tags:        EncodeTags(item.Tags),
+			Tags:        models.EncodeTags(item.Tags),
 			Summary:     strings.TrimSpace(item.Summary),
 			Content:     buildMemoryContent(effectiveProjectName, normalizedGitBranch, strings.TrimSpace(userID), item),
 			Timestamp:   itemTime.Format("20060102150405"),
 			CreatedAt:   itemTime.Format(time.RFC3339Nano),
-		}
-		memoryID, err := InsertMemory(tx, row)
-		if err != nil {
-			return "", err
-		}
-		row.ID = memoryID
-		rows = append(rows, row)
-		ids = append(ids, memoryID)
+		})
 	}
-	if s.provider.Enabled() && len(rows) > 0 {
+	err = store.WithTx(func(txStore *models.Store) error {
+		created, err := txStore.CreateMemories(memories)
+		if err != nil {
+			return err
+		}
+		rows = make([]Row, 0, len(created))
+		for _, item := range created {
+			rows = append(rows, memoryRowFromModel(item))
+		}
+		if !s.provider.Enabled() || len(rows) == 0 {
+			return nil
+		}
 		texts := make([]string, 0, len(rows))
 		for _, row := range rows {
 			texts = append(texts, BuildMemoryEmbeddingText(row))
@@ -122,65 +121,69 @@ func (s *Service) Write(projectName, gitBranch, userID string, items []api.Memor
 		log.Printf("开始为 %d 条记忆生成向量...", len(texts))
 		vectors, err := s.provider.EmbedTexts(texts)
 		if err != nil {
-			return "", err
+			return err
 		}
 		updatedAt := now.Format(time.RFC3339Nano)
-		for idx, memoryID := range ids {
+		embeddings := make([]models.MemoryEmbedding, 0, len(rows))
+		for idx, row := range rows {
 			if idx >= len(vectors) {
 				break
 			}
-			if err := UpsertMemoryEmbedding(tx, effectiveProjectName, memoryID, vectors[idx], updatedAt); err != nil {
-				return "", err
-			}
+			embeddings = append(embeddings, models.MemoryEmbedding{MemoryID: row.ID, ProjectName: effectiveProjectName, Vector: models.EncodeVector(vectors[idx]), UpdatedAt: updatedAt})
 		}
-		if err := SetMemoryMetadata(tx, embeddingModelMetaKey, s.provider.ModelName(), updatedAt); err != nil {
-			return "", err
+		if err := txStore.UpsertMemoryEmbeddings(embeddings); err != nil {
+			return err
 		}
-	}
-	if err := tx.Commit(); err != nil {
+		return txStore.SetMemoryMetadata(embeddingModelMetaKey, s.provider.ModelName(), updatedAt)
+	})
+	if err != nil {
 		return "", err
 	}
-	return DBPath(location.MemoryRoot), nil
+	return store.SourceLabel(), nil
 }
 
 // EnsureEmbeddingsReady 在服务启动阶段校验模型一致性，避免请求到来后才暴露旧向量问题。
 func (s *Service) EnsureEmbeddingsReady() (RebuildResult, error) {
-	location, db, err := s.openProjectDB()
+	location, store, err := s.openProjectStore()
 	if err != nil {
 		return RebuildResult{}, err
 	}
-	defer db.Close()
-	return s.rebuildEmbeddingsWithDB(location, db, false)
+	defer store.Close()
+	return s.rebuildEmbeddingsWithDB(location, store, false)
 }
 
-// openProjectDB 统一完成数据库连接，避免重复打开逻辑散落在各能力中。
-func (s *Service) openProjectDB() (Location, *sql.DB, error) {
+// openProjectStore 统一完成模型存储连接，避免重复打开逻辑散落在各能力中。
+func (s *Service) openProjectStore() (Location, *models.Store, error) {
 	location := ResolveLocation(s.config)
-	db, err := ConnectDB(location.MemoryRoot)
+	store, err := models.Open(s.config)
 	if err != nil {
 		return Location{}, nil, err
 	}
-	return location, db, nil
+	return location, store, nil
 }
 
 // rebuildEmbeddingsWithDB 在模型变化时全量重建向量，避免新旧维度混用。
-func (s *Service) rebuildEmbeddingsWithDB(location Location, db *sql.DB, force bool) (RebuildResult, error) {
+func (s *Service) rebuildEmbeddingsWithDB(location Location, store *models.Store, force bool) (RebuildResult, error) {
 	if !s.provider.Enabled() {
 		return RebuildResult{Changed: false, Message: "未配置嵌入模型，跳过重建。"}, nil
 	}
-	currentModel, err := GetMemoryMetadata(db, embeddingModelMetaKey)
+	currentModel, err := store.GetMemoryMetadata(embeddingModelMetaKey)
 	if err != nil {
 		return RebuildResult{}, err
 	}
-	rows, err := FetchAllMemories(db)
+	storedRows, err := store.ListAllMemories()
 	if err != nil {
 		return RebuildResult{}, err
 	}
-	var embeddingCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM memory_embeddings`).Scan(&embeddingCount); err != nil {
+	rows := make([]Row, 0, len(storedRows))
+	for _, item := range storedRows {
+		rows = append(rows, memoryRowFromModel(item))
+	}
+	embeddingCount, err := store.CountMemoryEmbeddings()
+	if err != nil {
 		return RebuildResult{}, err
 	}
-	if currentModel == s.provider.ModelName() && embeddingCount == len(rows) && !force {
+	if currentModel == s.provider.ModelName() && embeddingCount == int64(len(rows)) && !force {
 		return RebuildResult{Changed: false, Message: fmt.Sprintf("嵌入模型未变化，继续使用 %s。", s.provider.ModelName())}, nil
 	}
 	texts := make([]string, 0, len(rows))
@@ -193,31 +196,28 @@ func (s *Service) rebuildEmbeddingsWithDB(location Location, db *sql.DB, force b
 		return RebuildResult{}, err
 	}
 	log.Printf("向量生成完成，开始写入数据库...")
-	tx, err := db.Begin()
-	if err != nil {
-		return RebuildResult{}, err
-	}
-	defer tx.Rollback()
-	if err := DeleteAllMemoryEmbeddings(tx); err != nil {
-		return RebuildResult{}, err
-	}
 	rebuiltAt := time.Now().UTC().Format(time.RFC3339Nano)
 	total := len(rows)
-	for idx, row := range rows {
-		if idx >= len(vectors) {
-			break
+	err = store.WithTx(func(txStore *models.Store) error {
+		if err := txStore.DeleteAllMemoryEmbeddings(); err != nil {
+			return err
 		}
-		if err := UpsertMemoryEmbedding(tx, row.ProjectName, row.ID, vectors[idx], rebuiltAt); err != nil {
-			return RebuildResult{}, err
+		embeddings := make([]models.MemoryEmbedding, 0, len(rows))
+		for idx, row := range rows {
+			if idx >= len(vectors) {
+				break
+			}
+			embeddings = append(embeddings, models.MemoryEmbedding{MemoryID: row.ID, ProjectName: row.ProjectName, Vector: models.EncodeVector(vectors[idx]), UpdatedAt: rebuiltAt})
+			if (idx+1)%100 == 0 || idx+1 == total {
+				log.Printf("索引重建进度: %d/%d (%.1f%%)", idx+1, total, float64(idx+1)*100/float64(total))
+			}
 		}
-		if (idx+1)%100 == 0 || idx+1 == total {
-			log.Printf("索引重建进度: %d/%d (%.1f%%)", idx+1, total, float64(idx+1)*100/float64(total))
+		if err := txStore.UpsertMemoryEmbeddings(embeddings); err != nil {
+			return err
 		}
-	}
-	if err := SetMemoryMetadata(tx, embeddingModelMetaKey, s.provider.ModelName(), rebuiltAt); err != nil {
-		return RebuildResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
+		return txStore.SetMemoryMetadata(embeddingModelMetaKey, s.provider.ModelName(), rebuiltAt)
+	})
+	if err != nil {
 		return RebuildResult{}, err
 	}
 	_ = location
@@ -225,13 +225,17 @@ func (s *Service) rebuildEmbeddingsWithDB(location Location, db *sql.DB, force b
 }
 
 // collectHits 在数据库记录中筛选关键字命中，并按项目名隔离单库里的不同项目数据。
-func (s *Service) collectHits(db *sql.DB, source string, location Location, projectName string, matcher lineMatcher, debugCommands *[]string) ([]Hit, error) {
+func (s *Service) collectHits(store *models.Store, source string, projectName string, matcher lineMatcher, debugCommands *[]string) ([]Hit, error) {
 	if debugCommands != nil {
-		*debugCommands = append(*debugCommands, fmt.Sprintf("sqlite scan: %s [%s/%s]", DBPath(location.MemoryRoot), projectName, source))
+		*debugCommands = append(*debugCommands, fmt.Sprintf("%s scan: %s [%s/%s]", store.Driver(), store.SourceLabel(), projectName, source))
 	}
-	rows, err := FetchMemoryRows(db, projectName, source)
+	storedRows, err := store.ListMemoriesByProjectAndType(projectName, source)
 	if err != nil {
 		return nil, err
+	}
+	rows := make([]Row, 0, len(storedRows))
+	for _, item := range storedRows {
+		rows = append(rows, memoryRowFromModel(item))
 	}
 	now := time.Now().UTC()
 	hits := make([]Hit, 0)
@@ -249,7 +253,7 @@ func (s *Service) collectHits(db *sql.DB, source string, location Location, proj
 			continue
 		}
 		ts := parseTimestamp(row.Timestamp)
-		hit := Hit{ID: row.ID, Source: source, Path: fmt.Sprintf("%s#project=%s#id=%d", DBPath(location.MemoryRoot), row.ProjectName, row.ID), ProjectName: row.ProjectName, GitBranch: rowGitBranch, Timestamp: ts, Confidence: confidenceByAge(ts, now), Header: header}
+		hit := Hit{ID: row.ID, Source: source, Path: fmt.Sprintf("%s#project=%s#id=%d", store.SourceLabel(), row.ProjectName, row.ID), ProjectName: row.ProjectName, GitBranch: rowGitBranch, Timestamp: ts, Confidence: confidenceByAge(ts, now), Header: header}
 		if headerTitleMatch {
 			hit.FileContent = strings.TrimSpace(row.Content)
 		} else if len(bodyMatches) > 0 {
@@ -268,7 +272,7 @@ func (s *Service) collectHits(db *sql.DB, source string, location Location, proj
 }
 
 // collectSemanticHits 在关键字检索之外补充语义召回，并继续按项目名隔离结果。
-func (s *Service) collectSemanticHits(db *sql.DB, source string, location Location, projectName string, queries []string) ([]Hit, error) {
+func (s *Service) collectSemanticHits(store *models.Store, source string, projectName string, queries []string) ([]Hit, error) {
 	if !s.provider.Enabled() {
 		return nil, nil
 	}
@@ -280,9 +284,13 @@ func (s *Service) collectSemanticHits(db *sql.DB, source string, location Locati
 	if err != nil || len(vectors) == 0 {
 		return nil, err
 	}
-	rows, err := FetchMemoryRows(db, projectName, source)
+	storedRows, err := store.ListMemoriesByProjectAndType(projectName, source)
 	if err != nil {
 		return nil, err
+	}
+	rows := make([]Row, 0, len(storedRows))
+	for _, item := range storedRows {
+		rows = append(rows, memoryRowFromModel(item))
 	}
 	filteredRows := make([]Row, 0, len(rows))
 	memoryIDs := make([]int64, 0, len(rows))
@@ -290,7 +298,7 @@ func (s *Service) collectSemanticHits(db *sql.DB, source string, location Locati
 		filteredRows = append(filteredRows, row)
 		memoryIDs = append(memoryIDs, row.ID)
 	}
-	embeddings, err := FetchMemoryEmbeddings(db, projectName, memoryIDs)
+	embeddings, err := store.ListMemoryEmbeddings(projectName, memoryIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +316,7 @@ func (s *Service) collectSemanticHits(db *sql.DB, source string, location Locati
 		ts := parseTimestamp(row.Timestamp)
 		ageScore := confidenceByAge(ts, now)
 		header := readHeader(splitLines(row.Content))
-		hits = append(hits, Hit{ID: row.ID, Source: source, Path: fmt.Sprintf("%s#project=%s#id=%d", DBPath(location.MemoryRoot), row.ProjectName, row.ID), ProjectName: row.ProjectName, GitBranch: readGitBranch(header), Timestamp: ts, Confidence: math.Max(semanticScore, ageScore*0.5+semanticScore*0.5), FileContent: strings.TrimSpace(row.Content), Header: header})
+		hits = append(hits, Hit{ID: row.ID, Source: source, Path: fmt.Sprintf("%s#project=%s#id=%d", store.SourceLabel(), row.ProjectName, row.ID), ProjectName: row.ProjectName, GitBranch: readGitBranch(header), Timestamp: ts, Confidence: math.Max(semanticScore, ageScore*0.5+semanticScore*0.5), FileContent: strings.TrimSpace(row.Content), Header: header})
 	}
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].Confidence == hits[j].Confidence {
@@ -317,6 +325,22 @@ func (s *Service) collectSemanticHits(db *sql.DB, source string, location Locati
 		return hits[i].Confidence > hits[j].Confidence
 	})
 	return hits, nil
+}
+
+// memoryRowFromModel 收敛模型层到业务层的数据映射，避免搜索逻辑直接依赖 GORM 结构体。
+func memoryRowFromModel(item models.Memory) Row {
+	return Row{
+		ID:          item.ID,
+		UserID:      item.UserID,
+		ProjectName: item.ProjectName,
+		Type:        item.Type,
+		Title:       item.Title,
+		Tags:        item.Tags,
+		Summary:     item.Summary,
+		Content:     item.Content,
+		Timestamp:   item.Timestamp,
+		CreatedAt:   item.CreatedAt,
+	}
 }
 
 // mergeHits 关键字命中优先保留原片段展示，再补上语义召回缺失的结果。

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nzlov/hive/internal/config"
+	"github.com/nzlov/hive/internal/models"
 )
 
 var frontMatterRegexp = regexp.MustCompile(`\A---\n.*?\n---\n?`)
@@ -214,7 +215,7 @@ func CosineSimilarity(left, right []float64) float64 {
 
 // formatEmbeddingTags 把标签整理成自然文本，减少 JSON 符号给向量引入无意义噪声。
 func formatEmbeddingTags(raw string) string {
-	return strings.Join(DecodeTags(raw), "、")
+	return strings.Join(models.DecodeTags(raw), "、")
 }
 
 // stripFrontMatter 去掉持久化内容中的 YAML 头部，避免元数据重复稀释正文语义。
