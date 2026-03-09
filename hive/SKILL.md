@@ -13,7 +13,7 @@ description: Trigger this skill by default for search or analysis tasks. prior-c
 
 ## 检索记忆
 
-1. 查询支持数组：`--query a b` 或 `--query '["a","b"]'`。
+1. 查询使用关键词或描述，允许多个。
 2. 按时间倒序（新到旧）。
 3. 输出为 Markdown，多条记录用 `---` 分隔。
 4. 返回包含：
@@ -29,7 +29,7 @@ description: Trigger this skill by default for search or analysis tasks. prior-c
 使用命令：
 
 ```bash
-python3 scripts/main.py search --root '<项目根目录>' --query '["关键词1","<关键词2>"]'
+python3 scripts/main.py search --root '<项目根目录>' --query '["关键词","<描述>"]'
 ```
 
 ## 写入总结记忆
