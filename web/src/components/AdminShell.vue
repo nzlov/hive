@@ -1,6 +1,6 @@
 <template>
   <div class="min-h-screen px-4 py-6 sm:px-6 lg:px-8">
-    <div class="mx-auto flex max-w-7xl flex-col gap-6 lg:flex-row">
+    <div class="mx-auto flex w-full max-w-[92vw] flex-col gap-6 lg:flex-row">
       <aside class="panel overflow-hidden lg:w-80">
         <div class="bg-ink px-6 py-8 text-white">
           <p class="text-xs uppercase tracking-[0.4em] text-white/60">Hive Admin</p>
