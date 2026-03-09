@@ -451,7 +451,10 @@ def markdown_fence_for(text: str) -> str:
 def render_hit(hit: dict[str, Any], index: int) -> list[str]:
     """统一渲染单条命中，保证脚本筛选后仍保持服务端原有展示结构。"""
 
-    lines = [f"### Record {index}", f"- source: {hit.get('source', '')}", f"- path: {hit.get('path', '')}"]
+    lines = [f"### Record {index}", f"- source: {hit.get('source', '')}"]
+    path = str(hit.get("path", "")).strip()
+    if path:
+        lines.append(f"- path: {path}")
     project_name = str(hit.get("project_name", "")).strip()
     if project_name:
         lines.append(f"- project: {project_name}")

@@ -74,6 +74,9 @@ func TestRouterWriteAndSearch(t *testing.T) {
 	if len(searchResponse.ErrorHits) != 1 || searchResponse.ErrorHits[0].ProjectName != "router-alias" {
 		t.Fatalf("搜索响应未返回项目名: %+v", searchResponse.ErrorHits)
 	}
+	if bytes.Contains(searchRecorder.Body.Bytes(), []byte(`"path"`)) {
+		t.Fatalf("搜索响应不应再暴露 path 字段: %s", searchRecorder.Body.String())
+	}
 	if searchResponse.ErrorHits[0].GitBranch != "feature/router" {
 		t.Fatalf("搜索响应未返回 git 分支: %+v", searchResponse.ErrorHits[0])
 	}
