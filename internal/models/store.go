@@ -9,8 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	glebarezsqlite "github.com/glebarez/sqlite"
+	"github.com/ncruces/go-sqlite3/gormlite"
 	"github.com/nzlov/hive/internal/config"
+	_ "github.com/nzlov/hive/internal/sqlitevecembed"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -23,6 +24,7 @@ type Store struct {
 	db          *gorm.DB
 	driver      string
 	sourceLabel string
+	vector      VectorBackend
 }
 
 type storeContextKey struct{}
@@ -43,6 +45,7 @@ func Open(cfg config.AppConfig) (*Store, error) {
 		return nil, err
 	}
 	store := &Store{db: db, driver: driver, sourceLabel: sourceLabel}
+	store.vector = newVectorBackend(db, driver)
 	if err := store.migrate(); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -101,7 +104,9 @@ func (s *Store) WithTx(fn func(*Store) error) error {
 		return fmt.Errorf("store 未初始化")
 	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		return fn(&Store{db: tx, driver: s.driver, sourceLabel: s.sourceLabel})
+		txStore := &Store{db: tx, driver: s.driver, sourceLabel: s.sourceLabel}
+		txStore.vector = newVectorBackend(tx, s.driver)
+		return fn(txStore)
 	})
 }
 
@@ -120,7 +125,7 @@ func buildDialector(cfg config.AppConfig) (string, gorm.Dialector, string, error
 	case "sqlite":
 		if strings.TrimSpace(cfg.DatabaseConfig.DSN) != "" {
 			dsn := strings.TrimSpace(cfg.DatabaseConfig.DSN)
-			return "sqlite", glebarezsqlite.Open(dsn), dsn, nil
+			return "sqlite", gormlite.Open(dsn), dsn, nil
 		}
 		return buildSQLiteDialector(cfg.MemoryRoot)
 	case "postgres":
@@ -140,7 +145,7 @@ func buildSQLiteDialector(memoryRoot string) (string, gorm.Dialector, string, er
 		return "", nil, "", err
 	}
 	path := MemoryDBPath(memoryRoot)
-	return "sqlite", glebarezsqlite.Open(path), path, nil
+	return "sqlite", gormlite.Open(path), path, nil
 }
 
 // normalizeDriver 收敛驱动别名，避免配置层出现 postgres 和 postgresql 两套判断。

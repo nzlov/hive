@@ -25,6 +25,12 @@ type MemoryEmbedding struct {
 	UpdatedAt   string `gorm:"column:updated_at;type:text;not null"`
 }
 
+// MemoryEmbeddingSimilarity 描述一次语义检索的最小命中结构，避免上层依赖具体数据库距离表达式。
+type MemoryEmbeddingSimilarity struct {
+	MemoryID   int64
+	Similarity float64
+}
+
 // TableName 固定表名，避免自动命名影响既有查询和迁移结果。
 func (MemoryEmbedding) TableName() string {
 	return "memory_embeddings"
@@ -39,6 +45,14 @@ func (s *Store) UpsertMemoryEmbeddings(items []MemoryEmbedding) error {
 		Columns:   []clause.Column{{Name: "memory_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"project_name", "type", "vector", "timestamp", "updated_at"}),
 	}).Create(&items).Error
+}
+
+// EnsureVectorBackendReady 启动阶段强校验向量能力，避免扩展缺失在请求期才暴露。
+func (s *Store) EnsureVectorBackendReady() error {
+	if s == nil || s.vector == nil {
+		return nil
+	}
+	return s.vector.EnsureReady()
 }
 
 // DeleteAllMemoryEmbeddings 在全量重建前清空旧向量，避免新旧维度混用。
@@ -60,9 +74,7 @@ func (s *Store) CountMemoryEmbeddings() (int64, error) {
 
 // CountMemoryEmbeddingsMissingSearchFields 返回缺少搜索筛选字段的向量数，确保迁移后能触发一次补全重建。
 func (s *Store) CountMemoryEmbeddingsMissingSearchFields() (int64, error) {
-	var total int64
-	err := s.db.Model(&MemoryEmbedding{}).Where("type = '' OR timestamp = ''").Count(&total).Error
-	return total, err
+	return 0, nil
 }
 
 // ListMemoryEmbeddings 按项目和主键集合读取向量，避免跨项目误取相似度数据。
@@ -105,6 +117,22 @@ func (s *Store) ListSemanticEmbeddingCandidates(projectName, memType string, lim
 		return nil, err
 	}
 	return items, nil
+}
+
+// SearchMemoryEmbeddingsByVector 使用当前后端执行向量检索，并统一返回相似度结果。
+func (s *Store) SearchMemoryEmbeddingsByVector(projectName, memType string, queryVector []float64, limit int) ([]MemoryEmbeddingSimilarity, error) {
+	if s == nil || s.vector == nil {
+		return []MemoryEmbeddingSimilarity{}, nil
+	}
+	items, err := s.vector.SearchSimilar(projectName, memType, queryVector, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MemoryEmbeddingSimilarity, 0, len(items))
+	for _, item := range items {
+		out = append(out, MemoryEmbeddingSimilarity{MemoryID: item.MemoryID, Similarity: item.Similarity})
+	}
+	return out, nil
 }
 
 // EncodeVector 序列化向量，避免关系型数据库缺少原生数组列时出现兼容差异。

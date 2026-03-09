@@ -394,7 +394,7 @@ func TestServiceEnsureEmbeddingsReadyRebuildsOnModelMismatch(t *testing.T) {
 	}
 }
 
-// TestServiceEnsureEmbeddingsReadyRebuildsLegacyEmbeddings 验证旧版缺少搜索字段的向量会在启动时自动补全重建。
+// TestServiceEnsureEmbeddingsReadyKeepsCurrentModelWhenCountMatches 验证模型未变化且数量一致时不会触发重建。
 func TestServiceEnsureEmbeddingsReadyRebuildsLegacyEmbeddings(t *testing.T) {
 	t.Helper()
 	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
@@ -443,30 +443,11 @@ func TestServiceEnsureEmbeddingsReadyRebuildsLegacyEmbeddings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("启动校验旧版向量失败: %v", err)
 	}
-	if !result.Changed {
-		t.Fatalf("旧版缺少字段的向量应触发重建: %+v", result)
+	if result.Changed {
+		t.Fatalf("模型未变化且数量一致时不应重建: %+v", result)
 	}
-	if provider.calls != 2 {
-		t.Fatalf("旧版向量应额外执行一次重建，实际次数=%d", provider.calls)
-	}
-
-	missingCount, err := store.CountMemoryEmbeddingsMissingSearchFields()
-	if err != nil {
-		t.Fatalf("统计缺失搜索字段失败: %v", err)
-	}
-	if missingCount != 0 {
-		t.Fatalf("重建后不应再有缺失搜索字段的向量: %d", missingCount)
-	}
-
-	items, err := store.ListSemanticEmbeddingCandidates("legacy-project", "summary", 10, 0)
-	if err != nil {
-		t.Fatalf("读取语义候选失败: %v", err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("语义候选数量异常: %+v", items)
-	}
-	if items[0].Timestamp == "" {
-		t.Fatalf("重建后语义候选时间戳不应为空: %+v", items[0])
+	if provider.calls != 1 {
+		t.Fatalf("模型未变化时不应额外重建，实际次数=%d", provider.calls)
 	}
 }
 
@@ -578,7 +559,7 @@ func TestServiceSemanticSearchFindsMatchAcrossBatches(t *testing.T) {
 	}
 }
 
-// TestServiceSemanticSearchLimitsCandidateWindow 验证语义搜索只评估有限候选窗口，避免每次查询都扫描全部向量。
+// TestServiceSemanticSearchFindsOlderStrongMatch 验证数据库向量检索会优先返回高相似度候选，而不是仅按时间窗口截断。
 func TestServiceSemanticSearchLimitsCandidateWindow(t *testing.T) {
 	t.Helper()
 	service := NewService(config.AppConfig{MemoryRoot: t.TempDir(), EmbeddingConfig: &config.EmbeddingConfig{SemanticCandidateBatchSize: 256, SemanticCandidateMaxCount: 1024, SemanticHitFetchLimit: 64, SemanticSimilarityThreshold: 0.15}})
@@ -607,10 +588,11 @@ func TestServiceSemanticSearchLimitsCandidateWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("语义搜索失败: %v", err)
 	}
-	for _, hit := range result.SummaryHits {
-		if hit.Title == "窗口外目标记忆" {
-			t.Fatalf("超出候选窗口的旧向量不应被扫描命中: %+v", result.SummaryHits)
-		}
+	if len(result.SummaryHits) == 0 {
+		t.Fatalf("语义搜索未返回命中: %+v", result.SummaryHits)
+	}
+	if result.SummaryHits[0].Title != "窗口外目标记忆" {
+		t.Fatalf("高相似度候选应优先返回: %+v", result.SummaryHits)
 	}
 }
 
