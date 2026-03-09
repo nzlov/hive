@@ -9,7 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	glebarezsqlite "github.com/glebarez/sqlite"
+	_ "github.com/ncruces/go-sqlite3/embed"
+	"github.com/ncruces/go-sqlite3/gormlite"
 	"github.com/nzlov/hive/internal/config"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -120,7 +121,7 @@ func buildDialector(cfg config.AppConfig) (string, gorm.Dialector, string, error
 	case "sqlite":
 		if strings.TrimSpace(cfg.DatabaseConfig.DSN) != "" {
 			dsn := strings.TrimSpace(cfg.DatabaseConfig.DSN)
-			return "sqlite", glebarezsqlite.Open(dsn), dsn, nil
+			return "sqlite", gormlite.Open(dsn), dsn, nil
 		}
 		return buildSQLiteDialector(cfg.MemoryRoot)
 	case "postgres":
@@ -140,7 +141,7 @@ func buildSQLiteDialector(memoryRoot string) (string, gorm.Dialector, string, er
 		return "", nil, "", err
 	}
 	path := MemoryDBPath(memoryRoot)
-	return "sqlite", glebarezsqlite.Open(path), path, nil
+	return "sqlite", gormlite.Open(path), path, nil
 }
 
 // normalizeDriver 收敛驱动别名，避免配置层出现 postgres 和 postgresql 两套判断。
