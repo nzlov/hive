@@ -44,7 +44,7 @@ python3 scripts/main.py search --query '["关键词1","<关键词2>"]'
 - 只有当用户明确要求“总结并记忆”“保存记忆”“写入总结记忆”等语义时，才调用脚本写入总结记忆。
 - 一次总结可以拆成多条记忆，按不同目标、问题、模块或结论分别写入，避免把无关内容混成一条。
 - 如果当前会话里之前已经保存过记忆，那么再次总结时应从上次记忆之后的新内容开始续写，不要重复总结已保存部分。
-- `--context` 传入最终 Markdown 正文，注意shell环境转义。
+- `context` 字段传入最终 Markdown 正文，注意 shell 环境转义。
 - 使用具体实体作为小标题，不使用泛化栏目名。
 - 小标题优先覆盖具体文件名、方法名、逻辑点（可补充模块、流程、结论）。
 - 示例：`## src/order/service.go`、`## BuildOrderSnapshot`、`## 支付成功后进入已确认状态`。
@@ -53,17 +53,6 @@ python3 scripts/main.py search --query '["关键词1","<关键词2>"]'
 
 使用命令：
 
-* 单条记忆
-```bash
-python3 scripts/main.py write \
-  --type summary \
-  --title '自动标题' \
-  --tags '业务标签,重要文件,重要方法' \
-  --summary '一句话简介' \
-  --context '完整Markdown正文'
-```
-
-* 多条记忆
 ```bash
 python3 scripts/main.py write \
   --items-json '[
@@ -91,28 +80,32 @@ python3 scripts/main.py write \
 3. 会话中一旦发生错误且最终已经定位或修复，错误记忆必须写入，避免以后重复犯同样的问题。
 4. 当总结记忆被触发且会话有错误时，错误记忆写入不可跳过。
 5. 如果一次处理里有多个独立错误或多个根因，应拆成多条错误记忆分别写入。
-6. `--context` 需覆盖：错误现象、触发条件、根因、修复结论。
+6. 每条记忆的 `context` 字段需覆盖：错误现象、触发条件、根因、修复结论。
 
 使用命令：
 
 ```bash
 python3 scripts/main.py write \
-  --type error \
-  --title '自动标题' \
-  --tags '业务标签,错误类型,相关模块' \
-  --summary '一句话简介' \
-  --context '完整Markdown正文'
+  --items-json '[
+    {
+      "type": "error",
+      "title": "自动标题",
+      "tags": ["业务标签", "错误类型", "相关模块"],
+      "summary": "一句话简介",
+      "context": "完整Markdown正文"
+    }
+  ]'
 ```
 
 ## Shell 注意事项
 
-1. `--context` 中若包含反引号 `` `...` ``，shell 可能误执行。
-2. 建议用单引号包裹 `--context`；若正文含单引号，先做 shell 转义。
+1. `--items-json` 中若包含反引号 `` `...` ``，shell 可能误执行。
+2. 建议用单引号包裹 `--items-json`；若 JSON 字符串内含单引号，先做 shell 转义。
 3. 通过 OpenCode `bash` 工具调用时，始终提供 `command` 与 `description`。
 
 ## 正文生成样例
 
-1. 总结记忆正文样例（`--context`）：
+1. 总结记忆正文样例（`context` 字段）：
 
 ```markdown
 ## Summary
@@ -135,7 +128,7 @@ python3 scripts/main.py write \
 - 结论: 该流转是对账任务的前置条件。
 ```
 
-2. 错误记忆正文样例（`--context`）：
+2. 错误记忆正文样例（`context` 字段）：
 
 ````markdown
 ## Summary

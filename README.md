@@ -81,14 +81,6 @@ python3 scripts/main.py search --query '["关键词1","关键词2"]'
 - 如果当前会话里之前已经保存过记忆，再次总结时应从上次已保存内容之后开始续写，避免重复总结。
 
 ```bash
-python3 scripts/main.py write \
-  --type summary \
-  --title '自动标题' \
-  --tags '业务标签,重要文件,重要方法' \
-  --summary '一句话简介' \
-  --context '完整Markdown正文'
-
-python3 scripts/main.py write \
   --items-json '[
     {
       "type": "summary",
@@ -107,7 +99,7 @@ python3 scripts/main.py write \
   ]'
 ```
 
-`--items-json` 支持对象或对象数组，单次请求里可以混合写入多条 `summary` / `error` 记忆。
+`--items-json` 只支持对象数组，单次请求里可以混合写入多条 `summary` / `error` 记忆。
 
 建议正文结构：
 
@@ -134,11 +126,15 @@ python3 scripts/main.py write \
 
 ```bash
 python3 scripts/main.py write \
-  --type error \
-  --title '自动标题' \
-  --tags '业务标签,错误类型,相关模块' \
-  --summary '一句话简介' \
-  --context '完整Markdown正文'
+  --items-json '[
+    {
+      "type": "error",
+      "title": "自动标题",
+      "tags": ["业务标签", "错误类型", "相关模块"],
+      "summary": "一句话简介",
+      "context": "完整Markdown正文"
+    }
+  ]'
 ```
 
 建议至少包含：
@@ -157,11 +153,18 @@ python3 scripts/main.py write \
 ~/.config/memorymanager/config.json
 ```
 
-如果配置文件不存在，脚本会自动创建默认配置：
+脚本请求服务端时会优先读取默认服务地址和项目配置：
 
 ```json
 {
   "memory_storage_path": "/home/当前用户/.local/share/memorymanager",
+  "default_server_base_url": "http://127.0.0.1:8080",
+  "projects": {
+    "/path/to/project": {
+      "server_url": "http://127.0.0.1:18080",
+      "alias": "project-alias"
+    }
+  },
   "server": {
     "base_url": "http://127.0.0.1:8080",
     "listen_addr": ":8080"
@@ -186,6 +189,13 @@ python3 scripts/main.py write \
 ```json
 {
   "memory_storage_path": "/data/memories",
+  "default_server_base_url": "http://127.0.0.1:19090",
+  "projects": {
+    "/home/dev/workspaces/payment-service": {
+      "server_url": "http://10.0.0.12:28080",
+      "alias": "payment-service-prod"
+    }
+  },
   "server": {
     "base_url": "http://127.0.0.1:19090",
     "listen_addr": ":19090"
@@ -202,6 +212,10 @@ python3 scripts/main.py write \
 字段说明：
 
 - `memory_storage_path`：外挂记忆根目录。
+- `default_server_base_url`：脚本默认请求的服务地址；项目未单独配置时使用它。
+- `projects`：项目级请求配置，key 建议使用项目绝对路径。
+- `projects.<项目>.server_url`：该项目请求时覆盖默认服务地址。
+- `projects.<项目>.alias`：该项目请求远程服务时附带的项目别名，对应请求里的 `project_name`。
 - `server.base_url`：记忆服务端地址，`scripts/` 子命令通过它访问 Gin 服务。
 - `server.listen_addr`：Gin 服务端监听地址，默认 `:8080`。
 - `embedding.base_url`：嵌入服务地址，使用 OpenAI Embeddings API 路径结构。
@@ -239,17 +253,10 @@ python3 scripts/main.py write \
 - 嵌入文本会把标签整理为自然语言而不是 JSON，并剔除持久化内容里的 YAML 头部，减少重复噪声。
 - 总结记忆和错误记忆使用不同模板：前者突出主题、摘要和结论，后者突出问题、现象摘要和排障记录。
 
-可以手动执行全量重建：
-
-```bash
-python3 scripts/main.py rebuild-embeddings --root .
-python3 scripts/main.py rebuild-embeddings --root . --force
-```
-
 ## 使用建议
 
 - 在任何搜索、分析、排查任务开始前先执行一次检索。
-- `--context` 建议使用 Markdown，方便后续按标题检索。
+- `--items-json` 里的 `context` 建议使用 Markdown，方便后续按标题检索。
 - 标题尽量使用具体文件名、方法名、业务结论，避免泛化标题。
 - 若 shell 参数中包含反引号或单引号，注意转义。
 - 如果希望项目独立存储记忆，先在项目根目录创建 `.memory/` 目录。
@@ -269,15 +276,13 @@ python3 scripts/main.py rebuild-embeddings --root . --force
 python3 scripts/main.py search --query '["订单","支付","超时"]'
 
 python3 scripts/main.py write \
-  --type summary \
-  --title '支付超时排查结论' \
-  --tags '支付,超时,订单' \
-  --summary '记录支付超时排查后的核心结论。' \
-  --context '## Summary
-
-- 详情: 支付超时主要由重试任务堆积导致。
-
-## retry_worker.py
-
-- 详情: 重试队列消费速度不足是核心瓶颈。'
+  --items-json '[
+    {
+      "type": "summary",
+      "title": "支付超时排查结论",
+      "tags": ["支付", "超时", "订单"],
+      "summary": "记录支付超时排查后的核心结论。",
+      "context": "## Summary\n\n- 详情: 支付超时主要由重试任务堆积导致。\n\n## retry_worker.py\n\n- 详情: 重试队列消费速度不足是核心瓶颈。"
+    }
+  ]'
 ```

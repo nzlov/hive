@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Any
 from urllib import error, request
@@ -26,26 +25,19 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--query", nargs="+", required=True, help="搜索关键词或 JSON 数组")
     search_parser.add_argument("-debug", "--debug", action="store_true", help="输出调试信息")
 
-    write_parser = subparsers.add_parser("write")
+    write_parser = subparsers.add_parser("write", help="批量写入多条记忆")
     write_parser.add_argument("--root", default=".", help="项目根目录")
-    write_parser.add_argument("--items-json", default="", help="批量写入 JSON")
-    write_parser.add_argument("--type", choices=["summary", "error"], help="记忆类型")
-    write_parser.add_argument("--title", help="记忆标题")
-    write_parser.add_argument("--tags", default="", help="逗号分隔标签")
-    write_parser.add_argument("--summary", default="", help="一句话摘要")
-    write_parser.add_argument("--context", help="Markdown 正文")
-    write_parser.add_argument("--error-code", default="", help="已废弃")
-    write_parser.add_argument("--fix-code", default="", help="已废弃")
-
-    rebuild_parser = subparsers.add_parser("rebuild-embeddings")
-    rebuild_parser.add_argument("--root", default=".", help="项目根目录")
-    rebuild_parser.add_argument("--force", action="store_true", help="强制重建")
+    write_parser.add_argument(
+        "--items-json",
+        required=True,
+        help="记忆对象 JSON 数组，单次可混合写入多条 summary/error",
+    )
 
     return parser
 
 
 def load_config() -> dict[str, Any]:
-    """脚本只读取服务端地址配置，缺失时回退默认值避免阻塞调用。"""
+    """脚本只读取本地配置，缺失时回退默认值避免阻塞调用。"""
 
     if not CONFIG_PATH.exists():
         return {}
@@ -56,8 +48,13 @@ def load_config() -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def resolve_server_base_url(config: dict[str, Any]) -> str:
-    """优先读取配置文件里的服务地址，避免脚本和服务端地址硬编码漂移。"""
+def resolve_default_server_base_url(config: dict[str, Any]) -> str:
+    """优先读取默认服务地址配置，避免脚本和服务端地址硬编码漂移。"""
+
+    for key in ("default_server_base_url", "defaultServerBaseUrl"):
+        value = config.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.rstrip("/")
 
     server = config.get("server")
     if isinstance(server, dict):
@@ -76,6 +73,67 @@ def resolve_project_root(root: str) -> str:
     """统一把项目根目录转成绝对路径，避免服务端按不同相对路径落不同项目维度。"""
 
     return str(Path(root).resolve())
+
+
+def lookup_project_config(config: dict[str, Any], project_root: str) -> dict[str, Any]:
+    """按项目根目录匹配项目配置，优先保证同一项目命中稳定配置。"""
+
+    projects = config.get("projects")
+    if not isinstance(projects, dict):
+        return {}
+
+    project_name = Path(project_root).name
+    for key in (project_root, str(Path(project_root)), project_name):
+        value = projects.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def resolve_server_value(payload: dict[str, Any]) -> str:
+    """统一兼容多种服务地址字段命名，减少配置迁移成本。"""
+
+    server = payload.get("server")
+    if isinstance(server, dict):
+        for key in ("base_url", "baseUrl", "url", "address"):
+            value = server.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.rstrip("/")
+
+    for key in (
+        "server_url",
+        "serverUrl",
+        "service_url",
+        "serviceUrl",
+        "base_url",
+        "baseUrl",
+        "url",
+        "address",
+    ):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.rstrip("/")
+    return ""
+
+
+def resolve_project_alias(project_config: dict[str, Any]) -> str:
+    """兼容项目别名的不同键名，避免配置字段调整影响调用链路。"""
+
+    for key in ("alias", "project_alias", "projectAlias", "project_name", "projectName", "name"):
+        value = project_config.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def resolve_request_target(config: dict[str, Any], root: str) -> tuple[str, str, str]:
+    """根据项目配置决定请求地址和远程项目名，保证本地与远程路由一致。"""
+
+    project_root = resolve_project_root(root)
+    project_config = lookup_project_config(config, project_root)
+    base_url = resolve_server_value(project_config) or resolve_default_server_base_url(config)
+    project_alias = resolve_project_alias(project_config)
+    return project_root, base_url, project_alias
 
 
 def parse_queries(raw_queries: list[str]) -> list[str]:
@@ -112,32 +170,21 @@ def normalize_tags(raw_tags: object) -> list[str]:
 
 
 def parse_write_items(args: argparse.Namespace) -> list[dict[str, Any]]:
-    """统一解析单条和批量写入参数，避免服务端收到不完整请求。"""
+    """写入只接受记忆数组，避免继续维护单条与批量两套协议。"""
 
     if not args.items_json.strip():
-        if not args.type or not args.title or not args.context:
-            raise SystemExit("单条写入时必须提供 --type、--title 和 --context")
-        return [
-            {
-                "type": args.type,
-                "title": args.title.strip(),
-                "tags": split_tags(args.tags),
-                "summary": args.summary.strip(),
-                "context": args.context,
-            }
-        ]
+        raise SystemExit("--items-json 不能为空，且必须是记忆对象数组")
 
     try:
         payload = json.loads(args.items_json)
     except json.JSONDecodeError as exc:
         raise SystemExit("--items-json 必须是合法 JSON") from exc
 
-    payload_items = [payload] if isinstance(payload, dict) else payload
-    if not isinstance(payload_items, list):
-        raise SystemExit("--items-json 必须是对象或对象数组")
+    if not isinstance(payload, list):
+        raise SystemExit("--items-json 必须是对象数组")
 
     items: list[dict[str, Any]] = []
-    for index, item in enumerate(payload_items, start=1):
+    for index, item in enumerate(payload, start=1):
         if not isinstance(item, dict):
             raise SystemExit(f"--items-json 第 {index} 项必须是对象")
         mem_type = str(item.get("type", "")).strip()
@@ -195,7 +242,16 @@ def post_json(base_url: str, path: str, payload: dict[str, Any]) -> dict[str, An
     return payload
 
 
-def run_search(args: argparse.Namespace, base_url: str) -> int:
+def build_request_payload(project_root: str, project_alias: str, **extra: Any) -> dict[str, Any]:
+    """只在配置了项目别名时传远程项目名，避免影响未升级的本地调用。"""
+
+    payload: dict[str, Any] = {"project_root": project_root, **extra}
+    if project_alias:
+        payload["project_name"] = project_alias
+    return payload
+
+
+def run_search(args: argparse.Namespace, project_root: str, base_url: str, project_alias: str) -> int:
     """搜索子命令只整理输入并打印服务端返回结果，保持脚本职责轻量。"""
 
     queries = parse_queries(args.query)
@@ -204,44 +260,26 @@ def run_search(args: argparse.Namespace, base_url: str) -> int:
     response = post_json(
         base_url,
         "/api/v1/memories/search",
-        {
-            "project_root": resolve_project_root(args.root),
-            "queries": queries,
-            "debug": bool(args.debug),
-        },
+        build_request_payload(
+            project_root,
+            project_alias,
+            queries=queries,
+            debug=bool(args.debug),
+        ),
     )
     print(str(response.get("markdown", "")), end="")
     return 0
 
 
-def run_write(args: argparse.Namespace, base_url: str) -> int:
+def run_write(args: argparse.Namespace, project_root: str, base_url: str, project_alias: str) -> int:
     """写入子命令只负责参数兼容和输出结果，把持久化逻辑完全留给服务端。"""
 
-    _ = (args.error_code, args.fix_code)
     response = post_json(
         base_url,
         "/api/v1/memories/write",
-        {
-            "project_root": resolve_project_root(args.root),
-            "items": parse_write_items(args),
-        },
+        build_request_payload(project_root, project_alias, items=parse_write_items(args)),
     )
     print(str(response.get("database_path", "")))
-    return 0
-
-
-def run_rebuild(args: argparse.Namespace, base_url: str) -> int:
-    """重建子命令通过 HTTP 触发服务端维护动作，避免脚本继续感知底层存储。"""
-
-    response = post_json(
-        base_url,
-        "/api/v1/memories/rebuild-embeddings",
-        {
-            "project_root": resolve_project_root(args.root),
-            "force": bool(args.force),
-        },
-    )
-    print(str(response.get("message", "")))
     return 0
 
 
@@ -254,13 +292,11 @@ def main() -> int:
         parser.print_help()
         return 1
 
-    base_url = resolve_server_base_url(load_config())
+    project_root, base_url, project_alias = resolve_request_target(load_config(), args.root)
     if args.command == "search":
-        return run_search(args, base_url)
+        return run_search(args, project_root, base_url, project_alias)
     if args.command == "write":
-        return run_write(args, base_url)
-    if args.command == "rebuild-embeddings":
-        return run_rebuild(args, base_url)
+        return run_write(args, project_root, base_url, project_alias)
     parser.print_help()
     return 1
 
