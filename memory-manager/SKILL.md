@@ -29,12 +29,14 @@ description: Trigger this skill by default for search or analysis tasks. prior-c
 - `snippets`（数组，含 `line_range.start/end` 与 `content`）
 - `file_content`（仅 `title` 命中时返回完整文件）
 
+在调用脚本前，确保仓库根目录的服务端已启动：`go run ./cmd/memory-server`。
+
 使用命令：
 
 ```bash
-go run ./scripts search-memory --query '关键词'
-go run ./scripts search-memory --query '关键词1' --query '<关键词2>'
-go run ./scripts search-memory --query '["关键词1","<关键词2>"]'
+go run ./scripts search --query '关键词'
+go run ./scripts search --query '关键词1' --query '<关键词2>'
+go run ./scripts search --query '["关键词1","<关键词2>"]'
 ```
 
 ## 写入总结记忆
@@ -53,7 +55,7 @@ go run ./scripts search-memory --query '["关键词1","<关键词2>"]'
 
 * 单条记忆
 ```bash
-go run ./scripts write-memory \
+go run ./scripts write \
   --type summary \
   --title '自动标题' \
   --tags '业务标签,重要文件,重要方法' \
@@ -63,7 +65,7 @@ go run ./scripts write-memory \
 
 * 多条记忆
 ```bash
-go run ./scripts write-memory \
+go run ./scripts write \
   --items-json '[
     {
       "type": "summary",
@@ -94,7 +96,7 @@ go run ./scripts write-memory \
 使用命令：
 
 ```bash
-go run ./scripts write-memory \
+go run ./scripts write \
   --type error \
   --title '自动标题' \
   --tags '业务标签,错误类型,相关模块' \

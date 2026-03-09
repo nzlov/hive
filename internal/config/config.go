@@ -1,0 +1,306 @@
+package config
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+const (
+	defaultServerBaseURL    = "http://127.0.0.1:8080"
+	defaultServerListenAddr = ":8080"
+)
+
+// EmbeddingConfig 统一描述嵌入配置，避免不同模块各自解释字段语义。
+type EmbeddingConfig struct {
+	BaseURL        string
+	APIKey         string
+	Model          string
+	TimeoutSeconds float64
+}
+
+// AppConfig 统一描述脚本与服务端共用配置，降低多入口行为漂移风险。
+type AppConfig struct {
+	ConfigPath       string
+	StorageRoot      string
+	ServerBaseURL    string
+	ServerListenAddr string
+	EmbeddingConfig  *EmbeddingConfig
+}
+
+var (
+	storagePathKeys      = []string{"memory_storage_path", "memoryStorePath", "storage_path", "storagePath"}
+	serverSectionKeys    = []string{"server"}
+	serverBaseURLKeys    = []string{"base_url", "baseUrl", "url", "address"}
+	serverListenAddrKeys = []string{"listen_addr", "listenAddr", "listen_address", "listenAddress", "bind", "bind_addr", "bindAddr"}
+	serverFlatURLKeys    = []string{"server_url", "serverUrl", "service_url", "serviceUrl"}
+	serverFlatListenKeys = []string{"server_listen_addr", "serverListenAddr", "listen_addr", "listenAddr"}
+	embeddingSectionKeys = []string{"embedding", "embeddings"}
+	embeddingBaseURLKeys = []string{"base_url", "baseUrl", "url", "endpoint"}
+	embeddingAPIKeyKeys  = []string{"api_key", "apiKey"}
+	embeddingModelKeys   = []string{"model", "embedding_model", "embeddingModel"}
+	embeddingTimeoutKeys = []string{"timeout_seconds", "timeoutSeconds"}
+)
+
+// Load 读取并标准化配置，缺失时自动补默认配置降低首次使用门槛。
+func Load() (AppConfig, error) {
+	configPath, err := defaultConfigPath()
+	if err != nil {
+		return AppConfig{}, err
+	}
+	payload, err := loadPayload(configPath)
+	if err != nil {
+		return AppConfig{}, err
+	}
+	storageRoot, err := defaultStorageRoot()
+	if err != nil {
+		return AppConfig{}, err
+	}
+	config := AppConfig{
+		ConfigPath:       configPath,
+		StorageRoot:      resolveStorageRoot(payload, filepath.Dir(configPath), storageRoot),
+		ServerBaseURL:    resolveServerBaseURL(payload),
+		ServerListenAddr: resolveServerListenAddr(payload),
+	}
+	config.EmbeddingConfig = resolveEmbeddingConfig(payload)
+	return config, nil
+}
+
+// defaultConfigPath 统一配置文件位置，避免不同入口拼接出不一致路径。
+func defaultConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "memorymanager", "config.json"), nil
+}
+
+// defaultStorageRoot 提供默认外挂存储目录，保证项目外共享库位置稳定。
+func defaultStorageRoot() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "share", "memorymanager"), nil
+}
+
+// loadPayload 负责读取配置文件并在缺失时补默认模板，减少首次运行阻塞。
+func loadPayload(configPath string) (map[string]any, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		payload, buildErr := buildDefaultPayload()
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		if writeErr := writeDefaultPayload(configPath, payload); writeErr == nil {
+			return payload, nil
+		}
+		return payload, nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+// buildDefaultPayload 构造统一默认配置，避免脚本与服务端首次启动时默认值分叉。
+func buildDefaultPayload() (map[string]any, error) {
+	storageRoot, err := defaultStorageRoot()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"memory_storage_path": storageRoot,
+		"server": map[string]any{
+			"base_url":    defaultServerBaseURL,
+			"listen_addr": defaultServerListenAddr,
+		},
+		"embedding": map[string]any{
+			"base_url":        "",
+			"api_key":         "",
+			"model":           "",
+			"timeout_seconds": 30,
+		},
+	}, nil
+}
+
+// writeDefaultPayload 在配置缺失时补默认模板，避免用户必须先手工创建文件。
+func writeDefaultPayload(configPath string, payload map[string]any) error {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, append(data, '\n'), 0o644)
+}
+
+// resolveStorageRoot 兼容多种字段命名和相对路径写法，减少历史配置迁移成本。
+func resolveStorageRoot(payload map[string]any, baseDir, fallback string) string {
+	for _, key := range storagePathKeys {
+		value := pickString(payload, key)
+		if value == "" {
+			continue
+		}
+		resolved := expandPath(value, baseDir)
+		if resolved != "" {
+			return resolved
+		}
+	}
+	return fallback
+}
+
+// resolveServerBaseURL 统一解析服务端地址，确保脚本侧 HTTP 调用入口稳定。
+func resolveServerBaseURL(payload map[string]any) string {
+	for _, key := range serverSectionKeys {
+		section, ok := payload[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if value := pickStrings(section, serverBaseURLKeys); value != "" {
+			return strings.TrimRight(value, "/")
+		}
+	}
+	if value := pickStrings(payload, serverFlatURLKeys); value != "" {
+		return strings.TrimRight(value, "/")
+	}
+	return defaultServerBaseURL
+}
+
+// resolveServerListenAddr 统一解析服务端监听地址，避免服务入口继续写死端口。
+func resolveServerListenAddr(payload map[string]any) string {
+	for _, key := range serverSectionKeys {
+		section, ok := payload[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if value := pickStrings(section, serverListenAddrKeys); value != "" {
+			return value
+		}
+	}
+	if value := pickStrings(payload, serverFlatListenKeys); value != "" {
+		return value
+	}
+	return defaultServerListenAddr
+}
+
+// resolveEmbeddingConfig 只有在配置完整时才启用嵌入，避免半配置状态误触发远程调用。
+func resolveEmbeddingConfig(payload map[string]any) *EmbeddingConfig {
+	section := findSection(payload, embeddingSectionKeys)
+	baseURL := strings.TrimRight(pickStrings(section, embeddingBaseURLKeys), "/")
+	apiKey := pickStrings(section, embeddingAPIKeyKeys)
+	model := pickStrings(section, embeddingModelKeys)
+	if baseURL == "" || apiKey == "" || model == "" {
+		return nil
+	}
+	timeout := pickFloat(section, embeddingTimeoutKeys, 30)
+	if timeout < 1 {
+		timeout = 1
+	}
+	return &EmbeddingConfig{BaseURL: baseURL, APIKey: apiKey, Model: model, TimeoutSeconds: timeout}
+}
+
+// findSection 优先读取嵌套配置，必要时兼容平铺结构减少升级摩擦。
+func findSection(payload map[string]any, keys []string) map[string]any {
+	for _, key := range keys {
+		section, ok := payload[key].(map[string]any)
+		if ok {
+			return section
+		}
+	}
+	return payload
+}
+
+// pickStrings 从候选字段中取第一个非空字符串，避免调用方重复写兼容逻辑。
+func pickStrings(payload map[string]any, keys []string) string {
+	for _, key := range keys {
+		if value := pickString(payload, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// pickString 单点读取字符串字段，避免大量不安全类型断言分散在业务代码里。
+func pickString(payload map[string]any, key string) string {
+	if payload == nil {
+		return ""
+	}
+	value, ok := payload[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+// pickFloat 宽松解析数值，避免配置格式变化导致整个能力失效。
+func pickFloat(payload map[string]any, keys []string, fallback float64) float64 {
+	for _, key := range keys {
+		if payload == nil {
+			break
+		}
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case float64:
+			return typed
+		case float32:
+			return float64(typed)
+		case int:
+			return float64(typed)
+		case int64:
+			return float64(typed)
+		case string:
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+			if err == nil {
+				return parsed
+			}
+		}
+	}
+	return fallback
+}
+
+// expandPath 统一展开相对路径和家目录写法，避免不同平台下解析结果不一致。
+func expandPath(pathValue, baseDir string) string {
+	trimmed := strings.TrimSpace(pathValue)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "~/") || trimmed == "~" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			if trimmed == "~" {
+				trimmed = home
+			} else {
+				trimmed = filepath.Join(home, strings.TrimPrefix(trimmed, "~/"))
+			}
+		}
+	}
+	if !filepath.IsAbs(trimmed) {
+		trimmed = filepath.Join(baseDir, trimmed)
+	}
+	resolved, err := filepath.Abs(trimmed)
+	if err != nil {
+		return ""
+	}
+	return resolved
+}
+
+// String 方便调试输出配置摘要，避免直接暴露完整敏感配置内容。
+func (c AppConfig) String() string {
+	return fmt.Sprintf("config=%s storage=%s server=%s listen=%s", c.ConfigPath, c.StorageRoot, c.ServerBaseURL, c.ServerListenAddr)
+}

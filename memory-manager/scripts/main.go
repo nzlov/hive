@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-// main 统一分发子命令，避免多个脚本入口长期重复维护参数解析逻辑。
+// main 统一分发脚本子命令，避免多个入口长期重复维护参数解析逻辑。
 func main() {
 	code, err := run(os.Args[1:])
 	if err != nil {
@@ -20,14 +20,17 @@ func run(args []string) (int, error) {
 		printUsage()
 		return 1, nil
 	}
-
+	client, err := newClient()
+	if err != nil {
+		return 1, err
+	}
 	switch args[0] {
 	case "search":
-		return runSearchCommand(args[1:])
+		return runSearchCommand(client, args[1:])
 	case "write":
-		return runWriteCommand(args[1:])
+		return runWriteCommand(client, args[1:])
 	case "rebuild-embeddings":
-		return runRebuildEmbeddingsCommand(args[1:])
+		return runRebuildEmbeddingsCommand(client, args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return 0, nil

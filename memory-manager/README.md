@@ -2,7 +2,7 @@
 
 `memory-manager` 是一个面向工程分析场景的记忆管理 skill，用来在代码搜索、问题分析、错误排查前后读写项目记忆。
 
-现在它也支持可选的嵌入检索：在保留原有关键字写入与查询模式的前提下，如果配置了嵌入模型，脚本会同时维护记忆向量，并在查询时补充语义召回。
+现在它采用“脚本 + HTTP 服务端”模式：`scripts/` 下的 Go 子命令只负责解析参数、识别项目根目录并通过 HTTP 调用服务端；真正的数据库读写、嵌入计算和检索逻辑都由项目根目录的 Gin 服务统一处理。
 
 ## 适用场景
 
@@ -17,10 +17,11 @@
 当前 skill 主要文件：
 
 - `SKILL.md`：skill 规则与约束。
-- `scripts/main.go`：Go 统一入口，通过子命令执行检索、写入和重建。
-- `scripts/memory_config.py`：解析外挂记忆配置。
-- `scripts/rebuild_memory_embeddings.go`：重建全部记忆向量。
-- `scripts/embedding_provider.py`：嵌入接口与 OpenAI 兼容实现。
+- `../cmd/memory-server/main.go`：Gin 服务端入口。
+- `../internal/memory/`：记忆查询、写入、向量重建等核心业务。
+- `scripts/main.go`：Go 统一入口，通过子命令调用服务端。
+- `scripts/client.go`：HTTP 客户端。
+- `scripts/rebuild.go`：通过 HTTP 触发向量重建。
 
 默认记忆目录结构：
 
@@ -36,14 +37,24 @@
 
 其中数据库只保存嵌入模型名，不保存服务地址和 `api_key`；服务端配置仍然只来自本地配置文件。
 
+## 启动服务端
+
+在仓库根目录执行：
+
+```bash
+go run ./cmd/memory-server
+```
+
+服务默认监听 `:8080`，也可以通过配置文件里的 `server.listen_addr` 调整监听地址；脚本通过 `server.base_url` 访问服务端。
+
 ## 如何检索记忆
 
 在项目根目录执行：
 
 ```bash
-go run ./scripts search-memory --query '关键词'
-go run ./scripts search-memory --query '关键词1' --query '关键词2'
-go run ./scripts search-memory --query '["关键词1","关键词2"]'
+go run ./scripts search --query '关键词'
+go run ./scripts search --query '关键词1' --query '关键词2'
+go run ./scripts search --query '["关键词1","关键词2"]'
 ```
 
 常用参数：
@@ -61,7 +72,7 @@ go run ./scripts search-memory --query '["关键词1","关键词2"]'
 - `file_content`：当标题命中时返回完整记忆内容。
 - `project`：写入和检索时都会自动附带当前项目名，用于共享库隔离。
 
-如果配置了嵌入模型，查询时会在原有关键字匹配之外额外进行语义召回，并自动合并结果；当前查询不再限制返回条数。
+如果配置了嵌入模型，服务端会在原有关键字匹配之外额外进行语义召回，并自动合并结果；当前查询不再限制返回条数。
 
 ## 如何写入总结记忆
 
@@ -72,14 +83,14 @@ go run ./scripts search-memory --query '["关键词1","关键词2"]'
 - 如果当前会话里之前已经保存过记忆，再次总结时应从上次已保存内容之后开始续写，避免重复总结。
 
 ```bash
-go run ./scripts write-memory \
+go run ./scripts write \
   --type summary \
   --title '自动标题' \
   --tags '业务标签,重要文件,重要方法' \
   --summary '一句话简介' \
   --context '完整Markdown正文'
 
-go run ./scripts write-memory \
+go run ./scripts write \
   --items-json '[
     {
       "type": "summary",
@@ -124,7 +135,7 @@ go run ./scripts write-memory \
 - 如果一次处理里有多个独立错误或多个问题目标，建议拆成多条错误记忆分别保存。
 
 ```bash
-go run ./scripts write-memory \
+go run ./scripts write \
   --type error \
   --title '自动标题' \
   --tags '业务标签,错误类型,相关模块' \
@@ -142,7 +153,7 @@ go run ./scripts write-memory \
 
 ## 外挂记忆配置
 
-脚本会自动检测：
+脚本和服务端都会自动检测：
 
 ```text
 ~/.config/memorymanager/config.json
@@ -153,6 +164,10 @@ go run ./scripts write-memory \
 ```json
 {
   "memory_storage_path": "/home/当前用户/.local/share/memorymanager",
+  "server": {
+    "base_url": "http://127.0.0.1:8080",
+    "listen_addr": ":8080"
+  },
   "embedding": {
     "base_url": "",
     "api_key": "",
@@ -173,6 +188,10 @@ go run ./scripts write-memory \
 ```json
 {
   "memory_storage_path": "/data/memories",
+  "server": {
+    "base_url": "http://127.0.0.1:19090",
+    "listen_addr": ":19090"
+  },
   "embedding": {
     "base_url": "https://api.openai.com/v1",
     "api_key": "sk-xxxx",
@@ -185,6 +204,8 @@ go run ./scripts write-memory \
 字段说明：
 
 - `memory_storage_path`：外挂记忆根目录。
+- `server.base_url`：记忆服务端地址，`scripts/` 子命令通过它访问 Gin 服务。
+- `server.listen_addr`：Gin 服务端监听地址，默认 `:8080`。
 - `embedding.base_url`：嵌入服务地址，使用 OpenAI Embeddings API 路径结构。
 - `embedding.api_key`：嵌入服务的认证令牌。
 - `embedding.model`：要使用的嵌入模型名。
@@ -211,11 +232,11 @@ go run ./scripts write-memory \
 
 ## 嵌入模型工作方式
 
-- 如果未配置 `embedding` 或配置不完整，脚本继续只使用原有关键字写入与查询流程。
-- 如果配置了 `embedding`，`write_memory.py` 在写入记忆后会同步写入该条记录的向量。
-- 如果配置了 `embedding`，`search_memory.py` 在关键字检索之外还会追加语义召回，并合并结果返回。
-- 每次脚本启动时都会检查配置文件中的嵌入模型是否与数据库元数据中的模型名一致。
-- 如果模型名不一致，脚本会自动触发 `go run ./scripts rebuild-memory-embeddings` 对现有记忆做全量重建，并把数据库中的模型名更新为当前配置。
+- 如果未配置 `embedding` 或配置不完整，服务端继续只使用原有关键字写入与查询流程。
+- 如果配置了 `embedding`，服务端在写入记忆后会同步写入该条记录的向量。
+- 如果配置了 `embedding`，服务端在关键字检索之外还会追加语义召回，并合并结果返回。
+- 每次脚本触发查询或写入时，服务端都会检查配置文件中的嵌入模型是否与数据库元数据中的模型名一致。
+- 如果模型名不一致，服务端会自动触发向量全量重建，并把数据库中的模型名更新为当前配置。
 - 如果模型名未变化但历史向量缺失，脚本也会自动补建，避免升级后出现部分记录没有向量。
 - 嵌入文本会把标签整理为自然语言而不是 JSON，并剔除持久化内容里的 YAML 头部，减少重复噪声。
 - 总结记忆和错误记忆使用不同模板：前者突出主题、摘要和结论，后者突出问题、现象摘要和排障记录。
@@ -223,8 +244,8 @@ go run ./scripts write-memory \
 可以手动执行全量重建：
 
 ```bash
-go run ./scripts rebuild-memory-embeddings --root .
-go run ./scripts rebuild-memory-embeddings --root . --force
+go run ./scripts rebuild-embeddings --root .
+go run ./scripts rebuild-embeddings --root . --force
 ```
 
 ## 使用建议
@@ -247,9 +268,9 @@ go run ./scripts rebuild-memory-embeddings --root . --force
 示例：
 
 ```bash
-go run ./scripts search-memory --query '["订单","支付","超时"]'
+go run ./scripts search --query '["订单","支付","超时"]'
 
-go run ./scripts write-memory \
+go run ./scripts write \
   --type summary \
   --title '支付超时排查结论' \
   --tags '支付,超时,订单' \
