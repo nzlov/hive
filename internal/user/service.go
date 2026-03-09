@@ -80,17 +80,17 @@ func (s *Service) AuthenticateLogin(ctx context.Context, username, password stri
 	return user, nil
 }
 
-// ListUsers 返回用户管理页所需列表，避免前端直接依赖数据库表结构。
-func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
+// ListUsers 返回用户管理页所需分页列表，避免控制器自己拼接筛选和分页细节。
+func (s *Service) ListUsers(ctx context.Context, page, pageSize int, keyword string) ([]User, int64, error) {
 	store, err := models.StoreFromContext(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	items, err := store.ListUsers()
+	items, total, err := store.ListUsersPaginated(page, pageSize, keyword)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return toUsers(items), nil
+	return toUsers(items), total, nil
 }
 
 // CreateUser 新增一个用户，并统一生成 UUID 与 API Token 避免调用方绕过安全规则。

@@ -1,5 +1,13 @@
 package models
 
+import (
+	"math"
+	"slices"
+	"strings"
+
+	"gorm.io/gorm"
+)
+
 // User 对应 users 表，集中维护用户持久化字段与唯一索引约束。
 type User struct {
 	ID           int64  `gorm:"column:id;primaryKey;autoIncrement"`
@@ -26,11 +34,24 @@ func (s *Store) CountUsers() (int64, error) {
 	return total, err
 }
 
-// ListUsers 返回全部用户，保持管理端列表查询只依赖模型层接口。
-func (s *Store) ListUsers() ([]User, error) {
+// ListUsersPaginated 返回分页用户列表，并统一在用户名与真实名上应用关键字筛选。
+func (s *Store) ListUsersPaginated(page, pageSize int, keyword string) ([]User, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+	pageSize = int(math.Min(float64(pageSize), 100))
+
+	db := applyUserKeywordFilter(s.db.Model(&User{}), keyword)
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	var items []User
-	err := s.db.Order("created_at DESC").Order("id DESC").Find(&items).Error
-	return items, err
+	err := db.Order("created_at DESC").Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items).Error
+	return items, total, err
 }
 
 // CreateUser 写入一个新用户，并返回数据库实际持久化后的记录。
@@ -82,6 +103,24 @@ func (s *Store) FindUserByAPIToken(apiToken string) (User, error) {
 	return s.findOneUser("apitoken = ?", apiToken)
 }
 
+// FindUsersByUserIDs 批量按业务用户 ID 查询用户，避免记忆列表按行回查造成额外数据库压力。
+func (s *Store) FindUsersByUserIDs(userIDs []string) ([]User, error) {
+	cleaned := make([]string, 0, len(userIDs))
+	for _, userID := range userIDs {
+		value := strings.TrimSpace(userID)
+		if value == "" || slices.Contains(cleaned, value) {
+			continue
+		}
+		cleaned = append(cleaned, value)
+	}
+	if len(cleaned) == 0 {
+		return []User{}, nil
+	}
+	var items []User
+	err := s.db.Where("userid IN ?", cleaned).Find(&items).Error
+	return items, err
+}
+
 // findOneUser 收敛单用户查询逻辑，避免多个入口维护重复的未命中处理。
 func (s *Store) findOneUser(query string, args ...any) (User, error) {
 	var item User
@@ -90,4 +129,25 @@ func (s *Store) findOneUser(query string, args ...any) (User, error) {
 		return User{}, normalizeNotFound(err)
 	}
 	return item, nil
+}
+
+// applyUserKeywordFilter 统一用户名与真实名的搜索条件，避免分页列表和后续扩展出现筛选口径漂移。
+func applyUserKeywordFilter(db *gorm.DB, keyword string) *gorm.DB {
+	cleaned := strings.TrimSpace(keyword)
+	if cleaned == "" {
+		return db
+	}
+	likeValue := "%" + escapeUserLike(cleaned) + "%"
+	return db.Where(strings.Join([]string{
+		"(",
+		"LOWER(username) LIKE LOWER(?) ESCAPE '\\'",
+		"OR LOWER(real_name) LIKE LOWER(?) ESCAPE '\\'",
+		")",
+	}, " "), likeValue, likeValue)
+}
+
+// escapeUserLike 转义 LIKE 通配符，避免关键字里的特殊字符改变用户名搜索语义。
+func escapeUserLike(value string) string {
+	replacer := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_")
+	return replacer.Replace(value)
 }

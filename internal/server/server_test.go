@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -186,6 +187,12 @@ func TestRouterLoginAndUserList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("初始化默认管理员失败: %v", err)
 	}
+	if _, err := userService.CreateUser(ctx, user.CreateInput{Username: "alice", RealName: "爱丽丝", Password: "secret-1", IsAdmin: false}); err != nil {
+		t.Fatalf("创建测试用户失败: %v", err)
+	}
+	if _, err := userService.CreateUser(ctx, user.CreateInput{Username: "bob", RealName: "鲍勃", Password: "secret-2", IsAdmin: false}); err != nil {
+		t.Fatalf("创建测试用户失败: %v", err)
+	}
 	router := NewRouter(service, userService, store)
 
 	loginBody := bytes.NewReader([]byte(`{"username":"admin","password":"` + password + `"}`))
@@ -203,7 +210,7 @@ func TestRouterLoginAndUserList(t *testing.T) {
 	if strings.TrimSpace(loginResponse.Token) == "" {
 		t.Fatalf("登录响应未返回 JWT: %+v", loginResponse)
 	}
-	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/users?page=1&page_size=1&keyword=alice", nil)
 	listRequest.Header.Set("Authorization", "Bearer "+loginResponse.Token)
 	listRecorder := httptest.NewRecorder()
 	router.ServeHTTP(listRecorder, listRequest)
@@ -214,7 +221,86 @@ func TestRouterLoginAndUserList(t *testing.T) {
 	if err := json.Unmarshal(listRecorder.Body.Bytes(), &listResponse); err != nil {
 		t.Fatalf("解析用户列表失败: %v", err)
 	}
-	if len(listResponse.Items) == 0 || listResponse.Items[0].Username == "" {
+	if listResponse.Page != 1 || listResponse.PageSize != 1 {
+		t.Fatalf("用户列表分页信息异常: %+v", listResponse)
+	}
+	if listResponse.Total < 1 || listResponse.TotalPage < 1 {
+		t.Fatalf("用户列表总数信息异常: %+v", listResponse)
+	}
+	if len(listResponse.Items) != 1 || listResponse.Items[0].Username != "alice" {
 		t.Fatalf("用户列表为空: %+v", listResponse)
+	}
+}
+
+// TestRouterMemoryEndpointsReturnCreatorName 验证记忆列表和详情直接返回创建人真实姓名，避免前端再次查询用户表。
+func TestRouterMemoryEndpointsReturnCreatorName(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	admin, password, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	router := NewRouter(service, userService, store)
+
+	writeBody := bytes.NewReader([]byte(`{"project_name":"router-memory","git_branch":"main","items":[{"type":"summary","title":"创建人映射","tags":["creator"],"summary":"验证后端直接返回真实姓名","context":"content"}]}`))
+	writeRequest := httptest.NewRequest(http.MethodPost, "/tokenapi/v1/memories/write", writeBody)
+	writeRequest.Header.Set("Content-Type", "application/json")
+	writeRequest.Header.Set("X-API-Token", admin.APIToken)
+	writeRecorder := httptest.NewRecorder()
+	router.ServeHTTP(writeRecorder, writeRequest)
+	if writeRecorder.Code != http.StatusOK {
+		t.Fatalf("写入记忆失败: status=%d body=%s", writeRecorder.Code, writeRecorder.Body.String())
+	}
+
+	memories, err := store.ListAllMemories()
+	if err != nil || len(memories) == 0 {
+		t.Fatalf("读取记忆失败: err=%v items=%+v", err, memories)
+	}
+	memoryID := memories[0].ID
+
+	loginBody := bytes.NewReader([]byte(`{"username":"admin","password":"` + password + `"}`))
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/users/auth/login", loginBody)
+	loginRequest.Header.Set("Content-Type", "application/json")
+	loginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(loginRecorder, loginRequest)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("登录失败: status=%d body=%s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	var loginResponse api.LoginResponse
+	if err := json.Unmarshal(loginRecorder.Body.Bytes(), &loginResponse); err != nil {
+		t.Fatalf("解析登录响应失败: %v", err)
+	}
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/memories?page=1&page_size=10", nil)
+	listRequest.Header.Set("Authorization", "Bearer "+loginResponse.Token)
+	listRecorder := httptest.NewRecorder()
+	router.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("记忆列表失败: status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var listResponse api.MemoryListResponse
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &listResponse); err != nil {
+		t.Fatalf("解析记忆列表失败: %v", err)
+	}
+	if len(listResponse.Items) == 0 || listResponse.Items[0].CreatorName != admin.RealName {
+		t.Fatalf("记忆列表未返回创建人真实姓名: %+v", listResponse)
+	}
+
+	detailRequest := httptest.NewRequest(http.MethodGet, "/api/v1/memories/"+strconv.FormatInt(memoryID, 10), nil)
+	detailRequest.Header.Set("Authorization", "Bearer "+loginResponse.Token)
+	detailRecorder := httptest.NewRecorder()
+	router.ServeHTTP(detailRecorder, detailRequest)
+	if detailRecorder.Code != http.StatusOK {
+		t.Fatalf("记忆详情失败: status=%d body=%s", detailRecorder.Code, detailRecorder.Body.String())
+	}
+	var detailResponse api.MemoryDetailResponse
+	if err := json.Unmarshal(detailRecorder.Body.Bytes(), &detailResponse); err != nil {
+		t.Fatalf("解析记忆详情失败: %v", err)
+	}
+	if detailResponse.Item.CreatorName != admin.RealName {
+		t.Fatalf("记忆详情未返回创建人真实姓名: %+v", detailResponse)
 	}
 }

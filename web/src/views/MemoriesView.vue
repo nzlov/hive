@@ -73,7 +73,7 @@
                 <td class="px-5 py-4 text-slate-600">
                   <p class="max-w-md whitespace-pre-wrap break-words">{{ item.summary || '-' }}</p>
                 </td>
-                <td class="px-5 py-4 text-slate-500">{{ item.userid || '-' }}</td>
+                <td class="px-5 py-4 text-slate-500">{{ item.creator_name || item.userid || '-' }}</td>
                 <td class="px-5 py-4 text-slate-500">{{ formatDate(item.created_at) }}</td>
                 <td class="px-5 py-4">
                   <div class="flex flex-wrap gap-3">
@@ -128,7 +128,7 @@
               </article>
               <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4">
                 <p class="text-xs uppercase tracking-[0.3em] text-slate-400">创建人</p>
-                <p class="mt-3 break-all text-sm font-semibold text-ink">{{ detail.userid || '-' }}</p>
+                <p class="mt-3 break-all text-sm font-semibold text-ink">{{ detail.creator_name || detail.userid || '-' }}</p>
               </article>
             </div>
 

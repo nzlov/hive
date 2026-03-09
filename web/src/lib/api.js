@@ -36,9 +36,13 @@ export function fetchCurrentUser() {
   return request('/api/v1/users/me')
 }
 
-// fetchUsers 拉取用户列表供管理页展示，避免页面自行解析不同响应结构。
-export function fetchUsers() {
-  return request('/api/v1/users')
+// fetchUsers 拉取用户分页列表，确保搜索和翻页共享同一查询协议。
+export function fetchUsers(page = 1, pageSize = 10, keyword = '') {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  if (String(keyword || '').trim()) {
+    params.set('keyword', String(keyword).trim())
+  }
+  return request(`/api/v1/users?${params.toString()}`)
 }
 
 // createUser 创建新用户并返回完整对象，便于页面直接更新列表而不是再次推断生成字段。

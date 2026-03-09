@@ -81,10 +81,21 @@ type LoginResponse struct {
 	Error string      `json:"error,omitempty"`
 }
 
-// UserListResponse 为用户管理页提供稳定列表结构，避免直接暴露数据库字段。
+// UserListRequest 描述用户列表查询参数，确保分页与关键字搜索协议稳定。
+type UserListRequest struct {
+	Page     int    `form:"page"`
+	PageSize int    `form:"page_size"`
+	Keyword  string `form:"keyword"`
+}
+
+// UserListResponse 为用户管理页提供稳定分页结构，避免前端自行推断总页数。
 type UserListResponse struct {
-	Items []UserSummary `json:"items"`
-	Error string        `json:"error,omitempty"`
+	Items     []UserSummary `json:"items"`
+	Total     int64         `json:"total"`
+	Page      int           `json:"page"`
+	PageSize  int           `json:"page_size"`
+	TotalPage int           `json:"total_page"`
+	Error     string        `json:"error,omitempty"`
 }
 
 // CreateUserRequest 描述新增用户时可编辑字段，让服务端统一生成 userid 与 apitoken。
@@ -125,6 +136,7 @@ type MemoryItem struct {
 	Tags        []string `json:"tags"`
 	Summary     string   `json:"summary"`
 	UserID      string   `json:"userid"`
+	CreatorName string   `json:"creator_name"`
 	CreatedAt   string   `json:"created_at"`
 }
 
@@ -139,6 +151,7 @@ type MemoryDetail struct {
 	Summary     string   `json:"summary"`
 	Content     string   `json:"content"`
 	UserID      string   `json:"userid"`
+	CreatorName string   `json:"creator_name"`
 	Timestamp   string   `json:"timestamp"`
 	CreatedAt   string   `json:"created_at"`
 }

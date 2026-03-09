@@ -63,12 +63,31 @@ func registerUserRoutes(router *gin.Engine, userService *user.Service) {
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
 	protectedGroup.GET("", func(c *gin.Context) {
-		items, err := userService.ListUsers(c.Request.Context())
+		var request api.UserListRequest
+		if err := c.ShouldBindQuery(&request); err != nil {
+			c.JSON(http.StatusBadRequest, api.UserListResponse{Error: err.Error()})
+			return
+		}
+		items, total, err := userService.ListUsers(c.Request.Context(), request.Page, request.PageSize, request.Keyword)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, api.UserListResponse{Error: err.Error()})
 			return
 		}
-		response := api.UserListResponse{Items: make([]api.UserSummary, 0, len(items))}
+		page := request.Page
+		if page < 1 {
+			page = 1
+		}
+		pageSize := request.PageSize
+		if pageSize < 1 {
+			pageSize = 10
+		}
+		response := api.UserListResponse{
+			Items:     make([]api.UserSummary, 0, len(items)),
+			Total:     total,
+			Page:      page,
+			PageSize:  pageSize,
+			TotalPage: buildTotalPages(total, pageSize),
+		}
 		for _, item := range items {
 			response.Items = append(response.Items, userToSummary(item))
 		}
@@ -159,6 +178,11 @@ func registerUserRoutes(router *gin.Engine, userService *user.Service) {
 			c.JSON(http.StatusInternalServerError, api.MemoryListResponse{Error: err.Error()})
 			return
 		}
+		creatorNameMap, err := buildCreatorNameMap(store, collectMemoryUserIDs(items))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.MemoryListResponse{Error: err.Error()})
+			return
+		}
 		page := request.Page
 		if page < 1 {
 			page = 1
@@ -175,7 +199,7 @@ func registerUserRoutes(router *gin.Engine, userService *user.Service) {
 			TotalPage: buildTotalPages(total, pageSize),
 		}
 		for _, item := range items {
-			response.Items = append(response.Items, memoryToItem(item))
+			response.Items = append(response.Items, memoryToItem(item, creatorNameMap[item.UserID]))
 		}
 		c.JSON(http.StatusOK, response)
 	})
@@ -202,7 +226,12 @@ func registerUserRoutes(router *gin.Engine, userService *user.Service) {
 			c.JSON(status, api.MemoryDetailResponse{Error: err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, api.MemoryDetailResponse{Item: memoryToDetail(item)})
+		creatorNameMap, err := buildCreatorNameMap(store, []string{item.UserID})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.MemoryDetailResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.MemoryDetailResponse{Item: memoryToDetail(item, creatorNameMap[item.UserID])})
 	})
 	protectedAPIGroup.DELETE("/memories/:id", func(c *gin.Context) {
 		if !ensureAdmin(c) {
@@ -401,8 +430,8 @@ func userToSummary(item user.User) api.UserSummary {
 	}
 }
 
-// memoryToItem 统一裁剪列表字段，避免前端列表场景误传完整正文造成响应膨胀。
-func memoryToItem(item models.Memory) api.MemoryItem {
+// memoryToItem 统一裁剪列表字段，并把创建人真实姓名一并返回减少前端额外请求。
+func memoryToItem(item models.Memory, creatorName string) api.MemoryItem {
 	return api.MemoryItem{
 		ID:          item.ID,
 		ProjectName: item.ProjectName,
@@ -410,12 +439,13 @@ func memoryToItem(item models.Memory) api.MemoryItem {
 		Tags:        models.DecodeTags(item.Tags),
 		Summary:     item.Summary,
 		UserID:      item.UserID,
+		CreatorName: strings.TrimSpace(creatorName),
 		CreatedAt:   item.CreatedAt,
 	}
 }
 
-// memoryToDetail 统一构造详情视图数据，保证抽屉展示与列表数据来自同一映射口径。
-func memoryToDetail(item models.Memory) api.MemoryDetail {
+// memoryToDetail 统一构造详情视图数据，保证抽屉展示直接拿到后端补齐的创建人真实姓名。
+func memoryToDetail(item models.Memory, creatorName string) api.MemoryDetail {
 	return api.MemoryDetail{
 		ID:          item.ID,
 		ProjectName: item.ProjectName,
@@ -426,9 +456,44 @@ func memoryToDetail(item models.Memory) api.MemoryDetail {
 		Summary:     item.Summary,
 		Content:     item.Content,
 		UserID:      item.UserID,
+		CreatorName: strings.TrimSpace(creatorName),
 		Timestamp:   item.Timestamp,
 		CreatedAt:   item.CreatedAt,
 	}
+}
+
+// collectMemoryUserIDs 收敛记忆创建人 ID，方便后端一次性补齐真实姓名避免前端自行查表。
+func collectMemoryUserIDs(items []models.Memory) []string {
+	userIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		if value := strings.TrimSpace(item.UserID); value != "" {
+			userIDs = append(userIDs, value)
+		}
+	}
+	return userIDs
+}
+
+// buildCreatorNameMap 批量构建 userid 到真实姓名的映射，避免记忆列表和详情各自实现用户查询逻辑。
+func buildCreatorNameMap(store *models.Store, userIDs []string) (map[string]string, error) {
+	items, err := store.FindUsersByUserIDs(userIDs)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]string, len(items))
+	for _, item := range items {
+		userID := strings.TrimSpace(item.UserID)
+		if userID == "" {
+			continue
+		}
+		name := strings.TrimSpace(item.RealName)
+		if name == "" {
+			name = strings.TrimSpace(item.Username)
+		}
+		if name != "" {
+			result[userID] = name
+		}
+	}
+	return result, nil
 }
 
 // buildTotalPages 统一分页页数计算，避免前后端分别实现导致边界行为不一致。
