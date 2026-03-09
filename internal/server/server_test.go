@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,8 +12,24 @@ import (
 	"github.com/nzlov/hive/internal/api"
 	"github.com/nzlov/hive/internal/config"
 	"github.com/nzlov/hive/internal/memory"
+	"github.com/nzlov/hive/internal/models"
 	"github.com/nzlov/hive/internal/user"
 )
+
+// testContextWithStore 为路由测试准备共享 Store，确保中间件与服务层使用同一连接实例。
+func testContextWithStore(t *testing.T, cfg config.AppConfig) (context.Context, *models.Store) {
+	t.Helper()
+	store, err := models.Open(cfg)
+	if err != nil {
+		t.Fatalf("打开模型存储失败: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Fatalf("关闭模型存储失败: %v", closeErr)
+		}
+	})
+	return models.StoreToContext(context.Background(), store), store
+}
 
 // TestRouterWriteAndSearch 验证 HTTP 路由能正确透传到服务层，避免接口协议改动后脚本调用失效。
 func TestRouterWriteAndSearch(t *testing.T) {
@@ -25,11 +42,12 @@ func TestRouterWriteAndSearch(t *testing.T) {
 		JWTSecret:        "test-secret",
 	})
 	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
-	admin, _, err := userService.EnsureDefaultAdmin()
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	admin, _, err := userService.EnsureDefaultAdmin(ctx)
 	if err != nil {
 		t.Fatalf("初始化默认管理员失败: %v", err)
 	}
-	router := NewRouter(service, userService)
+	router := NewRouter(service, userService, store)
 	writeBody, err := json.Marshal(api.WriteRequest{ProjectName: "router-alias", GitBranch: "feature/router", Items: []api.MemoryWriteItem{{
 		Type:    "error",
 		Title:   "HTTP接口测试",
@@ -96,11 +114,12 @@ func TestRouterReturnsErrorField(t *testing.T) {
 		JWTSecret:        "test-secret",
 	})
 	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
-	admin, _, err := userService.EnsureDefaultAdmin()
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	admin, _, err := userService.EnsureDefaultAdmin(ctx)
 	if err != nil {
 		t.Fatalf("初始化默认管理员失败: %v", err)
 	}
-	router := NewRouter(service, userService)
+	router := NewRouter(service, userService, store)
 
 	searchRequest := httptest.NewRequest(http.MethodPost, "/tokenapi/v1/memories/search", bytes.NewReader([]byte(`{"project_name":123}`)))
 	searchRequest.Header.Set("Content-Type", "application/json")
@@ -125,7 +144,8 @@ func TestRouterDoesNotExposeRebuildEmbeddingsEndpoint(t *testing.T) {
 	memoryRoot := t.TempDir()
 	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
 	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
-	router := NewRouter(service, userService)
+	_, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	router := NewRouter(service, userService, store)
 
 	req := httptest.NewRequest(http.MethodPost, "/tokenapi/v1/memories/rebuild-embeddings", bytes.NewReader([]byte(`{"force":true}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -142,11 +162,12 @@ func TestRouterLoginAndUserList(t *testing.T) {
 	memoryRoot := t.TempDir()
 	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
 	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
-	_, password, err := userService.EnsureDefaultAdmin()
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	_, password, err := userService.EnsureDefaultAdmin(ctx)
 	if err != nil {
 		t.Fatalf("初始化默认管理员失败: %v", err)
 	}
-	router := NewRouter(service, userService)
+	router := NewRouter(service, userService, store)
 
 	loginBody := bytes.NewReader([]byte(`{"username":"admin","password":"` + password + `"}`))
 	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/users/auth/login", loginBody)

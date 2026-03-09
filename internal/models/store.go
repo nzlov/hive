@@ -1,6 +1,7 @@
 package models
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -8,11 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	glebarezsqlite "github.com/glebarez/sqlite"
 	"github.com/nzlov/hive/internal/config"
 	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	_ "modernc.org/sqlite"
 )
 
 // ErrNotFound 统一收敛查询未命中的语义，避免业务层直接依赖 GORM 的错误细节。
@@ -24,6 +24,8 @@ type Store struct {
 	driver      string
 	sourceLabel string
 }
+
+type storeContextKey struct{}
 
 // MemoryDBPath 统一 SQLite 数据库文件位置，避免路径拼接规则散落在业务层。
 func MemoryDBPath(memoryRoot string) string {
@@ -44,6 +46,23 @@ func Open(cfg config.AppConfig) (*Store, error) {
 	if err := store.migrate(); err != nil {
 		_ = store.Close()
 		return nil, err
+	}
+	return store, nil
+}
+
+// StoreToContext 把共享 Store 注入上下文，避免业务层继续显式透传数据库依赖。
+func StoreToContext(ctx context.Context, store *Store) context.Context {
+	return context.WithValue(ctx, storeContextKey{}, store)
+}
+
+// StoreFromContext 从上下文提取共享 Store，确保服务层通过统一入口获取数据库连接。
+func StoreFromContext(ctx context.Context) (*Store, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context 为空")
+	}
+	store, ok := ctx.Value(storeContextKey{}).(*Store)
+	if !ok || store == nil {
+		return nil, fmt.Errorf("context 中缺少 store")
 	}
 	return store, nil
 }
@@ -101,7 +120,7 @@ func buildDialector(cfg config.AppConfig) (string, gorm.Dialector, string, error
 	case "sqlite":
 		if strings.TrimSpace(cfg.DatabaseConfig.DSN) != "" {
 			dsn := strings.TrimSpace(cfg.DatabaseConfig.DSN)
-			return "sqlite", sqlite.Dialector{DriverName: "sqlite", DSN: dsn}, dsn, nil
+			return "sqlite", glebarezsqlite.Open(dsn), dsn, nil
 		}
 		return buildSQLiteDialector(cfg.MemoryRoot)
 	case "postgres":
@@ -121,7 +140,7 @@ func buildSQLiteDialector(memoryRoot string) (string, gorm.Dialector, string, er
 		return "", nil, "", err
 	}
 	path := MemoryDBPath(memoryRoot)
-	return "sqlite", sqlite.Dialector{DriverName: "sqlite", DSN: path}, path, nil
+	return "sqlite", glebarezsqlite.Open(path), path, nil
 }
 
 // normalizeDriver 收敛驱动别名，避免配置层出现 postgres 和 postgresql 两套判断。

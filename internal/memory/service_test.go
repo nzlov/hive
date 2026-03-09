@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"math"
 	"strings"
 	"testing"
@@ -36,6 +37,21 @@ func (p *stubEmbeddingProvider) EmbedTexts(texts []string) ([][]float64, error) 
 	return vectors, nil
 }
 
+// testContextWithStore 为测试注入共享 Store，避免服务层继续显式打开数据库连接。
+func testContextWithStore(t *testing.T, cfg config.AppConfig) context.Context {
+	t.Helper()
+	store, err := models.Open(cfg)
+	if err != nil {
+		t.Fatalf("打开模型存储失败: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Fatalf("关闭模型存储失败: %v", closeErr)
+		}
+	})
+	return models.StoreToContext(context.Background(), store)
+}
+
 // TestServiceWriteAndSearch 验证服务层可以完成写入和检索，避免 HTTP 之下的核心流程回归失效。
 func TestServiceWriteAndSearch(t *testing.T) {
 	t.Helper()
@@ -44,8 +60,9 @@ func TestServiceWriteAndSearch(t *testing.T) {
 		ServerBaseURL:    "http://127.0.0.1:18080",
 		ServerListenAddr: ":18080",
 	})
+	ctx := testContextWithStore(t, service.config)
 
-	databasePath, err := service.Write("service-alias", "feature/test-branch", "test-userid", []api.MemoryWriteItem{{
+	databasePath, err := service.Write(ctx, "service-alias", "feature/test-branch", "test-userid", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "服务层写入测试",
 		Tags:    []string{"服务层", "测试"},
@@ -59,7 +76,7 @@ func TestServiceWriteAndSearch(t *testing.T) {
 		t.Fatalf("Write 返回的数据库路径不符合预期: %s", databasePath)
 	}
 
-	result, err := service.Search("service-alias", []string{"服务层写入测试"}, true)
+	result, err := service.Search(ctx, "service-alias", []string{"服务层写入测试"}, true)
 	if err != nil {
 		t.Fatalf("Search 返回错误: %v", err)
 	}
@@ -82,11 +99,10 @@ func TestServiceWriteAndSearch(t *testing.T) {
 	if result.SummaryHits[0].GitBranch != "feature/test-branch" {
 		t.Fatalf("Search 结果未返回 git 分支: %+v", result.SummaryHits[0])
 	}
-	_, store, err := service.openProjectStore()
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
-		t.Fatalf("打开模型存储失败: %v", err)
+		t.Fatalf("读取模型存储失败: %v", err)
 	}
-	defer store.Close()
 	items, err := store.ListAllMemories()
 	if err != nil {
 		t.Fatalf("读取记忆失败: %v", err)
@@ -104,8 +120,9 @@ func TestServiceWriteAndSearch(t *testing.T) {
 func TestServiceSearchReturnsBranchMetadata(t *testing.T) {
 	t.Helper()
 	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
+	ctx := testContextWithStore(t, service.config)
 
-	if _, err := service.Write("branch-project", "feature/a", "", []api.MemoryWriteItem{{
+	if _, err := service.Write(ctx, "branch-project", "feature/a", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "A分支记忆",
 		Tags:    []string{"分支"},
@@ -114,7 +131,7 @@ func TestServiceSearchReturnsBranchMetadata(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("写入 feature/a 记忆失败: %v", err)
 	}
-	if _, err := service.Write("branch-project", "", "", []api.MemoryWriteItem{{
+	if _, err := service.Write(ctx, "branch-project", "", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "公共记忆",
 		Tags:    []string{"公共"},
@@ -124,7 +141,7 @@ func TestServiceSearchReturnsBranchMetadata(t *testing.T) {
 		t.Fatalf("写入公共记忆失败: %v", err)
 	}
 
-	result, err := service.Search("branch-project", []string{"记忆"}, false)
+	result, err := service.Search(ctx, "branch-project", []string{"记忆"}, false)
 	if err != nil {
 		t.Fatalf("Search 返回错误: %v", err)
 	}
@@ -190,7 +207,8 @@ func TestServiceSearchSnippetIncludesTitleAndTags(t *testing.T) {
 func TestServiceSearchIsolatedByProjectName(t *testing.T) {
 	t.Helper()
 	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
-	if _, err := service.Write("project-a", "", "", []api.MemoryWriteItem{{
+	ctx := testContextWithStore(t, service.config)
+	if _, err := service.Write(ctx, "project-a", "", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "项目A记忆",
 		Tags:    []string{"A"},
@@ -199,7 +217,7 @@ func TestServiceSearchIsolatedByProjectName(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("写入项目A记忆失败: %v", err)
 	}
-	if _, err := service.Write("project-b", "", "", []api.MemoryWriteItem{{
+	if _, err := service.Write(ctx, "project-b", "", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "项目B记忆",
 		Tags:    []string{"B"},
@@ -209,7 +227,7 @@ func TestServiceSearchIsolatedByProjectName(t *testing.T) {
 		t.Fatalf("写入项目B记忆失败: %v", err)
 	}
 
-	resultA, err := service.Search("project-a", []string{"记忆"}, false)
+	resultA, err := service.Search(ctx, "project-a", []string{"记忆"}, false)
 	if err != nil {
 		t.Fatalf("搜索项目A记忆失败: %v", err)
 	}
@@ -220,7 +238,7 @@ func TestServiceSearchIsolatedByProjectName(t *testing.T) {
 		t.Fatalf("项目A搜索结果串入了项目B记忆: %s", resultA.Markdown())
 	}
 
-	resultB, err := service.Search("project-b", []string{"记忆"}, false)
+	resultB, err := service.Search(ctx, "project-b", []string{"记忆"}, false)
 	if err != nil {
 		t.Fatalf("搜索项目B记忆失败: %v", err)
 	}
@@ -236,10 +254,11 @@ func TestServiceSearchIsolatedByProjectName(t *testing.T) {
 func TestServiceEnsureEmbeddingsReadyRebuildsOnModelMismatch(t *testing.T) {
 	t.Helper()
 	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
+	ctx := testContextWithStore(t, service.config)
 	oldProvider := &stubEmbeddingProvider{enabled: true, model: "old-model", vector: []float64{1, 0}}
 	service.provider = oldProvider
 
-	if _, err := service.Write("rebuild-project", "", "", []api.MemoryWriteItem{{
+	if _, err := service.Write(ctx, "rebuild-project", "", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "模型切换记忆",
 		Tags:    []string{"重建"},
@@ -254,7 +273,7 @@ func TestServiceEnsureEmbeddingsReadyRebuildsOnModelMismatch(t *testing.T) {
 
 	newProvider := &stubEmbeddingProvider{enabled: true, model: "new-model", vector: []float64{0, 1}}
 	service.provider = newProvider
-	result, err := service.EnsureEmbeddingsReady()
+	result, err := service.EnsureEmbeddingsReady(ctx)
 	if err != nil {
 		t.Fatalf("启动校验嵌入模型失败: %v", err)
 	}
@@ -268,11 +287,10 @@ func TestServiceEnsureEmbeddingsReadyRebuildsOnModelMismatch(t *testing.T) {
 		t.Fatalf("模型切换后应执行一次重建，实际次数=%d", newProvider.calls)
 	}
 
-	_, store, err := service.openProjectStore()
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
-		t.Fatalf("打开模型存储失败: %v", err)
+		t.Fatalf("读取模型存储失败: %v", err)
 	}
-	defer store.Close()
 
 	currentModel, err := store.GetMemoryMetadata(embeddingModelMetaKey)
 	if err != nil {
@@ -309,10 +327,11 @@ func TestServiceEnsureEmbeddingsReadyRebuildsOnModelMismatch(t *testing.T) {
 func TestFetchMemoryEmbeddingsIsolatedByProjectName(t *testing.T) {
 	t.Helper()
 	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
+	ctx := testContextWithStore(t, service.config)
 	provider := &stubEmbeddingProvider{enabled: true, model: "project-aware-model", vector: []float64{0.5, 0.5}}
 	service.provider = provider
 
-	if _, err := service.Write("project-a", "", "", []api.MemoryWriteItem{{
+	if _, err := service.Write(ctx, "project-a", "", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "项目A向量",
 		Tags:    []string{"A"},
@@ -321,7 +340,7 @@ func TestFetchMemoryEmbeddingsIsolatedByProjectName(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("写入项目A记忆失败: %v", err)
 	}
-	if _, err := service.Write("project-b", "", "", []api.MemoryWriteItem{{
+	if _, err := service.Write(ctx, "project-b", "", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "项目B向量",
 		Tags:    []string{"B"},
@@ -331,11 +350,10 @@ func TestFetchMemoryEmbeddingsIsolatedByProjectName(t *testing.T) {
 		t.Fatalf("写入项目B记忆失败: %v", err)
 	}
 
-	_, store, err := service.openProjectStore()
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
-		t.Fatalf("打开模型存储失败: %v", err)
+		t.Fatalf("读取模型存储失败: %v", err)
 	}
-	defer store.Close()
 
 	items, err := store.ListAllMemories()
 	if err != nil {

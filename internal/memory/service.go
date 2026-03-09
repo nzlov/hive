@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -34,12 +35,11 @@ func NewService(cfg config.AppConfig) *Service {
 }
 
 // Search 执行记忆检索并返回结构化结果，统一仅按项目名隔离单库中的不同项目数据。
-func (s *Service) Search(projectName string, queries []string, debug bool) (SearchResult, error) {
-	_, store, err := s.openProjectStore()
+func (s *Service) Search(ctx context.Context, projectName string, queries []string, debug bool) (SearchResult, error) {
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	defer store.Close()
 	effectiveProjectName := normalizeProjectName(projectName)
 	var debugCommands []string
 	var debugCommandsRef *[]string
@@ -75,12 +75,11 @@ func (s *Service) Search(projectName string, queries []string, debug bool) (Sear
 }
 
 // Write 写入总结或错误记忆，并把写入人 userid 一并落库以便后续追溯来源。
-func (s *Service) Write(projectName, gitBranch, userID string, items []api.MemoryWriteItem) (string, error) {
-	_, store, err := s.openProjectStore()
+func (s *Service) Write(ctx context.Context, projectName, gitBranch, userID string, items []api.MemoryWriteItem) (string, error) {
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return "", err
 	}
-	defer store.Close()
 
 	now := time.Now().UTC()
 	timestampSeed := now.Unix()
@@ -143,23 +142,13 @@ func (s *Service) Write(projectName, gitBranch, userID string, items []api.Memor
 }
 
 // EnsureEmbeddingsReady 在服务启动阶段校验模型一致性，避免请求到来后才暴露旧向量问题。
-func (s *Service) EnsureEmbeddingsReady() (RebuildResult, error) {
-	location, store, err := s.openProjectStore()
+func (s *Service) EnsureEmbeddingsReady(ctx context.Context) (RebuildResult, error) {
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return RebuildResult{}, err
 	}
-	defer store.Close()
-	return s.rebuildEmbeddingsWithDB(location, store, false)
-}
-
-// openProjectStore 统一完成模型存储连接，避免重复打开逻辑散落在各能力中。
-func (s *Service) openProjectStore() (Location, *models.Store, error) {
 	location := ResolveLocation(s.config)
-	store, err := models.Open(s.config)
-	if err != nil {
-		return Location{}, nil, err
-	}
-	return location, store, nil
+	return s.rebuildEmbeddingsWithDB(location, store, false)
 }
 
 // rebuildEmbeddingsWithDB 在模型变化时全量重建向量，避免新旧维度混用。

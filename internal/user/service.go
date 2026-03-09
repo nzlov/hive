@@ -1,6 +1,7 @@
 package user
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
@@ -30,12 +31,11 @@ func (s *Service) JWTSecret() string {
 }
 
 // EnsureDefaultAdmin 在首次启动时补齐管理员账号，降低空库下的初始化门槛。
-func (s *Service) EnsureDefaultAdmin() (User, string, error) {
-	store, err := s.openStore()
+func (s *Service) EnsureDefaultAdmin(ctx context.Context) (User, string, error) {
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return User{}, "", err
 	}
-	defer store.Close()
 
 	total, err := store.CountUsers()
 	if err != nil {
@@ -65,12 +65,11 @@ func (s *Service) EnsureDefaultAdmin() (User, string, error) {
 }
 
 // AuthenticateLogin 校验用户名密码，避免管理端登录把密码比对规则散落到控制器里。
-func (s *Service) AuthenticateLogin(username, password string) (User, error) {
-	store, err := s.openStore()
+func (s *Service) AuthenticateLogin(ctx context.Context, username, password string) (User, error) {
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return User{}, err
 	}
-	defer store.Close()
 	user, err := s.findByUsername(store, username)
 	if err != nil {
 		return User{}, fmt.Errorf("用户名或密码错误")
@@ -82,12 +81,11 @@ func (s *Service) AuthenticateLogin(username, password string) (User, error) {
 }
 
 // ListUsers 返回用户管理页所需列表，避免前端直接依赖数据库表结构。
-func (s *Service) ListUsers() ([]User, error) {
-	store, err := s.openStore()
+func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer store.Close()
 	items, err := store.ListUsers()
 	if err != nil {
 		return nil, err
@@ -96,22 +94,20 @@ func (s *Service) ListUsers() ([]User, error) {
 }
 
 // CreateUser 新增一个用户，并统一生成 UUID 与 API Token 避免调用方绕过安全规则。
-func (s *Service) CreateUser(input CreateInput) (User, error) {
-	store, err := s.openStore()
+func (s *Service) CreateUser(ctx context.Context, input CreateInput) (User, error) {
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return User{}, err
 	}
-	defer store.Close()
 	return s.createUser(store, input)
 }
 
 // UpdateUser 修改用户资料，并在需要时重置密码或 API Token。
-func (s *Service) UpdateUser(id int64, input UpdateInput) (User, error) {
-	store, err := s.openStore()
+func (s *Service) UpdateUser(ctx context.Context, id int64, input UpdateInput) (User, error) {
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return User{}, err
 	}
-	defer store.Close()
 	existing, err := s.findByID(store, id)
 	if err != nil {
 		return User{}, err
@@ -147,12 +143,11 @@ func (s *Service) UpdateUser(id int64, input UpdateInput) (User, error) {
 }
 
 // DeleteUser 删除指定用户，同时阻止管理员误删自己的当前账号。
-func (s *Service) DeleteUser(id int64, requesterUserID string) error {
-	store, err := s.openStore()
+func (s *Service) DeleteUser(ctx context.Context, id int64, requesterUserID string) error {
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
 	target, err := s.findByID(store, id)
 	if err != nil {
 		return err
@@ -164,28 +159,21 @@ func (s *Service) DeleteUser(id int64, requesterUserID string) error {
 }
 
 // AuthenticateAPIToken 根据 API Token 解析调用用户，为记忆接口补齐来源追踪信息。
-func (s *Service) AuthenticateAPIToken(apiToken string) (User, error) {
-	store, err := s.openStore()
+func (s *Service) AuthenticateAPIToken(ctx context.Context, apiToken string) (User, error) {
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return User{}, err
 	}
-	defer store.Close()
 	return s.findByAPIToken(store, apiToken)
 }
 
 // FindByUserID 供 JWT 中间件在需要时回查用户详情，避免信任过期的令牌内容。
-func (s *Service) FindByUserID(userID string) (User, error) {
-	store, err := s.openStore()
+func (s *Service) FindByUserID(ctx context.Context, userID string) (User, error) {
+	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return User{}, err
 	}
-	defer store.Close()
 	return s.findByUserID(store, userID)
-}
-
-// openStore 统一复用模型层数据库入口，确保用户和记忆数据共享同一存储配置。
-func (s *Service) openStore() (*models.Store, error) {
-	return models.Open(s.config)
 }
 
 // createUser 在默认管理员和后台新增场景复用同一套持久化逻辑，避免安全规则漂移。
