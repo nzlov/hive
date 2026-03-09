@@ -778,3 +778,59 @@ func TestServiceConfidenceByAgeForType(t *testing.T) {
 		t.Fatalf("错误记忆衰减应慢于总结记忆: error=%v summary=%v", errorConfidence, summaryConfidence)
 	}
 }
+
+// TestServiceFusedConfidenceRespectsWeights 验证融合权重会直接影响最终置信度，避免融合逻辑退化为固定策略。
+func TestServiceFusedConfidenceRespectsWeights(t *testing.T) {
+	t.Helper()
+	now := time.Now().UTC()
+	keywordHit := Hit{ID: 1, Source: "summary", Confidence: 0.2, Timestamp: now}
+	semanticHit := Hit{ID: 1, Source: "summary", Confidence: 0.9, Timestamp: now}
+
+	keywordFirst := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{FusionEnabled: true, FusionKeywordWeight: 1, FusionSemanticWeight: 0, FusionRecencyWeight: 0}})
+	if got := keywordFirst.fusedConfidence("summary", true, keywordHit, true, semanticHit, now); math.Abs(got-0.2) > 1e-9 {
+		t.Fatalf("关键字优先融合结果异常: got=%v want=0.2", got)
+	}
+
+	semanticFirst := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{FusionEnabled: true, FusionKeywordWeight: 0, FusionSemanticWeight: 1, FusionRecencyWeight: 0}})
+	if got := semanticFirst.fusedConfidence("summary", true, keywordHit, true, semanticHit, now); math.Abs(got-0.9) > 1e-9 {
+		t.Fatalf("语义优先融合结果异常: got=%v want=0.9", got)
+	}
+}
+
+// TestServiceMergeHitsPreservesKeywordSnippetAndAppliesFusion 验证融合后仍优先保留关键字片段，并按配置权重重算置信度。
+func TestServiceMergeHitsPreservesKeywordSnippetAndAppliesFusion(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{FusionEnabled: true, FusionKeywordWeight: 0.8, FusionSemanticWeight: 0.2, FusionRecencyWeight: 0}})
+	now := time.Now().UTC()
+	keywordHits := []Hit{{
+		ID:         1,
+		Source:     "summary",
+		Title:      "关键字命中",
+		Timestamp:  now.Add(-24 * time.Hour),
+		Confidence: 0.2,
+		Snippets:   []Snippet{{Start: 1, End: 3, Content: "关键字片段"}},
+	}}
+	semanticHits := []Hit{{
+		ID:          1,
+		Source:      "summary",
+		Title:       "语义命中",
+		Timestamp:   now,
+		Confidence:  0.9,
+		FileContent: "语义正文",
+	}}
+
+	merged := service.mergeHits("summary", keywordHits, semanticHits)
+	if len(merged) != 1 {
+		t.Fatalf("融合命中数量异常: %+v", merged)
+	}
+	if len(merged[0].Snippets) == 0 || merged[0].Snippets[0].Content != "关键字片段" {
+		t.Fatalf("融合后应保留关键字片段: %+v", merged[0])
+	}
+	if merged[0].FileContent != "语义正文" {
+		t.Fatalf("融合后应补齐语义正文: %+v", merged[0])
+	}
+	want := 0.2*0.8 + 0.9*0.2
+	if math.Abs(merged[0].Confidence-want) > 1e-9 {
+		t.Fatalf("融合置信度异常: got=%v want=%v", merged[0].Confidence, want)
+	}
+}

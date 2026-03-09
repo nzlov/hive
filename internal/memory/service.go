@@ -123,8 +123,8 @@ func (s *Service) searchHits(ctx context.Context, projectName string, queries []
 		Query:         strings.Join(queries, ", "),
 		ProjectName:   projectName,
 		DebugCommands: debugCommands,
-		ErrorHits:     mergeHits(errorKeywordHits, errorSemanticHits),
-		SummaryHits:   mergeHits(summaryKeywordHits, summarySemanticHits),
+		ErrorHits:     s.mergeHits("error", errorKeywordHits, errorSemanticHits),
+		SummaryHits:   s.mergeHits("summary", summaryKeywordHits, summarySemanticHits),
 	}, nil
 }
 
@@ -681,31 +681,107 @@ func memoryRowFromModel(item models.Memory) Row {
 	}
 }
 
-// mergeHits 关键字命中优先保留原片段展示，再补上语义召回缺失的结果。
-func mergeHits(primaryHits, semanticHits []Hit) []Hit {
-	merged := make([]Hit, 0, len(primaryHits)+len(semanticHits))
+// mergeHits 融合关键字与语义命中，优先保留关键字片段并用配置权重计算统一置信度。
+func (s *Service) mergeHits(source string, keywordHits, semanticHits []Hit) []Hit {
+	merged := make([]Hit, 0, len(keywordHits)+len(semanticHits))
+	keywordByID := make(map[int64]Hit, len(keywordHits))
+	semanticByID := make(map[int64]Hit, len(semanticHits))
+	orderedIDs := make([]int64, 0, len(keywordHits)+len(semanticHits))
 	seen := map[int64]struct{}{}
-	semanticByID := map[int64]Hit{}
+	for _, hit := range keywordHits {
+		keywordByID[hit.ID] = hit
+		if _, ok := seen[hit.ID]; !ok {
+			orderedIDs = append(orderedIDs, hit.ID)
+			seen[hit.ID] = struct{}{}
+		}
+	}
 	for _, hit := range semanticHits {
 		semanticByID[hit.ID] = hit
-	}
-	for _, hit := range primaryHits {
-		if semanticHit, ok := semanticByID[hit.ID]; ok && semanticHit.Confidence > hit.Confidence {
-			hit.Confidence = semanticHit.Confidence
-			if hit.FileContent == "" {
-				hit.FileContent = semanticHit.FileContent
-			}
+		if _, ok := seen[hit.ID]; !ok {
+			orderedIDs = append(orderedIDs, hit.ID)
+			seen[hit.ID] = struct{}{}
 		}
-		merged = append(merged, hit)
-		seen[hit.ID] = struct{}{}
 	}
-	for _, hit := range semanticHits {
-		if _, ok := seen[hit.ID]; ok {
+	now := time.Now().UTC()
+	for _, memoryID := range orderedIDs {
+		keywordHit, hasKeyword := keywordByID[memoryID]
+		semanticHit, hasSemantic := semanticByID[memoryID]
+		if !hasKeyword && !hasSemantic {
 			continue
 		}
-		merged = append(merged, hit)
+		result := semanticHit
+		if hasKeyword {
+			result = keywordHit
+		}
+		if hasKeyword && result.FileContent == "" && semanticHit.FileContent != "" {
+			result.FileContent = semanticHit.FileContent
+		}
+		result.Confidence = s.fusedConfidence(source, hasKeyword, keywordHit, hasSemantic, semanticHit, now)
+		merged = append(merged, result)
 	}
 	return merged
+}
+
+// fusedConfidence 使用配置权重融合关键字分、语义分与时效分，避免排序策略在代码里固化。
+func (s *Service) fusedConfidence(source string, hasKeyword bool, keywordHit Hit, hasSemantic bool, semanticHit Hit, now time.Time) float64 {
+	keywordScore := 0.0
+	if hasKeyword {
+		keywordScore = keywordHit.Confidence
+	}
+	semanticScore := 0.0
+	if hasSemantic {
+		semanticScore = semanticHit.Confidence
+	}
+	if !s.fusionEnabled() {
+		if semanticScore > keywordScore {
+			return semanticScore
+		}
+		return keywordScore
+	}
+	if hasSemantic && semanticScore < s.fusionMinSemanticScore() {
+		semanticScore = 0
+	}
+	refTS := keywordHit.Timestamp
+	if !hasKeyword {
+		refTS = semanticHit.Timestamp
+	}
+	if hasSemantic && semanticHit.Timestamp.After(refTS) {
+		refTS = semanticHit.Timestamp
+	}
+	recencyScore := s.confidenceByAgeForType(source, refTS, now)
+	keywordWeight, semanticWeight, recencyWeight := s.fusionWeights()
+	totalWeight := keywordWeight + semanticWeight + recencyWeight
+	if totalWeight <= 0 {
+		if semanticScore > keywordScore {
+			return semanticScore
+		}
+		return keywordScore
+	}
+	return (keywordScore*keywordWeight + semanticScore*semanticWeight + recencyScore*recencyWeight) / totalWeight
+}
+
+// fusionEnabled 返回是否启用融合评分，便于渐进式灰度上线新排序策略。
+func (s *Service) fusionEnabled() bool {
+	if s.config.SearchConfig == nil {
+		return true
+	}
+	return s.config.SearchConfig.FusionEnabled
+}
+
+// fusionWeights 返回融合权重，确保关键字、语义和时效占比可由配置统一控制。
+func (s *Service) fusionWeights() (float64, float64, float64) {
+	if s.config.SearchConfig == nil {
+		return 0.55, 0.45, 0.1
+	}
+	return maxFloat(0, s.config.SearchConfig.FusionKeywordWeight), maxFloat(0, s.config.SearchConfig.FusionSemanticWeight), maxFloat(0, s.config.SearchConfig.FusionRecencyWeight)
+}
+
+// fusionMinSemanticScore 返回语义最低有效分，避免弱语义命中在融合时过度抬升。
+func (s *Service) fusionMinSemanticScore() float64 {
+	if s.config.SearchConfig == nil || s.config.SearchConfig.FusionMinSemanticScore < 0 {
+		return 0
+	}
+	return s.config.SearchConfig.FusionMinSemanticScore
 }
 
 // mergeListHits 把不同类型命中合并为管理列表结果，并按相关度优先、时间次之稳定排序。
@@ -1208,6 +1284,14 @@ func minInt(left, right int) int {
 
 // maxInt 为候选窗口下限提供最大值比较，避免配置修正逻辑散落多处。
 func maxInt(left, right int) int {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+// maxFloat 返回较大浮点值，避免融合权重规范化时重复编写边界判断。
+func maxFloat(left, right float64) float64 {
 	if left > right {
 		return left
 	}
