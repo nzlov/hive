@@ -10,15 +10,12 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nzlov/hive/internal/config"
 	"github.com/nzlov/hive/internal/models"
 )
-
-var frontMatterRegexp = regexp.MustCompile(`\A---\n.*?\n---\n?`)
 
 // EmbeddingProvider 抽象嵌入能力，避免服务层直接依赖具体供应商协议。
 type EmbeddingProvider interface {
@@ -146,25 +143,28 @@ func shouldBypassProxy(hostname string) bool {
 
 // BuildMemoryEmbeddingText 为记忆构造语义文本，避免直接用原始存储内容引入过多噪声。
 func BuildMemoryEmbeddingText(row Row) string {
+	tags := formatEmbeddingTags(row.Tags)
 	if strings.EqualFold(strings.TrimSpace(row.Type), "error") {
 		return joinNonEmpty([]string{
 			"记忆类型: 错误记忆",
 			"项目: " + strings.TrimSpace(row.ProjectName),
+			"分支: " + strings.TrimSpace(row.GitBranch),
 			"问题: " + strings.TrimSpace(row.Title),
 			"现象摘要: " + strings.TrimSpace(row.Summary),
-			"故障标签: " + formatEmbeddingTags(row.Tags),
+			"故障标签: " + tags,
 			"排障记录:",
-			stripFrontMatter(row.Content),
+			strings.TrimSpace(row.Content),
 		})
 	}
 	return joinNonEmpty([]string{
 		"记忆类型: 总结记忆",
 		"项目: " + strings.TrimSpace(row.ProjectName),
+		"分支: " + strings.TrimSpace(row.GitBranch),
 		"主题: " + strings.TrimSpace(row.Title),
 		"摘要: " + strings.TrimSpace(row.Summary),
-		"标签: " + formatEmbeddingTags(row.Tags),
+		"标签: " + tags,
 		"正文:",
-		stripFrontMatter(row.Content),
+		strings.TrimSpace(row.Content),
 	})
 }
 
@@ -190,15 +190,6 @@ func CosineSimilarity(left, right []float64) float64 {
 // formatEmbeddingTags 把标签整理成自然文本，减少 JSON 符号给向量引入无意义噪声。
 func formatEmbeddingTags(raw string) string {
 	return strings.Join(models.DecodeTags(raw), "、")
-}
-
-// stripFrontMatter 去掉持久化内容中的 YAML 头部，避免元数据重复稀释正文语义。
-func stripFrontMatter(content string) string {
-	text := strings.TrimSpace(content)
-	if text == "" {
-		return ""
-	}
-	return strings.TrimSpace(frontMatterRegexp.ReplaceAllString(text, ""))
 }
 
 // joinNonEmpty 过滤空占位文本，避免嵌入向量被无意义字段稀释。

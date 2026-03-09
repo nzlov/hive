@@ -78,15 +78,15 @@ class BranchFilterTest(unittest.TestCase):
 
         current_branch = MAIN.resolve_current_git_branch(str(self.repo))
         hits = [
-            {"path": "1", "git_branch": "feature/merged"},
-            {"path": "2", "git_branch": "feature/current"},
-            {"path": "3", "git_branch": "feature/unmerged"},
-            {"path": "4", "git_branch": ""},
+            {"title": "merged", "git_branch": "feature/merged"},
+            {"title": "current", "git_branch": "feature/current"},
+            {"title": "unmerged", "git_branch": "feature/unmerged"},
+            {"title": "shared", "git_branch": ""},
         ]
 
         filtered = MAIN.filter_hits_by_branch(hits, str(self.repo), current_branch)
 
-        self.assertEqual([hit["path"] for hit in filtered], ["1", "2", "4"])
+        self.assertEqual([hit["title"] for hit in filtered], ["merged", "current", "shared"])
 
     def test_resolve_default_project_name_prefers_git_remote(self) -> None:
         """存在 Git 远端时应优先使用仓库地址，避免不同本地路径下项目名漂移。"""
@@ -149,6 +149,82 @@ class APITokenConfigTest(unittest.TestCase):
             self.assertEqual(base_url, "http://127.0.0.1:8080")
             self.assertEqual(project_name, "demo-alias")
             self.assertEqual(api_token, "project-token")
+
+
+class SearchRenderTest(unittest.TestCase):
+    """覆盖搜索结果渲染，避免脚本继续依赖已移除的旧返回字段。"""
+
+    def test_render_hit_includes_structured_metadata(self) -> None:
+        """脚本重渲染搜索结果时应只展示用户可读元信息，避免泄露筛选辅助字段。"""
+
+        lines = MAIN.render_hit(
+            {
+                "source": "summary",
+                "git_branch": "feature/demo",
+                "title": "连接池复用策略",
+                "tags": ["数据库", "连接池"],
+                "timestamp": "2026-03-09T12:00:00Z",
+                "confidence": 0.9,
+                "snippets": [
+                    {"start": 3, "end": 6, "content": "## Fix\n\n- 方案: 统一复用长连接池。"}
+                ],
+            },
+            1,
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("- title: 连接池复用策略", rendered)
+        self.assertIn("- tags: 数据库, 连接池", rendered)
+        self.assertNotIn("- source:", rendered)
+        self.assertNotIn("- git_branch:", rendered)
+
+    def test_run_search_keeps_git_branch_for_filtering(self) -> None:
+        """按分支筛选后仍应保留 git_branch 字段，避免过滤阶段失去必要依据。"""
+
+        response = {
+            "error_hits": [],
+            "summary_hits": [
+                {
+                    "source": "summary",
+                    "git_branch": "feature/demo",
+                    "title": "标题",
+                    "tags": ["标签"],
+                    "timestamp": "2026-03-09T12:00:00Z",
+                    "confidence": 0.8,
+                    "file_content": "正文",
+                }
+            ],
+        }
+
+        original_post_json = MAIN.post_json
+        original_resolve_current_git_branch = MAIN.resolve_current_git_branch
+        original_filter_hits_by_branch = MAIN.filter_hits_by_branch
+        original_render_search_markdown = MAIN.render_search_markdown
+        captured: dict[str, object] = {}
+        try:
+            MAIN.post_json = lambda *args, **kwargs: response
+            MAIN.resolve_current_git_branch = lambda *_args, **_kwargs: "feature/demo"
+            MAIN.filter_hits_by_branch = lambda hits, *_args, **_kwargs: hits
+
+            def fake_render_search_markdown(_response, _error_hits, summary_hits):
+                captured["summary_hits"] = summary_hits
+                return "ok"
+
+            MAIN.render_search_markdown = fake_render_search_markdown
+            args = type("Args", (), {"query": ["标题"], "debug": False})()
+            self.assertEqual(
+                MAIN.run_search(args, ".", "http://127.0.0.1:8080", "demo", "token"),
+                0,
+            )
+        finally:
+            MAIN.post_json = original_post_json
+            MAIN.resolve_current_git_branch = original_resolve_current_git_branch
+            MAIN.filter_hits_by_branch = original_filter_hits_by_branch
+            MAIN.render_search_markdown = original_render_search_markdown
+
+        summary_hits = captured.get("summary_hits")
+        self.assertIsInstance(summary_hits, list)
+        self.assertEqual(summary_hits[0]["git_branch"], "feature/demo")
 
 
 class ConfigBootstrapTest(unittest.TestCase):

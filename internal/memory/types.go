@@ -12,6 +12,7 @@ type Row struct {
 	ID          int64
 	UserID      string
 	ProjectName string
+	GitBranch   string
 	Type        string
 	Title       string
 	Tags        string
@@ -25,14 +26,13 @@ type Row struct {
 type Hit struct {
 	ID          int64
 	Source      string
-	Path        string
-	ProjectName string
 	GitBranch   string
+	Title       string
+	Tags        []string
 	Timestamp   time.Time
 	Confidence  float64
 	Snippets    []Snippet
 	FileContent string
-	Header      map[string]any
 }
 
 // Snippet 描述命中的片段及其行号范围，便于输出稳定的 Markdown 结构。

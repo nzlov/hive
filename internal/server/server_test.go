@@ -89,14 +89,23 @@ func TestRouterWriteAndSearch(t *testing.T) {
 	if !strings.Contains(searchResponse.Markdown, "HTTP接口测试") {
 		t.Fatalf("搜索结果缺少写入标题: %s", searchResponse.Markdown)
 	}
-	if len(searchResponse.ErrorHits) != 1 || searchResponse.ErrorHits[0].ProjectName != "router-alias" {
-		t.Fatalf("搜索响应未返回项目名: %+v", searchResponse.ErrorHits)
+	if len(searchResponse.ErrorHits) != 1 {
+		t.Fatalf("搜索响应命中数量异常: %+v", searchResponse.ErrorHits)
 	}
 	if bytes.Contains(searchRecorder.Body.Bytes(), []byte(`"path"`)) {
 		t.Fatalf("搜索响应不应再暴露 path 字段: %s", searchRecorder.Body.String())
 	}
+	if bytes.Contains(searchRecorder.Body.Bytes(), []byte(`"project_name"`)) {
+		t.Fatalf("命中结果不应再暴露 project_name 字段: %s", searchRecorder.Body.String())
+	}
 	if searchResponse.ErrorHits[0].GitBranch != "feature/router" {
 		t.Fatalf("搜索响应未返回 git 分支: %+v", searchResponse.ErrorHits[0])
+	}
+	if searchResponse.ErrorHits[0].Title != "HTTP接口测试" {
+		t.Fatalf("搜索响应未返回标题: %+v", searchResponse.ErrorHits[0])
+	}
+	if strings.Join(searchResponse.ErrorHits[0].Tags, ",") != "HTTP,测试" {
+		t.Fatalf("搜索响应未返回标签: %+v", searchResponse.ErrorHits[0])
 	}
 	if searchResponse.Error != "" {
 		t.Fatalf("成功响应不应返回 error 字段内容: %+v", searchResponse)

@@ -11,12 +11,13 @@ type Memory struct {
 	ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
 	UserID      string `gorm:"column:userid;type:text;not null;default:''"`
 	ProjectName string `gorm:"column:project_name;type:text;not null;default:'';index:idx_memories_project_type_timestamp,priority:1"`
+	GitBranch   string `gorm:"column:git_branch;type:text;not null;default:'';index:idx_memories_project_type_timestamp,priority:4"`
 	Type        string `gorm:"column:type;type:text;not null;check:type IN ('summary','error');index:idx_memories_type_timestamp,priority:1;index:idx_memories_project_type_timestamp,priority:2"`
 	Title       string `gorm:"column:title;type:text;not null"`
 	Tags        string `gorm:"column:tags;type:text;not null;default:'[]'"`
 	Summary     string `gorm:"column:summary;type:text;not null;default:''"`
 	Content     string `gorm:"column:content;type:text;not null"`
-	Timestamp   string `gorm:"column:timestamp;type:text;not null;index:idx_memories_type_timestamp,priority:2;index:idx_memories_project_type_timestamp,priority:3"`
+	Timestamp   string `gorm:"column:timestamp;type:text;not null;index:idx_memories_type_timestamp,priority:2;index:idx_memories_project_type_timestamp,priority:5"`
 	CreatedAt   string `gorm:"column:created_at;type:text;not null"`
 }
 

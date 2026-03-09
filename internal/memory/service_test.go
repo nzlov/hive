@@ -93,11 +93,17 @@ func TestServiceWriteAndSearch(t *testing.T) {
 	if !strings.Contains(markdown, "project_name: service-alias") {
 		t.Fatalf("Search 调试输出缺少项目名: %s", markdown)
 	}
-	if len(result.SummaryHits) != 1 || result.SummaryHits[0].ProjectName != "service-alias" {
-		t.Fatalf("Search 结果未按显式项目名返回: %+v", result.SummaryHits)
+	if len(result.SummaryHits) != 1 {
+		t.Fatalf("Search 结果数量异常: %+v", result.SummaryHits)
 	}
 	if result.SummaryHits[0].GitBranch != "feature/test-branch" {
 		t.Fatalf("Search 结果未返回 git 分支: %+v", result.SummaryHits[0])
+	}
+	if result.SummaryHits[0].Title != "服务层写入测试" {
+		t.Fatalf("Search 结果未返回标题: %+v", result.SummaryHits[0])
+	}
+	if strings.Join(result.SummaryHits[0].Tags, ",") != "服务层,测试" {
+		t.Fatalf("Search 结果未返回标签: %+v", result.SummaryHits[0])
 	}
 	store, err := models.StoreFromContext(ctx)
 	if err != nil {
@@ -113,6 +119,9 @@ func TestServiceWriteAndSearch(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].UserID != "test-userid" {
 		t.Fatalf("写入记忆未落库 userid: %+v", rows)
+	}
+	if rows[0].GitBranch != "feature/test-branch" {
+		t.Fatalf("写入记忆未落库 git_branch: %+v", rows)
 	}
 }
 
@@ -165,7 +174,9 @@ func TestServiceSearchSnippetIncludesTitleAndTags(t *testing.T) {
 	t.Helper()
 	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
 
-	if _, err := service.Write("snippet-project", "feature/snippet", "", []api.MemoryWriteItem{{
+	ctx := testContextWithStore(t, service.config)
+
+	if _, err := service.Write(ctx, "snippet-project", "feature/snippet", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "连接池复用策略",
 		Tags:    []string{"数据库", "连接池"},
@@ -175,7 +186,7 @@ func TestServiceSearchSnippetIncludesTitleAndTags(t *testing.T) {
 		t.Fatalf("写入片段记忆失败: %v", err)
 	}
 
-	result, err := service.Search("snippet-project", []string{"长连接池"}, false)
+	result, err := service.Search(ctx, "snippet-project", []string{"长连接池"}, false)
 	if err != nil {
 		t.Fatalf("搜索片段记忆失败: %v", err)
 	}
@@ -185,21 +196,21 @@ func TestServiceSearchSnippetIncludesTitleAndTags(t *testing.T) {
 	if len(result.SummaryHits[0].Snippets) == 0 {
 		t.Fatalf("片段搜索结果未返回 snippets: %+v", result.SummaryHits[0])
 	}
+	if result.SummaryHits[0].Title != "连接池复用策略" {
+		t.Fatalf("片段搜索结果缺少标题字段: %+v", result.SummaryHits[0])
+	}
+	if strings.Join(result.SummaryHits[0].Tags, ",") != "数据库,连接池" {
+		t.Fatalf("片段搜索结果缺少标签字段: %+v", result.SummaryHits[0])
+	}
 	content := result.SummaryHits[0].Snippets[0].Content
-	if !strings.Contains(content, "title: 连接池复用策略") {
-		t.Fatalf("片段缺少标题上下文: %s", content)
-	}
-	if !strings.Contains(content, "tags: 数据库, 连接池") {
-		t.Fatalf("片段缺少标签上下文: %s", content)
-	}
 	if !strings.Contains(content, "长连接池") {
 		t.Fatalf("片段缺少命中正文: %s", content)
 	}
 	if strings.Contains(result.Markdown(), "- path:") {
 		t.Fatalf("Markdown 不应再渲染 path 字段: %s", result.Markdown())
 	}
-	if result.SummaryHits[0].Path == "" {
-		t.Fatalf("服务内部命中仍应保留 Path 供内部逻辑使用: %+v", result.SummaryHits[0])
+	if strings.Contains(result.Markdown(), "title: 连接池复用策略\n\ntitle:") {
+		t.Fatalf("Markdown 不应重复渲染已移除的头部前缀: %s", result.Markdown())
 	}
 }
 
@@ -231,7 +242,7 @@ func TestServiceSearchIsolatedByProjectName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("搜索项目A记忆失败: %v", err)
 	}
-	if len(resultA.SummaryHits) != 1 || resultA.SummaryHits[0].ProjectName != "project-a" {
+	if len(resultA.SummaryHits) != 1 {
 		t.Fatalf("项目A搜索结果未正确隔离: %+v", resultA.SummaryHits)
 	}
 	if strings.Contains(resultA.Markdown(), "项目B记忆") {
@@ -242,7 +253,7 @@ func TestServiceSearchIsolatedByProjectName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("搜索项目B记忆失败: %v", err)
 	}
-	if len(resultB.SummaryHits) != 1 || resultB.SummaryHits[0].ProjectName != "project-b" {
+	if len(resultB.SummaryHits) != 1 {
 		t.Fatalf("项目B搜索结果未正确隔离: %+v", resultB.SummaryHits)
 	}
 	if strings.Contains(resultB.Markdown(), "项目A记忆") {

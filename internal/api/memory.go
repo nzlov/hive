@@ -17,8 +17,9 @@ type SearchSnippet struct {
 // SearchHit 描述单条搜索命中，供脚本按分支规则做二次筛选。
 type SearchHit struct {
 	Source      string          `json:"source"`
-	ProjectName string          `json:"project_name"`
 	GitBranch   string          `json:"git_branch"`
+	Title       string          `json:"title"`
+	Tags        []string        `json:"tags"`
 	Timestamp   string          `json:"timestamp"`
 	Confidence  float64         `json:"confidence"`
 	Snippets    []SearchSnippet `json:"snippets"`

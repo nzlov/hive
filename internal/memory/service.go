@@ -92,11 +92,12 @@ func (s *Service) Write(ctx context.Context, projectName, gitBranch, userID stri
 		memories = append(memories, models.Memory{
 			UserID:      strings.TrimSpace(userID),
 			ProjectName: effectiveProjectName,
+			GitBranch:   normalizedGitBranch,
 			Type:        strings.TrimSpace(item.Type),
 			Title:       sanitizeTitle(item.Title),
 			Tags:        models.EncodeTags(item.Tags),
 			Summary:     strings.TrimSpace(item.Summary),
-			Content:     buildMemoryContent(effectiveProjectName, normalizedGitBranch, strings.TrimSpace(userID), item),
+			Content:     normalizeMemoryContent(item.Context),
 			Timestamp:   itemTime.Format("20060102150405"),
 			CreatedAt:   itemTime.Format(time.RFC3339Nano),
 		})
@@ -230,29 +231,28 @@ func (s *Service) collectHits(store *models.Store, source string, projectName st
 	hits := make([]Hit, 0)
 	for _, row := range rows {
 		lines := splitLines(row.Content)
-		header := readHeader(lines)
-		rowGitBranch := readGitBranch(header)
-		bodyStart := bodyStartIndex(lines)
 		lineNumbers := matchLineNumbers(lines, matcher)
-		headerLineMatches := headerMatchLineNumbers(lineNumbers, bodyStart)
-		headerTitleMatch := matchHeaderTitle(header, matcher)
-		headerFieldMatch := matchHeaderFields(header, matcher)
-		bodyMatches := bodyMatchLineNumbers(lineNumbers, bodyStart)
-		if len(bodyMatches) == 0 && len(headerLineMatches) == 0 && !headerFieldMatch {
+		metadataMatched := matchRowMetadata(row, matcher)
+		if len(lineNumbers) == 0 && !metadataMatched {
 			continue
 		}
 		ts := parseTimestamp(row.Timestamp)
-		hit := Hit{ID: row.ID, Source: source, Path: fmt.Sprintf("%s#project=%s#id=%d", store.SourceLabel(), row.ProjectName, row.ID), ProjectName: row.ProjectName, GitBranch: rowGitBranch, Timestamp: ts, Confidence: confidenceByAge(ts, now), Header: header}
-		if headerTitleMatch {
+		hit := Hit{
+			ID:         row.ID,
+			Source:     source,
+			GitBranch:  row.GitBranch,
+			Title:      row.Title,
+			Tags:       models.DecodeTags(row.Tags),
+			Timestamp:  ts,
+			Confidence: confidenceByAge(ts, now),
+		}
+		if metadataMatched && len(lineNumbers) == 0 {
 			hit.FileContent = strings.TrimSpace(row.Content)
-		} else if len(bodyMatches) > 0 {
-			hit.Snippets = enrichSnippetsWithHeader(buildBodySectionSnippets(lines, bodyStart, bodyMatches, matcher), header)
+		} else if len(lineNumbers) > 0 {
+			hit.Snippets = buildBodySectionSnippets(lines, lineNumbers, matcher)
 		}
 		if len(hit.Snippets) == 0 && hit.FileContent == "" {
-			hit.Snippets = enrichSnippetsWithHeader(buildHeaderSnippets(lines, header, matcher, headerLineMatches), header)
-		}
-		if len(hit.Snippets) == 0 && hit.FileContent == "" {
-			continue
+			hit.FileContent = strings.TrimSpace(row.Content)
 		}
 		hits = append(hits, hit)
 	}
@@ -304,8 +304,7 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 		}
 		ts := parseTimestamp(row.Timestamp)
 		ageScore := confidenceByAge(ts, now)
-		header := readHeader(splitLines(row.Content))
-		hits = append(hits, Hit{ID: row.ID, Source: source, Path: fmt.Sprintf("%s#project=%s#id=%d", store.SourceLabel(), row.ProjectName, row.ID), ProjectName: row.ProjectName, GitBranch: readGitBranch(header), Timestamp: ts, Confidence: math.Max(semanticScore, ageScore*0.5+semanticScore*0.5), FileContent: strings.TrimSpace(row.Content), Header: header})
+		hits = append(hits, Hit{ID: row.ID, Source: source, GitBranch: row.GitBranch, Title: row.Title, Tags: models.DecodeTags(row.Tags), Timestamp: ts, Confidence: math.Max(semanticScore, ageScore*0.5+semanticScore*0.5), FileContent: strings.TrimSpace(row.Content)})
 	}
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].Confidence == hits[j].Confidence {
@@ -344,6 +343,7 @@ func memoryRowFromModel(item models.Memory) Row {
 		ID:          item.ID,
 		UserID:      item.UserID,
 		ProjectName: item.ProjectName,
+		GitBranch:   item.GitBranch,
 		Type:        item.Type,
 		Title:       item.Title,
 		Tags:        item.Tags,
@@ -433,33 +433,9 @@ func confidenceByAge(ts, now time.Time) float64 {
 	return math.Pow(0.5, ageDays/30)
 }
 
-// buildMemoryContent 统一生成持久化 Markdown 内容，并把写入人标识写进头部便于审计定位。
-func buildMemoryContent(projectName, gitBranch, userID string, item api.MemoryWriteItem) string {
-	summary := strings.TrimSpace(item.Summary)
-	if summary == "" {
-		summary = "自动生成记忆"
-	}
-	headLines := []string{
-		"---",
-		"type: " + strings.TrimSpace(item.Type),
-		"project: " + projectName,
-		"title: " + sanitizeTitle(item.Title),
-		"tags: " + strings.Join(item.Tags, ", "),
-		"summary: " + summary,
-	}
-	if gitBranch != "" {
-		headLines = append(headLines, "git_branch: "+gitBranch)
-	}
-	if userID != "" {
-		headLines = append(headLines, "user_id: "+userID)
-	}
-	headLines = append(headLines, "---", "", markdownBody(item.Context), "")
-	return strings.Join(headLines, "\n")
-}
-
-// markdownBody 确保持久化内容始终有正文，避免空记录影响后续检索体验。
-func markdownBody(context string) string {
-	body := strings.TrimSpace(context)
+// normalizeMemoryContent 统一正文落库规则，避免为兼容旧头部格式继续引入额外解析成本。
+func normalizeMemoryContent(content string) string {
+	body := strings.TrimSpace(content)
 	if body == "" {
 		return "## Details\n\n暂无内容。"
 	}
@@ -516,8 +492,14 @@ func renderHitsSection(title string, hits []Hit) string {
 // renderHitMarkdown 渲染单条命中记录，保持 CLI 输出稳定且易于扫描。
 func renderHitMarkdown(hit Hit, index int) string {
 	lines := []string{fmt.Sprintf("### Record %d", index), "- source: " + hit.Source}
-	if hit.ProjectName != "" {
-		lines = append(lines, "- project: "+hit.ProjectName)
+	if hit.GitBranch != "" {
+		lines = append(lines, "- git_branch: "+hit.GitBranch)
+	}
+	if hit.Title != "" {
+		lines = append(lines, "- title: "+hit.Title)
+	}
+	if len(hit.Tags) > 0 {
+		lines = append(lines, "- tags: "+strings.Join(hit.Tags, ", "))
 	}
 	lines = append(lines, "- timestamp: "+hit.Timestamp.Format(time.RFC3339), fmt.Sprintf("- confidence: %.3f", hit.Confidence))
 	if hit.FileContent != "" {
@@ -566,100 +548,6 @@ func matchLineNumbers(lines []string, matcher lineMatcher) []int {
 	return out
 }
 
-// bodyStartIndex 定位 YAML 头部结束位置，便于区分元数据和正文匹配。
-func bodyStartIndex(lines []string) int {
-	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
-		return 0
-	}
-	for idx := 1; idx < len(lines); idx++ {
-		if strings.TrimSpace(lines[idx]) == "---" {
-			return idx + 1
-		}
-	}
-	return 0
-}
-
-// parseScalar 按轻量规则解析头部值，避免强依赖完整 YAML 解析器。
-func parseScalar(value string) any {
-	text := strings.TrimSpace(value)
-	if len(text) >= 2 && ((text[0] == '"' && text[len(text)-1] == '"') || (text[0] == '\'' && text[len(text)-1] == '\'')) {
-		return text[1 : len(text)-1]
-	}
-	return text
-}
-
-// parseTags 兼容逗号分隔和列表字符串，降低旧内容兼容成本。
-func parseTags(value string) []string {
-	text := strings.TrimSpace(value)
-	if strings.HasPrefix(text, "[") && strings.HasSuffix(text, "]") {
-		text = strings.TrimSpace(text[1 : len(text)-1])
-	}
-	if text == "" {
-		return nil
-	}
-	parts := strings.Split(text, ",")
-	out := []string{}
-	for _, part := range parts {
-		tag := strings.TrimSpace(fmt.Sprint(parseScalar(part)))
-		if tag != "" {
-			out = append(out, tag)
-		}
-	}
-	return out
-}
-
-// readHeader 从持久化的 Markdown 内容中恢复头部字段，方便后续做标题和标签匹配。
-func readHeader(lines []string) map[string]any {
-	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
-		return map[string]any{}
-	}
-	end := -1
-	for idx := 1; idx < len(lines); idx++ {
-		if strings.TrimSpace(lines[idx]) == "---" {
-			end = idx
-			break
-		}
-	}
-	if end == -1 {
-		return map[string]any{}
-	}
-	header := map[string]any{}
-	for _, line := range lines[1:end] {
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		raw := strings.TrimSpace(parts[1])
-		if key == "tags" {
-			header[key] = parseTags(raw)
-			continue
-		}
-		header[key] = parseScalar(raw)
-	}
-	return header
-}
-
-// matchHeaderFields 让头部字段单独参与匹配，避免正文为空时漏掉标题型记忆。
-func matchHeaderFields(header map[string]any, matcher lineMatcher) bool {
-	for _, key := range []string{"project", "title", "summary", "git_branch"} {
-		value, ok := header[key].(string)
-		if ok && value != "" && matcher(value) {
-			return true
-		}
-	}
-	tags, ok := header["tags"].([]string)
-	if !ok {
-		return false
-	}
-	for _, tag := range tags {
-		if matcher(tag) {
-			return true
-		}
-	}
-	return false
-}
-
 // normalizeProjectName 统一裁剪项目名，避免空值污染单库隔离维度。
 func normalizeProjectName(projectName string) string {
 	cleaned := strings.Trim(strings.TrimSpace(projectName), "./")
@@ -672,40 +560,6 @@ func normalizeProjectName(projectName string) string {
 // normalizeGitBranch 统一裁剪分支名，避免头部记录被无意义空白污染。
 func normalizeGitBranch(gitBranch string) string {
 	return strings.TrimSpace(gitBranch)
-}
-
-// readGitBranch 从头部读取分支信息，让服务端和脚本共享同一字段语义。
-func readGitBranch(header map[string]any) string {
-	value, _ := header["git_branch"].(string)
-	return normalizeGitBranch(value)
-}
-
-// matchHeaderTitle 标题命中时返回全文，方便快速回看完整结论。
-func matchHeaderTitle(header map[string]any, matcher lineMatcher) bool {
-	value, ok := header["title"].(string)
-	return ok && value != "" && matcher(value)
-}
-
-// bodyMatchLineNumbers 过滤出正文命中行，避免头部匹配误入正文片段流程。
-func bodyMatchLineNumbers(lineNumbers []int, bodyStart int) []int {
-	out := []int{}
-	for _, lineNo := range lineNumbers {
-		if lineNo-1 >= bodyStart {
-			out = append(out, lineNo)
-		}
-	}
-	return out
-}
-
-// headerMatchLineNumbers 过滤出头部命中行，供元数据片段兜底展示。
-func headerMatchLineNumbers(lineNumbers []int, bodyStart int) []int {
-	out := []int{}
-	for _, lineNo := range lineNumbers {
-		if lineNo-1 < bodyStart {
-			out = append(out, lineNo)
-		}
-	}
-	return out
 }
 
 // isHeadingLine 识别 Markdown 标题，便于按章节返回更完整上下文。
@@ -731,37 +585,49 @@ func headingText(line string) string {
 	return strings.TrimSpace(match[2])
 }
 
+// matchRowMetadata 直接用结构化字段完成元信息匹配，避免再从正文反向恢复文件头。
+func matchRowMetadata(row Row, matcher lineMatcher) bool {
+	if matcher(row.ProjectName) || matcher(row.GitBranch) || matcher(row.Title) || matcher(row.Summary) {
+		return true
+	}
+	for _, tag := range models.DecodeTags(row.Tags) {
+		if matcher(tag) {
+			return true
+		}
+	}
+	return false
+}
+
 // buildBodySectionSnippets 正文优先按章节返回片段，让结论和约束一起出现。
-func buildBodySectionSnippets(lines []string, bodyStart int, matchLines []int, matcher lineMatcher) []Snippet {
-	bodyLines := lines[bodyStart:]
-	if len(bodyLines) == 0 {
+func buildBodySectionSnippets(lines []string, matchLines []int, matcher lineMatcher) []Snippet {
+	if len(lines) == 0 {
 		return nil
 	}
 	snippets := []Snippet{}
 	seen := map[string]struct{}{}
 	for _, lineNo := range matchLines {
-		idx := lineNo - 1 - bodyStart
-		if idx < 0 || idx >= len(bodyLines) {
+		idx := lineNo - 1
+		if idx < 0 || idx >= len(lines) {
 			continue
 		}
 		content := ""
 		startIdx := 0
 		endIdx := 0
-		if isHeadingLine(bodyLines[idx]) && matcher(headingText(bodyLines[idx])) {
-			content, startIdx, endIdx = extractSection(bodyLines, idx)
+		if isHeadingLine(lines[idx]) && matcher(headingText(lines[idx])) {
+			content, startIdx, endIdx = extractSection(lines, idx)
 		} else {
-			parent := findParentHeadingIndex(bodyLines, idx)
+			parent := findParentHeadingIndex(lines, idx)
 			if parent >= 0 {
-				content, startIdx, endIdx = extractSection(bodyLines, parent)
+				content, startIdx, endIdx = extractSection(lines, parent)
 			} else {
-				content, startIdx, endIdx = buildBodySnippet(lines, bodyStart, lineNo)
+				content, startIdx, endIdx = buildBodySnippet(lines, lineNo)
 			}
 		}
 		if strings.TrimSpace(content) == "" {
 			continue
 		}
-		absStart := bodyStart + startIdx + 1
-		absEnd := bodyStart + endIdx
+		absStart := startIdx + 1
+		absEnd := endIdx
 		key := fmt.Sprintf("%d-%d", absStart, absEnd)
 		if _, ok := seen[key]; ok {
 			continue
@@ -770,45 +636,6 @@ func buildBodySectionSnippets(lines []string, bodyStart int, matchLines []int, m
 		snippets = append(snippets, Snippet{Start: absStart, End: absEnd, Content: content})
 	}
 	return snippets
-}
-
-// enrichSnippetsWithHeader 为片段补充标题与标签，避免脱离原记忆时难以理解命中上下文。
-func enrichSnippetsWithHeader(snippets []Snippet, header map[string]any) []Snippet {
-	if len(snippets) == 0 {
-		return nil
-	}
-	prefixLines := []string{}
-	if title, ok := header["title"].(string); ok {
-		title = strings.TrimSpace(title)
-		if title != "" {
-			prefixLines = append(prefixLines, "title: "+title)
-		}
-	}
-	if tags, ok := header["tags"].([]string); ok && len(tags) > 0 {
-		cleanedTags := make([]string, 0, len(tags))
-		for _, tag := range tags {
-			tag = strings.TrimSpace(tag)
-			if tag != "" {
-				cleanedTags = append(cleanedTags, tag)
-			}
-		}
-		if len(cleanedTags) > 0 {
-			prefixLines = append(prefixLines, "tags: "+strings.Join(cleanedTags, ", "))
-		}
-	}
-	if len(prefixLines) == 0 {
-		return snippets
-	}
-	prefix := strings.Join(prefixLines, "\n") + "\n\n"
-	decorated := make([]Snippet, 0, len(snippets))
-	for _, snippet := range snippets {
-		decorated = append(decorated, Snippet{
-			Start:   snippet.Start,
-			End:     snippet.End,
-			Content: prefix + snippet.Content,
-		})
-	}
-	return decorated
 }
 
 // sectionEndIndex 找到当前标题块的结束位置，避免截取过多无关内容。
@@ -839,18 +666,17 @@ func findParentHeadingIndex(bodyLines []string, lineIdx int) int {
 }
 
 // buildBodySnippet 无标题上下文时退化为窗口截取，至少保留附近语义。
-func buildBodySnippet(lines []string, bodyStart int, matchLine int) (string, int, int) {
-	bodyLines := lines[bodyStart:]
-	matchIdx := matchLine - 1 - bodyStart
-	if matchIdx < 0 || matchIdx >= len(bodyLines) {
+func buildBodySnippet(lines []string, matchLine int) (string, int, int) {
+	matchIdx := matchLine - 1
+	if matchIdx < 0 || matchIdx >= len(lines) {
 		return "", 0, 0
 	}
 	before := minInt(10, matchIdx)
-	after := minInt(9, len(bodyLines)-matchIdx-1)
+	after := minInt(9, len(lines)-matchIdx-1)
 	total := before + 1 + after
 	missing := 20 - total
 	if missing > 0 {
-		extraAfter := minInt(missing, len(bodyLines)-matchIdx-1-after)
+		extraAfter := minInt(missing, len(lines)-matchIdx-1-after)
 		after += extraAfter
 		missing -= extraAfter
 	}
@@ -859,78 +685,7 @@ func buildBodySnippet(lines []string, bodyStart int, matchLine int) (string, int
 	}
 	start := matchIdx - before
 	end := matchIdx + after + 1
-	return strings.TrimSpace(strings.Join(bodyLines[start:end], "\n")), start, end
-}
-
-// buildHeaderSnippets 为仅命中头部字段的记录构建最小可读片段。
-func buildHeaderSnippets(lines []string, header map[string]any, matcher lineMatcher, headerMatchLines []int) []Snippet {
-	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
-		return nil
-	}
-	end := -1
-	for idx := 1; idx < len(lines); idx++ {
-		if strings.TrimSpace(lines[idx]) == "---" {
-			end = idx
-			break
-		}
-	}
-	if end == -1 {
-		return nil
-	}
-	snippets := []Snippet{}
-	for lineNo := 2; lineNo <= end+1; lineNo++ {
-		raw := lines[lineNo-1]
-		parts := strings.SplitN(raw, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		if value == "" {
-			continue
-		}
-		if (key == "title" || key == "summary") && matcher(value) {
-			snippets = append(snippets, Snippet{Start: lineNo, End: lineNo, Content: key + ": " + value})
-		}
-		if key == "tags" {
-			matched := []string{}
-			for _, tag := range parseTags(value) {
-				if matcher(tag) {
-					matched = append(matched, tag)
-				}
-			}
-			if len(matched) > 0 {
-				snippets = append(snippets, Snippet{Start: lineNo, End: lineNo, Content: "tags: " + strings.Join(matched, ", ")})
-			}
-		}
-	}
-	if len(snippets) > 0 {
-		return snippets
-	}
-	for _, lineNo := range headerMatchLines {
-		if lineNo >= 1 && lineNo <= len(lines) {
-			if content := strings.TrimSpace(lines[lineNo-1]); content != "" {
-				snippets = append(snippets, Snippet{Start: lineNo, End: lineNo, Content: content})
-			}
-		}
-	}
-	if len(snippets) > 0 {
-		return snippets
-	}
-	fallback := []string{}
-	if title, ok := header["title"].(string); ok && title != "" {
-		fallback = append(fallback, "title: "+title)
-	}
-	if tags, ok := header["tags"].([]string); ok && len(tags) > 0 {
-		fallback = append(fallback, "tags: "+strings.Join(tags, ", "))
-	}
-	if summary, ok := header["summary"].(string); ok && summary != "" {
-		fallback = append(fallback, "summary: "+summary)
-	}
-	if len(fallback) == 0 {
-		return nil
-	}
-	return []Snippet{{Start: 1, End: end + 1, Content: strings.Join(fallback, "\n")}}
+	return strings.TrimSpace(strings.Join(lines[start:end], "\n")), start, end
 }
 
 // parseQueries 兼容 JSON 数组和多参数写法，避免调用方因格式不同而失败。
