@@ -5,11 +5,6 @@ description: Trigger this skill by default for search or analysis tasks. prior-c
 
 # 记忆管理
 
-## 头部规范
-
-1. 时间信息仅来自文件名时间戳 `YYYYMMDDHHMMSS`。
-2. 头部信息有：`type`、`title`、`tags`、`summary`。
-
 ## 触发优先级
 
 1. 只要任务包含“搜索”或“分析”语义，优先触发本技能并先检索记忆。
@@ -25,17 +20,15 @@ description: Trigger this skill by default for search or analysis tasks. prior-c
 
 - `query`
 - `project_name`
-- 命中记录（含 `source/path/timestamp/confidence`）
+- tags
+- timestamp
+- confidence
 - `snippets`（数组，含 `line_range.start/end` 与 `content`）
 - `file_content`（仅 `title` 命中时返回完整文件）
-
-在调用脚本前，确保仓库根目录的服务端已启动：`go run ./cmd/hive-server`。
 
 使用命令：
 
 ```bash
-python3 scripts/main.py search --query '关键词'
-python3 scripts/main.py search --query '关键词1' --query '<关键词2>'
 python3 scripts/main.py search --query '["关键词1","<关键词2>"]'
 ```
 
@@ -108,11 +101,7 @@ python3 scripts/main.py write \
 1. 总结记忆正文样例（`context` 字段）：
 
 ```markdown
-## Summary
-
-- 详情: 订单支付成功后由异步任务更新对账状态，避免主链路阻塞。
-
-## src/order/reconcile_service.go
+# src/order/reconcile_service.go
 
 - 详情: 对账入口文件，负责拉取待对账订单并分批处理。
 - 依赖: `internal/reconcile/repo.go`
@@ -128,14 +117,10 @@ python3 scripts/main.py write \
 - 结论: 该流转是对账任务的前置条件。
 ```
 
-2. 错误记忆正文样例（`context` 字段）：
+1. 错误记忆正文样例（`context` 字段）：
 
 ````markdown
-## Summary
-
-- 详情: 高并发下数据库连接未释放，导致连接池耗尽。
-
-## src/pay/retry.go
+# src/pay/retry.go
 
 - 详情: 重试流程中异常分支提前返回，遗漏连接关闭。
 - 影响: 支付重试请求在峰值时大量失败。
