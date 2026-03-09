@@ -32,17 +32,18 @@ func NewService(cfg config.AppConfig) *Service {
 	return &Service{config: cfg, provider: NewEmbeddingProvider(cfg.EmbeddingConfig)}
 }
 
-// Search 执行记忆检索并返回最终 Markdown，保持现有 skill 消费方式稳定。
-func (s *Service) Search(projectRoot string, queries []string, debug bool) (string, error) {
+// Search 执行记忆检索并返回结构化结果，方便脚本按分支状态做二次筛选。
+func (s *Service) Search(projectRoot, projectName string, queries []string, debug bool) (SearchResult, error) {
 	location, db, err := s.openProjectDB(projectRoot)
 	if err != nil {
-		return "", err
+		return SearchResult{}, err
 	}
 	defer db.Close()
 	if _, err := s.rebuildEmbeddingsWithDB(location, db, false); err != nil {
-		return "", err
+		return SearchResult{}, err
 	}
 	allowLegacyBlankProject := !location.ExternalEnabled
+	effectiveProjectName := resolveProjectName(location, projectName)
 	var debugCommands []string
 	var debugCommandsRef *[]string
 	if debug {
@@ -50,27 +51,34 @@ func (s *Service) Search(projectRoot string, queries []string, debug bool) (stri
 		debugCommandsRef = &debugCommands
 	}
 	matcher := buildQueryMatcher(queries)
-	errorKeywordHits, err := s.collectHits(db, "error", location, allowLegacyBlankProject, matcher, debugCommandsRef)
+	errorKeywordHits, err := s.collectHits(db, "error", location, effectiveProjectName, allowLegacyBlankProject, matcher, debugCommandsRef)
 	if err != nil {
-		return "", err
+		return SearchResult{}, err
 	}
-	summaryKeywordHits, err := s.collectHits(db, "summary", location, allowLegacyBlankProject, matcher, debugCommandsRef)
+	summaryKeywordHits, err := s.collectHits(db, "summary", location, effectiveProjectName, allowLegacyBlankProject, matcher, debugCommandsRef)
 	if err != nil {
-		return "", err
+		return SearchResult{}, err
 	}
-	errorSemanticHits, err := s.collectSemanticHits(db, "error", location, allowLegacyBlankProject, queries)
+	errorSemanticHits, err := s.collectSemanticHits(db, "error", location, effectiveProjectName, allowLegacyBlankProject, queries)
 	if err != nil {
-		return "", err
+		return SearchResult{}, err
 	}
-	summarySemanticHits, err := s.collectSemanticHits(db, "summary", location, allowLegacyBlankProject, queries)
+	summarySemanticHits, err := s.collectSemanticHits(db, "summary", location, effectiveProjectName, allowLegacyBlankProject, queries)
 	if err != nil {
-		return "", err
+		return SearchResult{}, err
 	}
-	return renderResultMarkdown(strings.Join(queries, ", "), location.SearchRoot, mergeHits(errorKeywordHits, errorSemanticHits), mergeHits(summaryKeywordHits, summarySemanticHits), debugCommands), nil
+	result := SearchResult{
+		Query:         strings.Join(queries, ", "),
+		SearchRoot:    location.SearchRoot,
+		DebugCommands: debugCommands,
+		ErrorHits:     mergeHits(errorKeywordHits, errorSemanticHits),
+		SummaryHits:   mergeHits(summaryKeywordHits, summarySemanticHits),
+	}
+	return result, nil
 }
 
 // Write 写入总结或错误记忆，并返回最终落盘数据库路径方便脚本直接输出。
-func (s *Service) Write(projectRoot string, items []api.MemoryWriteItem) (string, error) {
+func (s *Service) Write(projectRoot, projectName, gitBranch string, items []api.MemoryWriteItem) (string, error) {
 	location, db, err := s.openProjectDB(projectRoot)
 	if err != nil {
 		return "", err
@@ -87,17 +95,19 @@ func (s *Service) Write(projectRoot string, items []api.MemoryWriteItem) (string
 
 	now := time.Now().UTC()
 	timestampSeed := now.Unix()
+	effectiveProjectName := resolveProjectName(location, projectName)
+	normalizedGitBranch := normalizeGitBranch(gitBranch)
 	rows := make([]Row, 0, len(items))
 	ids := make([]int64, 0, len(items))
 	for idx, item := range items {
 		itemTime := time.Unix(timestampSeed+int64(idx), 0).UTC()
 		row := Row{
-			ProjectName: location.ProjectName,
+			ProjectName: effectiveProjectName,
 			Type:        strings.TrimSpace(item.Type),
 			Title:       sanitizeTitle(item.Title),
 			Tags:        EncodeTags(item.Tags),
 			Summary:     strings.TrimSpace(item.Summary),
-			Content:     buildMemoryContent(location.ProjectName, item),
+			Content:     buildMemoryContent(effectiveProjectName, normalizedGitBranch, item),
 			Timestamp:   itemTime.Format("20060102150405"),
 			CreatedAt:   itemTime.Format(time.RFC3339Nano),
 		}
@@ -213,11 +223,11 @@ func (s *Service) rebuildEmbeddingsWithDB(location Location, db *sql.DB, force b
 }
 
 // collectHits 在数据库记录中筛选关键字命中，并保留旧输出结构。
-func (s *Service) collectHits(db *sql.DB, source string, location Location, allowLegacyBlankProject bool, matcher lineMatcher, debugCommands *[]string) ([]Hit, error) {
+func (s *Service) collectHits(db *sql.DB, source string, location Location, projectName string, allowLegacyBlankProject bool, matcher lineMatcher, debugCommands *[]string) ([]Hit, error) {
 	if debugCommands != nil {
-		*debugCommands = append(*debugCommands, fmt.Sprintf("sqlite scan: %s [%s/%s]", DBPath(location.MemoryRoot), location.ProjectName, source))
+		*debugCommands = append(*debugCommands, fmt.Sprintf("sqlite scan: %s [%s/%s]", DBPath(location.MemoryRoot), projectName, source))
 	}
-	rows, err := FetchMemoryRows(db, location.ProjectName, source, allowLegacyBlankProject)
+	rows, err := FetchMemoryRows(db, projectName, source, allowLegacyBlankProject)
 	if err != nil {
 		return nil, err
 	}
@@ -226,6 +236,7 @@ func (s *Service) collectHits(db *sql.DB, source string, location Location, allo
 	for _, row := range rows {
 		lines := splitLines(row.Content)
 		header := readHeader(lines)
+		rowGitBranch := readGitBranch(header)
 		bodyStart := bodyStartIndex(lines)
 		lineNumbers := matchLineNumbers(lines, matcher)
 		headerLineMatches := headerMatchLineNumbers(lineNumbers, bodyStart)
@@ -236,7 +247,7 @@ func (s *Service) collectHits(db *sql.DB, source string, location Location, allo
 			continue
 		}
 		ts := parseTimestamp(row.Timestamp)
-		hit := Hit{ID: row.ID, Source: source, Path: fmt.Sprintf("%s#project=%s#id=%d", DBPath(location.MemoryRoot), row.ProjectName, row.ID), ProjectName: row.ProjectName, Timestamp: ts, Confidence: confidenceByAge(ts, now), Header: header}
+		hit := Hit{ID: row.ID, Source: source, Path: fmt.Sprintf("%s#project=%s#id=%d", DBPath(location.MemoryRoot), row.ProjectName, row.ID), ProjectName: row.ProjectName, GitBranch: rowGitBranch, Timestamp: ts, Confidence: confidenceByAge(ts, now), Header: header}
 		if headerTitleMatch {
 			hit.FileContent = strings.TrimSpace(row.Content)
 		} else if len(bodyMatches) > 0 {
@@ -255,7 +266,7 @@ func (s *Service) collectHits(db *sql.DB, source string, location Location, allo
 }
 
 // collectSemanticHits 在关键字检索之外补充语义召回，减少措辞变化带来的漏检。
-func (s *Service) collectSemanticHits(db *sql.DB, source string, location Location, allowLegacyBlankProject bool, queries []string) ([]Hit, error) {
+func (s *Service) collectSemanticHits(db *sql.DB, source string, location Location, projectName string, allowLegacyBlankProject bool, queries []string) ([]Hit, error) {
 	if !s.provider.Enabled() {
 		return nil, nil
 	}
@@ -267,12 +278,14 @@ func (s *Service) collectSemanticHits(db *sql.DB, source string, location Locati
 	if err != nil || len(vectors) == 0 {
 		return nil, err
 	}
-	rows, err := FetchMemoryRows(db, location.ProjectName, source, allowLegacyBlankProject)
+	rows, err := FetchMemoryRows(db, projectName, source, allowLegacyBlankProject)
 	if err != nil {
 		return nil, err
 	}
+	filteredRows := make([]Row, 0, len(rows))
 	memoryIDs := make([]int64, 0, len(rows))
 	for _, row := range rows {
+		filteredRows = append(filteredRows, row)
 		memoryIDs = append(memoryIDs, row.ID)
 	}
 	embeddings, err := FetchMemoryEmbeddings(db, memoryIDs)
@@ -281,7 +294,7 @@ func (s *Service) collectSemanticHits(db *sql.DB, source string, location Locati
 	}
 	now := time.Now().UTC()
 	hits := make([]Hit, 0)
-	for _, row := range rows {
+	for _, row := range filteredRows {
 		vector, ok := embeddings[row.ID]
 		if !ok {
 			continue
@@ -292,7 +305,8 @@ func (s *Service) collectSemanticHits(db *sql.DB, source string, location Locati
 		}
 		ts := parseTimestamp(row.Timestamp)
 		ageScore := confidenceByAge(ts, now)
-		hits = append(hits, Hit{ID: row.ID, Source: source, Path: fmt.Sprintf("%s#project=%s#id=%d", DBPath(location.MemoryRoot), row.ProjectName, row.ID), ProjectName: row.ProjectName, Timestamp: ts, Confidence: math.Max(semanticScore, ageScore*0.5+semanticScore*0.5), FileContent: strings.TrimSpace(row.Content), Header: readHeader(splitLines(row.Content))})
+		header := readHeader(splitLines(row.Content))
+		hits = append(hits, Hit{ID: row.ID, Source: source, Path: fmt.Sprintf("%s#project=%s#id=%d", DBPath(location.MemoryRoot), row.ProjectName, row.ID), ProjectName: row.ProjectName, GitBranch: readGitBranch(header), Timestamp: ts, Confidence: math.Max(semanticScore, ageScore*0.5+semanticScore*0.5), FileContent: strings.TrimSpace(row.Content), Header: header})
 	}
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].Confidence == hits[j].Confidence {
@@ -383,23 +397,24 @@ func confidenceByAge(ts, now time.Time) float64 {
 }
 
 // buildMemoryContent 统一生成持久化 Markdown 内容，减少总结和错误记忆的维护分叉。
-func buildMemoryContent(projectName string, item api.MemoryWriteItem) string {
+func buildMemoryContent(projectName, gitBranch string, item api.MemoryWriteItem) string {
 	summary := strings.TrimSpace(item.Summary)
 	if summary == "" {
 		summary = "自动生成记忆"
 	}
-	return strings.Join([]string{
+	headLines := []string{
 		"---",
 		"type: " + strings.TrimSpace(item.Type),
 		"project: " + projectName,
 		"title: " + sanitizeTitle(item.Title),
 		"tags: " + strings.Join(item.Tags, ", "),
 		"summary: " + summary,
-		"---",
-		"",
-		markdownBody(item.Context),
-		"",
-	}, "\n")
+	}
+	if gitBranch != "" {
+		headLines = append(headLines, "git_branch: "+gitBranch)
+	}
+	headLines = append(headLines, "---", "", markdownBody(item.Context), "")
+	return strings.Join(headLines, "\n")
 }
 
 // markdownBody 确保持久化内容始终有正文，避免空记录影响后续检索体验。
@@ -436,6 +451,11 @@ func renderResultMarkdown(query, searchRoot string, errorHits, summaryHits []Hit
 	}
 	lines = append(lines, "", renderHitsSection("Error Hits", errorHits), "", renderHitsSection("Summary Hits", summaryHits))
 	return strings.Join(lines, "\n") + "\n"
+}
+
+// Markdown 让结构化搜索结果继续输出兼容旧脚本的 Markdown 文本。
+func (r SearchResult) Markdown() string {
+	return renderResultMarkdown(r.Query, r.SearchRoot, r.ErrorHits, r.SummaryHits, r.DebugCommands)
 }
 
 // renderHitsSection 统一渲染分类结果，让空结果也显式可见避免歧义。
@@ -582,7 +602,7 @@ func readHeader(lines []string) map[string]any {
 
 // matchHeaderFields 让头部字段单独参与匹配，避免正文为空时漏掉标题型记忆。
 func matchHeaderFields(header map[string]any, matcher lineMatcher) bool {
-	for _, key := range []string{"project", "title", "summary"} {
+	for _, key := range []string{"project", "title", "summary", "git_branch"} {
 		value, ok := header[key].(string)
 		if ok && value != "" && matcher(value) {
 			return true
@@ -598,6 +618,25 @@ func matchHeaderFields(header map[string]any, matcher lineMatcher) bool {
 		}
 	}
 	return false
+}
+
+// resolveProjectName 优先使用请求显式传入的项目名，避免共享库远程写入时只能依赖目录名。
+func resolveProjectName(location Location, override string) string {
+	if normalized := sanitizeProjectName(override); normalized != "default-project" || strings.TrimSpace(override) != "" {
+		return normalized
+	}
+	return location.ProjectName
+}
+
+// normalizeGitBranch 统一裁剪分支名，避免头部记录被无意义空白污染。
+func normalizeGitBranch(gitBranch string) string {
+	return strings.TrimSpace(gitBranch)
+}
+
+// readGitBranch 从头部读取分支信息，让服务端和脚本共享同一字段语义。
+func readGitBranch(header map[string]any) string {
+	value, _ := header["git_branch"].(string)
+	return normalizeGitBranch(value)
 }
 
 // matchHeaderTitle 标题命中时返回全文，方便快速回看完整结论。

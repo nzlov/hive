@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -21,12 +22,19 @@ func NewRouter(service *memory.Service) *gin.Engine {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		markdown, err := service.Search(request.ProjectRoot, request.Queries, request.Debug)
+		result, err := service.Search(request.ProjectRoot, request.ProjectName, request.Queries, request.Debug)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, api.SearchResponse{Markdown: markdown})
+		c.JSON(http.StatusOK, api.SearchResponse{
+			Query:         result.Query,
+			SearchRoot:    result.SearchRoot,
+			DebugCommands: result.DebugCommands,
+			ErrorHits:     buildSearchHits(result.ErrorHits),
+			SummaryHits:   buildSearchHits(result.SummaryHits),
+			Markdown:      result.Markdown(),
+		})
 	})
 	router.POST("/api/v1/memories/write", func(c *gin.Context) {
 		var request api.WriteRequest
@@ -34,7 +42,7 @@ func NewRouter(service *memory.Service) *gin.Engine {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		databasePath, err := service.Write(request.ProjectRoot, request.Items)
+		databasePath, err := service.Write(request.ProjectRoot, request.ProjectName, request.GitBranch, request.Items)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -55,4 +63,26 @@ func NewRouter(service *memory.Service) *gin.Engine {
 		c.JSON(http.StatusOK, api.RebuildResponse{Changed: result.Changed, Message: result.Message})
 	})
 	return router
+}
+
+// buildSearchHits 把服务层命中结果转成稳定的 HTTP 出参，避免脚本依赖内部结构体。
+func buildSearchHits(hits []memory.Hit) []api.SearchHit {
+	result := make([]api.SearchHit, 0, len(hits))
+	for _, hit := range hits {
+		snippets := make([]api.SearchSnippet, 0, len(hit.Snippets))
+		for _, snippet := range hit.Snippets {
+			snippets = append(snippets, api.SearchSnippet{Start: snippet.Start, End: snippet.End, Content: snippet.Content})
+		}
+		result = append(result, api.SearchHit{
+			Source:      hit.Source,
+			Path:        hit.Path,
+			ProjectName: hit.ProjectName,
+			GitBranch:   hit.GitBranch,
+			Timestamp:   hit.Timestamp.Format(time.RFC3339),
+			Confidence:  hit.Confidence,
+			Snippets:    snippets,
+			FileContent: hit.FileContent,
+		})
+	}
+	return result
 }

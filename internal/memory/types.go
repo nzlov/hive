@@ -30,6 +30,7 @@ type Hit struct {
 	Source      string
 	Path        string
 	ProjectName string
+	GitBranch   string
 	Timestamp   time.Time
 	Confidence  float64
 	Snippets    []Snippet
@@ -48,4 +49,13 @@ type Snippet struct {
 type RebuildResult struct {
 	Changed bool
 	Message string
+}
+
+// SearchResult 统一承接搜索输出，避免服务端和脚本各自维护一套结果结构。
+type SearchResult struct {
+	Query         string
+	SearchRoot    string
+	DebugCommands []string
+	ErrorHits     []Hit
+	SummaryHits   []Hit
 }

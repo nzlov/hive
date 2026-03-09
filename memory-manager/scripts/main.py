@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 from urllib import error, request
@@ -251,6 +252,180 @@ def build_request_payload(project_root: str, project_alias: str, **extra: Any) -
     return payload
 
 
+def run_git_command(project_root: str, args: list[str]) -> str:
+    """统一执行 Git 命令并吞掉环境差异错误，避免脚本因为非仓库目录直接失败。"""
+
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=project_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+    return completed.stdout.strip()
+
+
+def resolve_current_git_branch(project_root: str) -> str:
+    """优先读取当前检出分支，便于只保留已经进入当前分支历史的记忆。"""
+
+    branch = run_git_command(project_root, ["branch", "--show-current"])
+    if branch:
+        return branch
+    fallback = run_git_command(project_root, ["rev-parse", "--abbrev-ref", "HEAD"])
+    return "" if fallback == "HEAD" else fallback
+
+
+def normalize_git_branch(git_branch: str) -> str:
+    """统一裁剪分支名，避免头部或 Git 输出中的空白影响匹配。"""
+
+    return git_branch.strip()
+
+
+def branch_ref_candidates(git_branch: str) -> list[str]:
+    """兼容本地和远程引用名，尽量提高已合并判断的命中率。"""
+
+    normalized = normalize_git_branch(git_branch)
+    if not normalized:
+        return []
+    candidates = [normalized]
+    if not normalized.startswith("refs/"):
+        candidates.append(f"refs/heads/{normalized}")
+        candidates.append(f"refs/remotes/origin/{normalized}")
+        candidates.append(f"origin/{normalized}")
+    deduped: list[str] = []
+    for candidate in candidates:
+        if candidate not in deduped:
+            deduped.append(candidate)
+    return deduped
+
+
+def branch_exists(project_root: str, git_branch: str) -> bool:
+    """先确认分支引用存在，再做祖先判断，避免缺失引用时误报已合并。"""
+
+    return bool(run_git_command(project_root, ["rev-parse", "--verify", f"{git_branch}^{{commit}}"]))
+
+
+def is_branch_reachable(project_root: str, git_branch: str) -> bool:
+    """通过祖先关系判断目标分支提交是否已经进入当前 HEAD。"""
+
+    try:
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", git_branch, "HEAD"],
+            cwd=project_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return True
+
+
+def should_keep_hit(hit: dict[str, Any], project_root: str, current_branch: str, branch_cache: dict[str, bool]) -> bool:
+    """逐条判断分支记忆是否已经被当前分支吸收，避免把未合并结论提前暴露出来。"""
+
+    memory_branch = normalize_git_branch(str(hit.get("git_branch", "")))
+    if not memory_branch or not current_branch:
+        return True
+    if memory_branch == current_branch:
+        return True
+    cached = branch_cache.get(memory_branch)
+    if cached is not None:
+        return cached
+    for candidate in branch_ref_candidates(memory_branch):
+        if not branch_exists(project_root, candidate):
+            continue
+        merged = is_branch_reachable(project_root, candidate)
+        branch_cache[memory_branch] = merged
+        return merged
+    branch_cache[memory_branch] = False
+    return False
+
+
+def filter_hits_by_branch(hits: list[dict[str, Any]], project_root: str, current_branch: str) -> list[dict[str, Any]]:
+    """按当前项目分支筛掉未合并的分支记忆，保证搜索结果和代码历史一致。"""
+
+    branch_cache: dict[str, bool] = {}
+    return [hit for hit in hits if should_keep_hit(hit, project_root, current_branch, branch_cache)]
+
+
+def markdown_fence_for(text: str) -> str:
+    """根据正文内容选择围栏长度，避免记忆正文内已有代码块时被截断。"""
+
+    return "````" if "```" in text else "```"
+
+
+def render_hit(hit: dict[str, Any], index: int) -> list[str]:
+    """统一渲染单条命中，保证脚本筛选后仍保持服务端原有展示结构。"""
+
+    lines = [f"### Record {index}", f"- source: {hit.get('source', '')}", f"- path: {hit.get('path', '')}"]
+    project_name = str(hit.get("project_name", "")).strip()
+    if project_name:
+        lines.append(f"- project: {project_name}")
+    git_branch = normalize_git_branch(str(hit.get("git_branch", "")))
+    if git_branch:
+        lines.append(f"- git_branch: {git_branch}")
+    lines.append(f"- timestamp: {hit.get('timestamp', '')}")
+    lines.append(f"- confidence: {float(hit.get('confidence', 0.0)):.3f}")
+    file_content = str(hit.get("file_content", "")).strip()
+    if file_content:
+        fence = markdown_fence_for(file_content)
+        lines.extend(["- file_content:", f"  {fence}markdown"])
+        lines.extend([f"  {line}" for line in file_content.splitlines()])
+        lines.append(f"  {fence}")
+    snippets = hit.get("snippets")
+    if isinstance(snippets, list) and snippets:
+        lines.append("- snippets:")
+        for snippet in snippets:
+            if not isinstance(snippet, dict):
+                continue
+            content = str(snippet.get("content", "")).strip()
+            fence = markdown_fence_for(content)
+            lines.extend(
+                [
+                    f"  - line_range: {int(snippet.get('start', 0))}-{int(snippet.get('end', 0))}",
+                    "    content:",
+                    f"    {fence}markdown",
+                ]
+            )
+            lines.extend([f"    {line}" for line in content.splitlines()])
+            lines.append(f"    {fence}")
+    return lines
+
+
+def render_hits_section(title: str, hits: list[dict[str, Any]]) -> str:
+    """统一渲染分类结果，让筛选后的空结果也能稳定展示。"""
+
+    lines = [f"## {title} ({len(hits)})"]
+    if not hits:
+        lines.append("- (none)")
+        return "\n".join(lines)
+    for index, hit in enumerate(hits, start=1):
+        lines.extend(render_hit(hit, index))
+        if index < len(hits):
+            lines.append("---")
+    return "\n".join(lines)
+
+
+def render_search_markdown(response: dict[str, Any], error_hits: list[dict[str, Any]], summary_hits: list[dict[str, Any]]) -> str:
+    """脚本在本地重建 Markdown，保证分支筛选后输出仍与旧格式兼容。"""
+
+    lines = [
+        "# Memory Search Result",
+        f"- query: {response.get('query', '')}",
+        f"- search_root: {response.get('search_root', '')}",
+    ]
+    debug_commands = response.get("debug_commands")
+    if isinstance(debug_commands, list) and debug_commands:
+        lines.extend(["- debug: true", "", "## Debug Commands"])
+        lines.extend([f"- `{str(command)}`" for command in debug_commands])
+    lines.extend(["", render_hits_section("Error Hits", error_hits), "", render_hits_section("Summary Hits", summary_hits), ""])
+    return "\n".join(lines)
+
+
 def run_search(args: argparse.Namespace, project_root: str, base_url: str, project_alias: str) -> int:
     """搜索子命令只整理输入并打印服务端返回结果，保持脚本职责轻量。"""
 
@@ -267,17 +442,29 @@ def run_search(args: argparse.Namespace, project_root: str, base_url: str, proje
             debug=bool(args.debug),
         ),
     )
-    print(str(response.get("markdown", "")), end="")
+    current_branch = resolve_current_git_branch(project_root)
+    error_hits = filter_hits_by_branch(
+        response.get("error_hits", []) if isinstance(response.get("error_hits"), list) else [],
+        project_root,
+        current_branch,
+    )
+    summary_hits = filter_hits_by_branch(
+        response.get("summary_hits", []) if isinstance(response.get("summary_hits"), list) else [],
+        project_root,
+        current_branch,
+    )
+    print(render_search_markdown(response, error_hits, summary_hits), end="")
     return 0
 
 
 def run_write(args: argparse.Namespace, project_root: str, base_url: str, project_alias: str) -> int:
     """写入子命令只负责参数兼容和输出结果，把持久化逻辑完全留给服务端。"""
 
+    current_branch = resolve_current_git_branch(project_root)
     response = post_json(
         base_url,
         "/api/v1/memories/write",
-        build_request_payload(project_root, project_alias, items=parse_write_items(args)),
+        build_request_payload(project_root, project_alias, git_branch=current_branch, items=parse_write_items(args)),
     )
     print(str(response.get("database_path", "")))
     return 0

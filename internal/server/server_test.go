@@ -24,7 +24,7 @@ func TestRouterWriteAndSearch(t *testing.T) {
 	router := NewRouter(service)
 	projectRoot := t.TempDir()
 
-	writeBody, err := json.Marshal(api.WriteRequest{ProjectRoot: projectRoot, Items: []api.MemoryWriteItem{{
+	writeBody, err := json.Marshal(api.WriteRequest{ProjectRoot: projectRoot, ProjectName: "router-alias", GitBranch: "feature/router", Items: []api.MemoryWriteItem{{
 		Type:    "error",
 		Title:   "HTTP接口测试",
 		Tags:    []string{"HTTP", "测试"},
@@ -42,7 +42,7 @@ func TestRouterWriteAndSearch(t *testing.T) {
 		t.Fatalf("写入接口返回状态异常: %d, body=%s", writeRecorder.Code, writeRecorder.Body.String())
 	}
 
-	searchBody, err := json.Marshal(api.SearchRequest{ProjectRoot: projectRoot, Queries: []string{"HTTP接口测试"}, Debug: false})
+	searchBody, err := json.Marshal(api.SearchRequest{ProjectRoot: projectRoot, ProjectName: "router-alias", Queries: []string{"HTTP接口测试"}, Debug: false})
 	if err != nil {
 		t.Fatalf("构造搜索请求失败: %v", err)
 	}
@@ -62,5 +62,11 @@ func TestRouterWriteAndSearch(t *testing.T) {
 	}
 	if !strings.Contains(searchResponse.Markdown, "HTTP接口测试") {
 		t.Fatalf("搜索结果缺少写入标题: %s", searchResponse.Markdown)
+	}
+	if len(searchResponse.ErrorHits) != 1 || searchResponse.ErrorHits[0].ProjectName != "router-alias" {
+		t.Fatalf("搜索响应未返回项目名: %+v", searchResponse.ErrorHits)
+	}
+	if searchResponse.ErrorHits[0].GitBranch != "feature/router" {
+		t.Fatalf("搜索响应未返回 git 分支: %+v", searchResponse.ErrorHits[0])
 	}
 }
