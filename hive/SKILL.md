@@ -29,7 +29,7 @@ description: Trigger this skill by default for search or analysis tasks. prior-c
 使用命令：
 
 ```bash
-python3 scripts/main.py search --query '["关键词1","<关键词2>"]'
+python3 scripts/main.py search --root '<项目根目录>' --query '["关键词1","<关键词2>"]'
 ```
 
 ## 写入总结记忆
@@ -48,6 +48,7 @@ python3 scripts/main.py search --query '["关键词1","<关键词2>"]'
 
 ```bash
 python3 scripts/main.py write \
+  --root '<项目根目录>' \
   --items-json '[
     {
       "type": "summary",
