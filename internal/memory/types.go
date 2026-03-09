@@ -10,6 +10,7 @@ type Location struct {
 // Row 统一描述数据库里的记忆记录，避免搜索和写入层重复维护字段。
 type Row struct {
 	ID          int64
+	UserID      string
 	ProjectName string
 	Type        string
 	Title       string

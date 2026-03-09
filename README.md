@@ -1,6 +1,6 @@
 # Hive
 
-`Hive` 是一个面向工程分析场景的项目记忆系统，使用 `Python CLI + Go HTTP Server + SQLite` 管理总结记忆与错误记忆。
+`Hive` 是一个面向工程分析场景的项目记忆系统，使用 `Python CLI + Go HTTP Server + SQLite + Vue Admin SPA` 管理总结记忆与错误记忆。
 
 当前版本采用单服务单库模型：
 
@@ -8,6 +8,7 @@
 - 服务端只维护一份记忆库：`./.memory/memory.db`
 - 不再区分项目内记忆与外挂记忆
 - 多项目通过 `project_name` 做检索隔离
+- 管理后台通过 `JWT` 鉴权，记忆接口通过 `API Token` 鉴权
 
 ## 核心能力
 
@@ -16,6 +17,8 @@
 - 支持批量写入多条记忆
 - 支持记录 `git_branch`，客户端会过滤当前分支未合入的记忆
 - 支持通过项目别名把同一服务端记忆库隔离为多个项目视图
+- 支持用户管理界面、登录界面与单页路由守卫
+- 支持在记忆写入时记录创建用户 `userid(UUID)`
 
 ## 目录结构
 
@@ -26,12 +29,15 @@
 │   ├── api/                  # HTTP 请求/响应结构
 │   ├── config/               # 服务端配置加载
 │   ├── memory/               # 存储、检索、向量与记忆构建逻辑
+│   ├── user/                 # 用户、JWT 与 API Token 能力
 │   └── server/               # Gin 路由
+├── web/                      # Vue + Tailwind 管理后台与嵌入资源
 ├── hive/
 │   ├── SKILL.md              # Skill 规则说明
 │   ├── agents/openai.yaml    # Agent 展示元数据
 │   ├── references/           # 记忆模板参考
 │   └── scripts/main.py       # Python 客户端入口
+├── Markfile                  # 项目构建与打包脚本
 └── README.md
 ```
 
@@ -46,6 +52,7 @@
 ## 运行依赖
 
 - Go `1.25+`
+- Node.js `20+`
 - Python `3.10+`
 - 可选：OpenAI 兼容 Embeddings 服务
 
@@ -60,6 +67,9 @@
   "server": {
     "base_url": "http://127.0.0.1:8080",
     "listen_addr": ":8080"
+  },
+  "auth": {
+    "jwt_secret": "please-change-this-secret"
   },
   "embedding": {
     "base_url": "",
@@ -76,12 +86,26 @@
 go run ./cmd/hive-server
 ```
 
+或使用打包脚本：
+
+```bash
+make -f Markfile dev-server
+```
+
 默认会在当前目录使用：
 
 ```text
 ./config.json
 ./.memory/memory.db
 ```
+
+首次启动如果数据库里没有任何用户，服务端会自动创建默认管理员：
+
+- 用户名：`admin`
+- 真实名称：`系统管理员`
+- `userid`：自动生成 `UUID`
+- 密码：随机生成，并打印在服务启动日志中
+- `apitoken`：自动生成，可在管理后台查看
 
 ### 3. 健康检查
 
@@ -141,6 +165,9 @@ python3 hive/scripts/main.py write \
     "base_url": "http://127.0.0.1:8080",
     "listen_addr": ":8080"
   },
+  "auth": {
+    "jwt_secret": "please-change-this-secret"
+  },
   "embedding": {
     "base_url": "https://api.openai.com/v1",
     "api_key": "sk-xxxx",
@@ -154,6 +181,7 @@ python3 hive/scripts/main.py write \
 
 - `server.base_url`：服务端对外访问地址，主要用于展示和客户端默认配置参考
 - `server.listen_addr`：Gin 实际监听地址
+- `auth.jwt_secret`：管理后台 JWT 签名密钥，生产环境必须修改
 - `embedding.base_url`：OpenAI 兼容 Embeddings 服务根地址
 - `embedding.api_key`：嵌入服务认证令牌
 - `embedding.model`：嵌入模型名
@@ -180,8 +208,10 @@ python3 hive/scripts/main.py write \
 客户端配置只负责：
 
 - 决定默认请求哪个服务端
+- 决定默认使用哪个 `api_token`
 - 为不同项目指定不同服务地址
 - 为不同项目指定 `project_name` / `alias`
+- 为不同项目覆盖独立 `api_token`
 
 客户端不控制服务端数据库位置。
 
@@ -190,16 +220,21 @@ python3 hive/scripts/main.py write \
 ```json
 {
   "default_server_base_url": "http://127.0.0.1:8080",
+  "api_token": "default-api-token",
   "projects": {
     "/home/dev/workspaces/payment-service": {
       "server_url": "http://127.0.0.1:8080",
-      "alias": "payment-service"
+      "alias": "payment-service",
+      "api_token": "payment-service-token"
     },
     "order-service": {
       "server": {
         "base_url": "http://127.0.0.1:18080"
       },
-      "project_alias": "order-service-dev"
+      "project_alias": "order-service-dev",
+      "auth": {
+        "api_token": "order-service-token"
+      }
     }
   }
 }
@@ -208,10 +243,12 @@ python3 hive/scripts/main.py write \
 ### 客户端字段
 
 - `default_server_base_url`：默认请求地址
+- `api_token`：默认记忆接口令牌，请求 `/tokenapi/v1/*` 时自动附带到 `X-API-Token`
 - `projects`：项目级覆盖配置
 - `projects.<key>.server_url`：项目覆盖默认服务地址
 - `projects.<key>.server.base_url`：同样可覆盖默认服务地址
 - `projects.<key>.alias` / `project_alias`：请求里附带的 `project_name`
+- `projects.<key>.api_token` / `projects.<key>.auth.api_token`：项目级覆盖的记忆接口令牌
 
 ## 项目隔离规则
 
@@ -233,7 +270,87 @@ Hive 不再通过“每个项目各自一个数据库”来隔离，而是通过
 
 健康检查。
 
-### `POST /api/v1/memories/search`
+### 管理端 JWT 接口
+
+管理端接口统一使用：
+
+- 路由前缀：`/api/v1/users`
+- 请求头：`Authorization: Bearer <jwt>`
+
+#### `POST /api/v1/users/auth/login`
+
+请求示例：
+
+```json
+{
+  "username": "admin",
+  "password": "随机密码"
+}
+```
+
+返回示例：
+
+```json
+{
+  "token": "<jwt>",
+  "user": {
+    "id": 1,
+    "userid": "2b3f4f67-6b1a-4ab2-b4a9-c57d089faeb1",
+    "username": "admin",
+    "real_name": "系统管理员",
+    "apitoken": "<api-token>",
+    "is_admin": true
+  }
+}
+```
+
+#### `GET /api/v1/users/me`
+
+返回当前登录用户。
+
+#### `GET /api/v1/users`
+
+返回用户列表。
+
+#### `POST /api/v1/users`
+
+请求示例：
+
+```json
+{
+  "username": "alice",
+  "real_name": "Alice Zhang",
+  "password": "secret123",
+  "is_admin": false
+}
+```
+
+#### `PUT /api/v1/users/:id`
+
+请求示例：
+
+```json
+{
+  "username": "alice",
+  "real_name": "Alice Zhang",
+  "password": "",
+  "is_admin": false,
+  "regenerate_token": true
+}
+```
+
+#### `DELETE /api/v1/users/:id`
+
+删除指定用户，默认不允许删除当前登录用户。
+
+### 记忆 API Token 接口
+
+记忆接口统一使用：
+
+- 路由前缀：`/tokenapi/v1`
+- 请求头：`X-API-Token: <api-token>`
+
+#### `POST /tokenapi/v1/memories/search`
 
 请求示例：
 
@@ -254,7 +371,7 @@ Hive 不再通过“每个项目各自一个数据库”来隔离，而是通过
 - `summary_hits`
 - `markdown`
 
-### `POST /api/v1/memories/write`
+#### `POST /tokenapi/v1/memories/write`
 
 请求示例：
 
@@ -279,6 +396,32 @@ Hive 不再通过“每个项目各自一个数据库”来隔离，而是通过
 ```json
 {}
 ```
+
+写入时服务端会：
+
+- 根据 `X-API-Token` 识别调用用户
+- 把用户的 `userid(UUID)` 写入 `memories.userid`
+- 同时把 `user_id` 写入记忆正文头部，便于回溯来源
+
+### 用户与密码存储
+
+- 用户业务标识使用 `userid(UUID)`
+- 登录密码按 `sha1(password + salt)` 存储
+- 每个用户都有独立 `apitoken`
+- `apitoken` 用于查询和生成记忆接口鉴权
+- 服务端数据库首次初始化时会自动创建 `users` 表
+
+### 前端界面
+
+服务端编译时会把 `web/dist` 通过 `go embed` 嵌入二进制，启动后可直接访问单页应用。
+
+当前界面包含：
+
+- 登录页
+- 管理首页
+- 用户管理页
+- JWT 路由守卫
+- 用户新增、编辑、删除、重置 API Token
 
 ### 嵌入模型启动校验
 
@@ -326,6 +469,30 @@ python3 hive/scripts/main.py write --root . --items-json '[
   }
 ]'
 ```
+
+### 6. 启动管理后台开发环境
+
+```bash
+make -f Markfile dev-ui
+```
+
+前端默认监听 `http://127.0.0.1:5173`，并通过 Vite 代理转发：
+
+- `/api/*` -> `http://127.0.0.1:8080`
+- `/tokenapi/*` -> `http://127.0.0.1:8080`
+
+### 7. 构建发布
+
+```bash
+make -f Markfile release
+```
+
+该命令会：
+
+- 构建 Vue 前端到 `web/dist`
+- 通过 `go embed` 嵌入前端静态资源
+- 编译服务端二进制
+- 运行 Go 测试
 
 约束：
 
@@ -405,6 +572,16 @@ POST <base_url>/embeddings
 
 ## 开发与测试
 
+常用命令：
+
+```bash
+make -f Markfile deps
+make -f Markfile build-ui
+make -f Markfile build
+make -f Markfile test
+make -f Markfile release
+```
+
 运行 Go 测试：
 
 ```bash
@@ -430,6 +607,13 @@ python3 -m unittest hive/scripts/test_main.py
 - 检查写入和搜索时使用的 `project_name` 是否一致
 - 检查客户端 `alias` / `project_alias` 是否改动过
 - 检查服务端是否连到了你预期的当前目录 `./config.json`
+- 检查请求头里是否带了有效的 `X-API-Token`
+
+### 为什么管理后台提示未授权？
+
+- 检查是否已经先通过 `/api/v1/users/auth/login` 获取 JWT
+- 检查请求头是否带了 `Authorization: Bearer <jwt>`
+- 检查 `config.json` 中的 `auth.jwt_secret` 是否在重启后被改动
 
 ### 为什么服务端没有读取 `~/.config/hive/config.json`？
 
@@ -441,3 +625,4 @@ python3 -m unittest hive/scripts/test_main.py
 - Go module：`github.com/nzlov/hive`
 - 服务端入口：`cmd/hive-server`
 - 客户端入口：`hive/scripts/main.py`
+- 前端入口：`web/src/main.js`

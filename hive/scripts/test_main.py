@@ -119,5 +119,37 @@ class ProjectNameFallbackTest(unittest.TestCase):
             self.assertEqual(MAIN.resolve_default_project_name(str(project_root)), "demo-project")
 
 
+class APITokenConfigTest(unittest.TestCase):
+    """覆盖 API Token 配置解析，避免项目级和默认级配置优先级回归。"""
+
+    def test_resolve_api_token_supports_auth_section(self) -> None:
+        """支持从 auth 段读取 token，避免配置结构升级后旧脚本无法请求服务端。"""
+
+        self.assertEqual(MAIN.resolve_api_token({"auth": {"api_token": "demo-token"}}), "demo-token")
+
+    def test_resolve_request_target_prefers_project_token(self) -> None:
+        """项目级 token 应覆盖默认 token，避免多项目共用服务时误用错误身份。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir) / "demo-project"
+            project_root.mkdir()
+            config = {
+                "default_server_base_url": "http://127.0.0.1:8080",
+                "api_token": "default-token",
+                "projects": {
+                    str(project_root): {
+                        "alias": "demo-alias",
+                        "api_token": "project-token",
+                    }
+                },
+            }
+            resolved_root, base_url, project_name, api_token = MAIN.resolve_request_target(config, str(project_root))
+
+            self.assertEqual(resolved_root, str(project_root.resolve()))
+            self.assertEqual(base_url, "http://127.0.0.1:8080")
+            self.assertEqual(project_name, "demo-alias")
+            self.assertEqual(api_token, "project-token")
+
+
 if __name__ == "__main__":
     unittest.main()

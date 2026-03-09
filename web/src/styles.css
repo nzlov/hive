@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply min-h-screen bg-mist text-ink font-sans;
+    background-image: radial-gradient(circle at top left, rgba(195, 123, 44, 0.18), transparent 30%), linear-gradient(135deg, rgba(19, 34, 56, 0.08), transparent 45%);
+  }
+
+  ::selection {
+    @apply bg-brass/30 text-ink;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-3xl border border-white/60 bg-white/85 shadow-panel backdrop-blur;
+  }
+
+  .field {
+    @apply w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-ink outline-none transition focus:border-pine focus:ring-2 focus:ring-pine/10;
+  }
+
+  .primary-btn {
+    @apply inline-flex items-center justify-center rounded-2xl bg-ink px-4 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-slate-800;
+  }
+
+  .ghost-btn {
+    @apply inline-flex items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-pine hover:text-pine;
+  }
+
+  .danger-btn {
+    @apply inline-flex items-center justify-center rounded-2xl bg-coral px-4 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-[#bf5944];
+  }
+}

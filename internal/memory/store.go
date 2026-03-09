@@ -37,6 +37,7 @@ func initDB(db *sql.DB) error {
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS memories (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			userid TEXT NOT NULL DEFAULT '',
 			project_name TEXT NOT NULL DEFAULT '',
 			type TEXT NOT NULL CHECK(type IN ('summary', 'error')),
 			title TEXT NOT NULL,
@@ -61,13 +62,66 @@ func initDB(db *sql.DB) error {
 			value TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			userid TEXT NOT NULL UNIQUE,
+			username TEXT NOT NULL UNIQUE,
+			real_name TEXT NOT NULL DEFAULT '',
+			password_hash TEXT NOT NULL,
+			salt TEXT NOT NULL,
+			apitoken TEXT NOT NULL UNIQUE,
+			is_admin INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_userid ON users(userid);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_apitoken ON users(apitoken);`,
 	}
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
 			return err
 		}
 	}
+	if err := ensureColumnExists(db, "memories", "userid", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists(db, "users", "userid", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists(db, "users", "real_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	return nil
+}
+
+// ensureColumnExists 在兼容旧数据库时补齐缺失列，避免升级后因历史表结构缺字段而崩溃。
+func ensureColumnExists(db *sql.DB, tableName, columnName, definition string) error {
+	query := fmt.Sprintf(`PRAGMA table_info(%s)`, tableName)
+	rows, err := db.Query(query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name string
+		var dataType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if strings.EqualFold(name, columnName) {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, tableName, columnName, definition))
+	return err
 }
 
 // EncodeTags 使用 JSON 保存标签，避免分隔符规则污染实际内容。
@@ -110,7 +164,8 @@ func decodeVector(raw string) []float64 {
 // InsertMemory 写入一条记忆并返回主键，为后续向量写入提供关联键。
 func InsertMemory(tx *sql.Tx, row Row) (int64, error) {
 	result, err := tx.Exec(
-		`INSERT INTO memories (project_name, type, title, tags, summary, content, timestamp, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO memories (userid, project_name, type, title, tags, summary, content, timestamp, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.UserID,
 		row.ProjectName,
 		row.Type,
 		row.Title,
@@ -171,7 +226,7 @@ func SetMemoryMetadata(tx *sql.Tx, key, value, updatedAt string) error {
 
 // FetchAllMemories 为向量重建提供完整数据集，避免服务层感知底层 SQL 细节。
 func FetchAllMemories(db *sql.DB) ([]Row, error) {
-	rows, err := db.Query(`SELECT id, project_name, type, title, tags, summary, content, timestamp, created_at FROM memories ORDER BY timestamp DESC, id DESC`)
+	rows, err := db.Query(`SELECT id, userid, project_name, type, title, tags, summary, content, timestamp, created_at FROM memories ORDER BY timestamp DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +236,7 @@ func FetchAllMemories(db *sql.DB) ([]Row, error) {
 
 // FetchMemoryRows 按项目名和类型读取候选记录，让单库模式仍能稳定隔离不同项目记忆。
 func FetchMemoryRows(db *sql.DB, projectName, memType string) ([]Row, error) {
-	query := `SELECT id, project_name, type, title, tags, summary, content, timestamp, created_at FROM memories WHERE project_name = ? AND type = ? ORDER BY timestamp DESC, id DESC`
+	query := `SELECT id, userid, project_name, type, title, tags, summary, content, timestamp, created_at FROM memories WHERE project_name = ? AND type = ? ORDER BY timestamp DESC, id DESC`
 	args := []any{projectName, memType}
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -228,7 +283,7 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 	out := []Row{}
 	for rows.Next() {
 		var row Row
-		if err := rows.Scan(&row.ID, &row.ProjectName, &row.Type, &row.Title, &row.Tags, &row.Summary, &row.Content, &row.Timestamp, &row.CreatedAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.UserID, &row.ProjectName, &row.Type, &row.Title, &row.Tags, &row.Summary, &row.Content, &row.Timestamp, &row.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, row)

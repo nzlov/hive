@@ -44,7 +44,7 @@ func TestServiceWriteAndSearch(t *testing.T) {
 		ServerListenAddr: ":18080",
 	})
 
-	databasePath, err := service.Write("service-alias", "feature/test-branch", []api.MemoryWriteItem{{
+	databasePath, err := service.Write("service-alias", "feature/test-branch", "test-userid", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "服务层写入测试",
 		Tags:    []string{"服务层", "测试"},
@@ -81,6 +81,18 @@ func TestServiceWriteAndSearch(t *testing.T) {
 	if result.SummaryHits[0].GitBranch != "feature/test-branch" {
 		t.Fatalf("Search 结果未返回 git 分支: %+v", result.SummaryHits[0])
 	}
+	_, db, err := service.openProjectDB()
+	if err != nil {
+		t.Fatalf("打开数据库失败: %v", err)
+	}
+	defer db.Close()
+	rows, err := FetchAllMemories(db)
+	if err != nil {
+		t.Fatalf("读取记忆失败: %v", err)
+	}
+	if len(rows) != 1 || rows[0].UserID != "test-userid" {
+		t.Fatalf("写入记忆未落库 userid: %+v", rows)
+	}
 }
 
 // TestServiceSearchReturnsBranchMetadata 验证查询会返回分支元信息，后续由脚本决定是否保留该条记忆。
@@ -88,7 +100,7 @@ func TestServiceSearchReturnsBranchMetadata(t *testing.T) {
 	t.Helper()
 	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
 
-	if _, err := service.Write("branch-project", "feature/a", []api.MemoryWriteItem{{
+	if _, err := service.Write("branch-project", "feature/a", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "A分支记忆",
 		Tags:    []string{"分支"},
@@ -97,7 +109,7 @@ func TestServiceSearchReturnsBranchMetadata(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("写入 feature/a 记忆失败: %v", err)
 	}
-	if _, err := service.Write("branch-project", "", []api.MemoryWriteItem{{
+	if _, err := service.Write("branch-project", "", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "公共记忆",
 		Tags:    []string{"公共"},
@@ -130,7 +142,7 @@ func TestServiceSearchReturnsBranchMetadata(t *testing.T) {
 func TestServiceSearchIsolatedByProjectName(t *testing.T) {
 	t.Helper()
 	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
-	if _, err := service.Write("project-a", "", []api.MemoryWriteItem{{
+	if _, err := service.Write("project-a", "", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "项目A记忆",
 		Tags:    []string{"A"},
@@ -139,7 +151,7 @@ func TestServiceSearchIsolatedByProjectName(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("写入项目A记忆失败: %v", err)
 	}
-	if _, err := service.Write("project-b", "", []api.MemoryWriteItem{{
+	if _, err := service.Write("project-b", "", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "项目B记忆",
 		Tags:    []string{"B"},
@@ -179,7 +191,7 @@ func TestServiceEnsureEmbeddingsReadyRebuildsOnModelMismatch(t *testing.T) {
 	oldProvider := &stubEmbeddingProvider{enabled: true, model: "old-model", vector: []float64{1, 0}}
 	service.provider = oldProvider
 
-	if _, err := service.Write("rebuild-project", "", []api.MemoryWriteItem{{
+	if _, err := service.Write("rebuild-project", "", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "模型切换记忆",
 		Tags:    []string{"重建"},
@@ -248,7 +260,7 @@ func TestFetchMemoryEmbeddingsIsolatedByProjectName(t *testing.T) {
 	provider := &stubEmbeddingProvider{enabled: true, model: "project-aware-model", vector: []float64{0.5, 0.5}}
 	service.provider = provider
 
-	if _, err := service.Write("project-a", "", []api.MemoryWriteItem{{
+	if _, err := service.Write("project-a", "", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "项目A向量",
 		Tags:    []string{"A"},
@@ -257,7 +269,7 @@ func TestFetchMemoryEmbeddingsIsolatedByProjectName(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("写入项目A记忆失败: %v", err)
 	}
-	if _, err := service.Write("project-b", "", []api.MemoryWriteItem{{
+	if _, err := service.Write("project-b", "", "", []api.MemoryWriteItem{{
 		Type:    "summary",
 		Title:   "项目B向量",
 		Tags:    []string{"B"},

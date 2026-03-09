@@ -170,14 +170,31 @@ def resolve_project_alias(project_config: dict[str, Any]) -> str:
     return ""
 
 
-def resolve_request_target(config: dict[str, Any], root: str) -> tuple[str, str, str]:
-    """根据项目配置和本地仓库信息决定请求地址与项目名，保证单库隔离稳定。"""
+def resolve_api_token(payload: dict[str, Any]) -> str:
+    """统一兼容多种 API Token 字段命名，避免客户端配置升级时请求链路失效。"""
+
+    auth = payload.get("auth")
+    if isinstance(auth, dict):
+        for key in ("api_token", "apiToken", "apitoken", "token"):
+            value = auth.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    for key in ("api_token", "apiToken", "apitoken", "token"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def resolve_request_target(config: dict[str, Any], root: str) -> tuple[str, str, str, str]:
+    """根据项目配置和本地仓库信息决定请求地址、项目名与 API Token，保证单库隔离稳定。"""
 
     project_root = resolve_project_root(root)
     project_config = lookup_project_config(config, project_root)
     base_url = resolve_server_value(project_config) or resolve_default_server_base_url(config)
     project_name = resolve_project_alias(project_config) or resolve_default_project_name(project_root)
-    return project_root, base_url, project_name
+    api_token = resolve_api_token(project_config) or resolve_api_token(config)
+    return project_root, base_url, project_name, api_token
 
 
 def parse_queries(raw_queries: list[str]) -> list[str]:
@@ -254,13 +271,17 @@ def parse_write_items(args: argparse.Namespace) -> list[dict[str, Any]]:
     return items
 
 
-def post_json(base_url: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+def post_json(base_url: str, path: str, payload: dict[str, Any], api_token: str = "") -> dict[str, Any]:
     """统一处理 HTTP 请求和错误解码，避免各子命令重复维护网络细节。"""
+
+    headers = {"Content-Type": "application/json"}
+    if api_token.strip():
+        headers["X-API-Token"] = api_token.strip()
 
     req = request.Request(
         url=f"{base_url}{path}",
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -469,20 +490,23 @@ def render_search_markdown(response: dict[str, Any], error_hits: list[dict[str, 
     return "\n".join(lines)
 
 
-def run_search(args: argparse.Namespace, project_root: str, base_url: str, project_name: str) -> int:
+def run_search(args: argparse.Namespace, project_root: str, base_url: str, project_name: str, api_token: str) -> int:
     """搜索子命令只整理输入并打印服务端返回结果，保持脚本职责轻量。"""
 
     queries = parse_queries(args.query)
     if not queries:
         raise SystemExit("--query 至少需要一个非空关键词")
+    if not api_token.strip():
+        raise SystemExit("缺少 API Token，请在 ~/.config/hive/config.json 中配置 api_token")
     response = post_json(
         base_url,
-        "/api/v1/memories/search",
+        "/tokenapi/v1/memories/search",
         build_request_payload(
             project_name,
             queries=queries,
             debug=bool(args.debug),
         ),
+        api_token=api_token,
     )
     current_branch = resolve_current_git_branch(project_root)
     error_hits = filter_hits_by_branch(
@@ -499,14 +523,17 @@ def run_search(args: argparse.Namespace, project_root: str, base_url: str, proje
     return 0
 
 
-def run_write(args: argparse.Namespace, project_root: str, base_url: str, project_name: str) -> int:
+def run_write(args: argparse.Namespace, project_root: str, base_url: str, project_name: str, api_token: str) -> int:
     """写入子命令只负责参数兼容和输出结果，把持久化逻辑完全留给服务端。"""
 
     current_branch = resolve_current_git_branch(project_root)
+    if not api_token.strip():
+        raise SystemExit("缺少 API Token，请在 ~/.config/hive/config.json 中配置 api_token")
     post_json(
         base_url,
-        "/api/v1/memories/write",
+        "/tokenapi/v1/memories/write",
         build_request_payload(project_name, git_branch=current_branch, items=parse_write_items(args)),
+        api_token=api_token,
     )
     return 0
 
@@ -520,11 +547,11 @@ def main() -> int:
         parser.print_help()
         return 1
 
-    project_root, base_url, project_name = resolve_request_target(load_config(), args.root)
+    project_root, base_url, project_name, api_token = resolve_request_target(load_config(), args.root)
     if args.command == "search":
-        return run_search(args, project_root, base_url, project_name)
+        return run_search(args, project_root, base_url, project_name, api_token)
     if args.command == "write":
-        return run_write(args, project_root, base_url, project_name)
+        return run_write(args, project_root, base_url, project_name, api_token)
     parser.print_help()
     return 1
 

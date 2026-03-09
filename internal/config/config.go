@@ -12,6 +12,7 @@ import (
 const (
 	defaultServerBaseURL    = "http://127.0.0.1:8080"
 	defaultServerListenAddr = ":8080"
+	defaultJWTSecret        = "hive-change-me"
 )
 
 // EmbeddingConfig 统一描述嵌入配置，避免不同模块各自解释字段语义。
@@ -28,6 +29,7 @@ type AppConfig struct {
 	MemoryRoot       string
 	ServerBaseURL    string
 	ServerListenAddr string
+	JWTSecret        string
 	EmbeddingConfig  *EmbeddingConfig
 }
 
@@ -42,6 +44,8 @@ var (
 	embeddingAPIKeyKeys  = []string{"api_key", "apiKey"}
 	embeddingModelKeys   = []string{"model", "embedding_model", "embeddingModel"}
 	embeddingTimeoutKeys = []string{"timeout_seconds", "timeoutSeconds"}
+	authSectionKeys      = []string{"auth"}
+	authJWTSecretKeys    = []string{"jwt_secret", "jwtSecret"}
 )
 
 // Load 读取并标准化配置，缺失时自动补默认配置降低首次使用门槛。
@@ -63,6 +67,7 @@ func Load() (AppConfig, error) {
 		MemoryRoot:       memoryRoot,
 		ServerBaseURL:    resolveServerBaseURL(payload),
 		ServerListenAddr: resolveServerListenAddr(payload),
+		JWTSecret:        resolveJWTSecret(payload),
 	}
 	config.EmbeddingConfig = resolveEmbeddingConfig(payload)
 	return config, nil
@@ -121,6 +126,9 @@ func buildDefaultPayload() (map[string]any, error) {
 			"api_key":         "",
 			"model":           "",
 			"timeout_seconds": 30,
+		},
+		"auth": map[string]any{
+			"jwt_secret": defaultJWTSecret,
 		},
 	}, nil
 }
@@ -185,6 +193,15 @@ func resolveEmbeddingConfig(payload map[string]any) *EmbeddingConfig {
 		timeout = 1
 	}
 	return &EmbeddingConfig{BaseURL: baseURL, APIKey: apiKey, Model: model, TimeoutSeconds: timeout}
+}
+
+// resolveJWTSecret 统一读取 JWT 密钥，避免管理接口鉴权在不同入口出现不一致的签名结果。
+func resolveJWTSecret(payload map[string]any) string {
+	section := findSection(payload, authSectionKeys)
+	if value := pickStrings(section, authJWTSecretKeys); value != "" {
+		return value
+	}
+	return defaultJWTSecret
 }
 
 // findSection 优先读取嵌套配置，必要时兼容平铺结构减少升级摩擦。

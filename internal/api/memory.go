@@ -57,3 +57,55 @@ type WriteRequest struct {
 type WriteResponse struct {
 	Error string `json:"error,omitempty"`
 }
+
+// UserSummary 统一描述当前登录用户，避免前后端各自维护字段名。
+type UserSummary struct {
+	ID       int64  `json:"id"`
+	UserID   string `json:"userid"`
+	Username string `json:"username"`
+	RealName string `json:"real_name"`
+	APIToken string `json:"apitoken"`
+	IsAdmin  bool   `json:"is_admin"`
+}
+
+// LoginRequest 描述管理界面登录入参，保持鉴权入口协议稳定。
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// LoginResponse 统一返回 JWT 和当前用户信息，减少前端额外探测请求。
+type LoginResponse struct {
+	Token string      `json:"token,omitempty"`
+	User  UserSummary `json:"user,omitempty"`
+	Error string      `json:"error,omitempty"`
+}
+
+// UserListResponse 为用户管理页提供稳定列表结构，避免直接暴露数据库字段。
+type UserListResponse struct {
+	Items []UserSummary `json:"items"`
+	Error string        `json:"error,omitempty"`
+}
+
+// CreateUserRequest 描述新增用户时可编辑字段，让服务端统一生成 userid 与 apitoken。
+type CreateUserRequest struct {
+	Username string `json:"username"`
+	RealName string `json:"real_name"`
+	Password string `json:"password"`
+	IsAdmin  bool   `json:"is_admin"`
+}
+
+// UpdateUserRequest 描述用户更新入参，允许后台按需重置密码或 token。
+type UpdateUserRequest struct {
+	Username        string `json:"username"`
+	RealName        string `json:"real_name"`
+	Password        string `json:"password"`
+	IsAdmin         bool   `json:"is_admin"`
+	RegenerateToken bool   `json:"regenerate_token"`
+}
+
+// UserMutationResponse 统一承接用户写操作结果，方便前端直接刷新最新对象。
+type UserMutationResponse struct {
+	Item  UserSummary `json:"item,omitempty"`
+	Error string      `json:"error,omitempty"`
+}

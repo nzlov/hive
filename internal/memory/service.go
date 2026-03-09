@@ -73,8 +73,8 @@ func (s *Service) Search(projectName string, queries []string, debug bool) (Sear
 	return result, nil
 }
 
-// Write 写入总结或错误记忆，并统一按项目名落到单库中。
-func (s *Service) Write(projectName, gitBranch string, items []api.MemoryWriteItem) (string, error) {
+// Write 写入总结或错误记忆，并把写入人 userid 一并落库以便后续追溯来源。
+func (s *Service) Write(projectName, gitBranch, userID string, items []api.MemoryWriteItem) (string, error) {
 	location, db, err := s.openProjectDB()
 	if err != nil {
 		return "", err
@@ -95,12 +95,13 @@ func (s *Service) Write(projectName, gitBranch string, items []api.MemoryWriteIt
 	for idx, item := range items {
 		itemTime := time.Unix(timestampSeed+int64(idx), 0).UTC()
 		row := Row{
+			UserID:      strings.TrimSpace(userID),
 			ProjectName: effectiveProjectName,
 			Type:        strings.TrimSpace(item.Type),
 			Title:       sanitizeTitle(item.Title),
 			Tags:        EncodeTags(item.Tags),
 			Summary:     strings.TrimSpace(item.Summary),
-			Content:     buildMemoryContent(effectiveProjectName, normalizedGitBranch, item),
+			Content:     buildMemoryContent(effectiveProjectName, normalizedGitBranch, strings.TrimSpace(userID), item),
 			Timestamp:   itemTime.Format("20060102150405"),
 			CreatedAt:   itemTime.Format(time.RFC3339Nano),
 		}
@@ -389,8 +390,8 @@ func confidenceByAge(ts, now time.Time) float64 {
 	return math.Pow(0.5, ageDays/30)
 }
 
-// buildMemoryContent 统一生成持久化 Markdown 内容，减少总结和错误记忆的维护分叉。
-func buildMemoryContent(projectName, gitBranch string, item api.MemoryWriteItem) string {
+// buildMemoryContent 统一生成持久化 Markdown 内容，并把写入人标识写进头部便于审计定位。
+func buildMemoryContent(projectName, gitBranch, userID string, item api.MemoryWriteItem) string {
 	summary := strings.TrimSpace(item.Summary)
 	if summary == "" {
 		summary = "自动生成记忆"
@@ -405,6 +406,9 @@ func buildMemoryContent(projectName, gitBranch string, item api.MemoryWriteItem)
 	}
 	if gitBranch != "" {
 		headLines = append(headLines, "git_branch: "+gitBranch)
+	}
+	if userID != "" {
+		headLines = append(headLines, "user_id: "+userID)
 	}
 	headLines = append(headLines, "---", "", markdownBody(item.Context), "")
 	return strings.Join(headLines, "\n")
