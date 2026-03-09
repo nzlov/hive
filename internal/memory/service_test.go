@@ -2,9 +2,11 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nzlov/hive/internal/api"
 	"github.com/nzlov/hive/internal/config"
@@ -17,6 +19,30 @@ type stubEmbeddingProvider struct {
 	model   string
 	vector  []float64
 	calls   int
+}
+
+// queryEmbeddingProvider 只为查询阶段返回固定向量，便于测试候选筛选与分页逻辑。
+type queryEmbeddingProvider struct {
+	vector []float64
+	calls  int
+}
+
+// Enabled 让语义搜索路径保持开启，避免测试退化为关键字分支。
+func (p *queryEmbeddingProvider) Enabled() bool { return true }
+
+// ModelName 返回固定模型名，避免测试被模型元数据分支干扰。
+func (p *queryEmbeddingProvider) ModelName() string { return "query-only-model" }
+
+// EmbedTexts 为每个查询词返回同一查询向量，让测试聚焦候选过滤而非远程协议。
+func (p *queryEmbeddingProvider) EmbedTexts(texts []string) ([][]float64, error) {
+	p.calls++
+	vectors := make([][]float64, 0, len(texts))
+	for range texts {
+		vector := make([]float64, len(p.vector))
+		copy(vector, p.vector)
+		vectors = append(vectors, vector)
+	}
+	return vectors, nil
 }
 
 // Enabled 让测试显式控制当前 provider 是否启用，避免不同分支隐式耦合。
@@ -50,6 +76,38 @@ func testContextWithStore(t *testing.T, cfg config.AppConfig) context.Context {
 		}
 	})
 	return models.StoreToContext(context.Background(), store)
+}
+
+// seedSemanticMemory 直接写入记忆和向量，避免测试依赖写入阶段的嵌入生成策略。
+func seedSemanticMemory(t *testing.T, store *models.Store, projectName, memType, title, content, timestamp string, vector []float64) int64 {
+	t.Helper()
+	items, err := store.CreateMemories([]models.Memory{{
+		UserID:      "semantic-test-user",
+		ProjectName: projectName,
+		GitBranch:   "feature/semantic-test",
+		Type:        memType,
+		Title:       title,
+		Tags:        models.EncodeTags([]string{"语义", "测试"}),
+		Summary:     "用于验证语义候选筛选。",
+		Content:     content,
+		Timestamp:   timestamp,
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+	}})
+	if err != nil {
+		t.Fatalf("写入语义测试记忆失败: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("语义测试记忆写入数量异常: %d", len(items))
+	}
+	if err := store.UpsertMemoryEmbeddings([]models.MemoryEmbedding{{
+		MemoryID:    items[0].ID,
+		ProjectName: projectName,
+		Vector:      models.EncodeVector(vector),
+		UpdatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("写入语义测试向量失败: %v", err)
+	}
+	return items[0].ID
 }
 
 // TestServiceWriteAndSearch 验证服务层可以完成写入和检索，避免 HTTP 之下的核心流程回归失效。
@@ -398,5 +456,134 @@ func TestFetchMemoryEmbeddingsIsolatedByProjectName(t *testing.T) {
 	}
 	if _, ok := embeddings[projectARows[0].ID]; !ok {
 		t.Fatalf("项目A向量查询未返回自身记录: %+v", embeddings)
+	}
+}
+
+// TestServiceSemanticSearchFindsMatchAcrossBatches 验证语义搜索会跨批次继续取候选，而不是只看第一批向量。
+func TestServiceSemanticSearchFindsMatchAcrossBatches(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{MemoryRoot: t.TempDir(), EmbeddingConfig: &config.EmbeddingConfig{SemanticCandidateBatchSize: 256, SemanticCandidateMaxCount: 1024, SemanticHitFetchLimit: 64, SemanticSimilarityThreshold: 0.15}})
+	ctx := testContextWithStore(t, service.config)
+	provider := &queryEmbeddingProvider{vector: []float64{1, 0}}
+	service.provider = provider
+
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		t.Fatalf("读取模型存储失败: %v", err)
+	}
+	batchSize := service.semanticCandidateBatchSize()
+	base := time.Date(2026, 3, 9, 10, 0, 0, 0, time.UTC)
+	for idx := 0; idx < batchSize+24; idx++ {
+		vector := []float64{0, 1}
+		title := fmt.Sprintf("普通候选-%03d", idx)
+		content := fmt.Sprintf("## Summary\n\n- 详情: 普通候选 %d。", idx)
+		if idx == batchSize+8 {
+			vector = []float64{1, 0}
+			title = "跨批次目标记忆"
+			content = "## Summary\n\n- 详情: 第二批候选里的真实目标。"
+		}
+		seedSemanticMemory(t, store, "semantic-batch-project", "summary", title, content, base.Add(-time.Duration(idx)*time.Minute).Format("20060102150405"), vector)
+	}
+
+	result, err := service.Search(ctx, "semantic-batch-project", []string{"跨批次语义查询"}, false)
+	if err != nil {
+		t.Fatalf("语义搜索失败: %v", err)
+	}
+	if provider.calls != 2 {
+		t.Fatalf("查询向量应按 error/summary 两类各生成一次，实际次数=%d", provider.calls)
+	}
+	if len(result.SummaryHits) == 0 {
+		t.Fatalf("语义搜索未返回跨批次候选: %+v", result.SummaryHits)
+	}
+	if result.SummaryHits[0].Title != "跨批次目标记忆" {
+		t.Fatalf("语义搜索未命中第二批候选: %+v", result.SummaryHits)
+	}
+}
+
+// TestServiceSemanticSearchLimitsCandidateWindow 验证语义搜索只评估有限候选窗口，避免每次查询都扫描全部向量。
+func TestServiceSemanticSearchLimitsCandidateWindow(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{MemoryRoot: t.TempDir(), EmbeddingConfig: &config.EmbeddingConfig{SemanticCandidateBatchSize: 256, SemanticCandidateMaxCount: 1024, SemanticHitFetchLimit: 64, SemanticSimilarityThreshold: 0.15}})
+	ctx := testContextWithStore(t, service.config)
+	service.provider = &queryEmbeddingProvider{vector: []float64{1, 0}}
+
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		t.Fatalf("读取模型存储失败: %v", err)
+	}
+	maxCount := service.semanticCandidateMaxCount()
+	base := time.Date(2026, 3, 9, 10, 0, 0, 0, time.UTC)
+	for idx := 0; idx < maxCount+8; idx++ {
+		vector := []float64{0, 1}
+		title := fmt.Sprintf("窗口候选-%04d", idx)
+		content := fmt.Sprintf("## Summary\n\n- 详情: 窗口候选 %d。", idx)
+		if idx == maxCount+2 {
+			vector = []float64{1, 0}
+			title = "窗口外目标记忆"
+			content = "## Summary\n\n- 详情: 超出候选窗口的语义目标。"
+		}
+		seedSemanticMemory(t, store, "semantic-window-project", "summary", title, content, base.Add(-time.Duration(idx)*time.Minute).Format("20060102150405"), vector)
+	}
+
+	result, err := service.Search(ctx, "semantic-window-project", []string{"窗口外语义查询"}, false)
+	if err != nil {
+		t.Fatalf("语义搜索失败: %v", err)
+	}
+	for _, hit := range result.SummaryHits {
+		if hit.Title == "窗口外目标记忆" {
+			t.Fatalf("超出候选窗口的旧向量不应被扫描命中: %+v", result.SummaryHits)
+		}
+	}
+}
+
+// TestServiceSearchLimitsLowConfidenceHits 验证低置信度结果会按配置裁剪，同时保留所有满分命中。
+func TestServiceSearchLimitsLowConfidenceHits(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{
+		MemoryRoot: t.TempDir(),
+		SearchConfig: &config.SearchConfig{
+			LowConfidenceErrorHitLimit:   1,
+			LowConfidenceSummaryHitLimit: 1,
+		},
+	})
+
+	now := time.Now().UTC()
+	errorHits := []Hit{
+		{ID: 1, Source: "error", Title: "错误满分一", Confidence: 1, Timestamp: now},
+		{ID: 2, Source: "error", Title: "错误低分一", Confidence: 0.8, Timestamp: now.Add(-time.Minute)},
+		{ID: 3, Source: "error", Title: "错误低分二", Confidence: 0.7, Timestamp: now.Add(-2 * time.Minute)},
+		{ID: 4, Source: "error", Title: "错误满分二", Confidence: 1, Timestamp: now.Add(-3 * time.Minute)},
+	}
+	summaryHits := []Hit{
+		{ID: 5, Source: "summary", Title: "总结低分一", Confidence: 0.9, Timestamp: now.Add(-time.Minute)},
+		{ID: 6, Source: "summary", Title: "总结满分一", Confidence: 1, Timestamp: now},
+		{ID: 7, Source: "summary", Title: "总结低分二", Confidence: 0.8, Timestamp: now.Add(-2 * time.Minute)},
+		{ID: 8, Source: "summary", Title: "总结满分二", Confidence: 1, Timestamp: now.Add(-3 * time.Minute)},
+	}
+
+	result := SearchResult{
+		Query:       "limit-test",
+		ProjectName: "limit-project",
+		ErrorHits:   service.limitSearchHits(errorHits, service.lowConfidenceErrorHitLimit()),
+		SummaryHits: service.limitSearchHits(summaryHits, service.lowConfidenceSummaryHitLimit()),
+	}
+
+	if len(result.ErrorHits) != 3 {
+		t.Fatalf("错误命中数量异常: %+v", result.ErrorHits)
+	}
+	if result.ErrorHits[0].Title != "错误满分一" || result.ErrorHits[1].Title != "错误低分一" || result.ErrorHits[2].Title != "错误满分二" {
+		t.Fatalf("错误命中裁剪结果异常: %+v", result.ErrorHits)
+	}
+	if len(result.SummaryHits) != 3 {
+		t.Fatalf("总结命中数量异常: %+v", result.SummaryHits)
+	}
+	if result.SummaryHits[0].Title != "总结低分一" || result.SummaryHits[1].Title != "总结满分一" || result.SummaryHits[2].Title != "总结满分二" {
+		t.Fatalf("总结命中裁剪结果异常: %+v", result.SummaryHits)
+	}
+	if strings.Contains(renderResultMarkdown(result.Query, result.ProjectName, result.ErrorHits, result.SummaryHits, nil), "错误低分二") {
+		t.Fatalf("被裁掉的低置信度错误命中不应出现在结果中")
+	}
+	if strings.Contains(renderResultMarkdown(result.Query, result.ProjectName, result.ErrorHits, result.SummaryHits, nil), "总结低分二") {
+		t.Fatalf("被裁掉的低置信度总结命中不应出现在结果中")
 	}
 }

@@ -21,6 +21,17 @@ type Memory struct {
 	CreatedAt   string `gorm:"column:created_at;type:text;not null"`
 }
 
+// MemoryLite 只保留搜索回表阶段需要的字段，避免候选筛选前过早搬运大正文。
+type MemoryLite struct {
+	ID        int64  `gorm:"column:id"`
+	GitBranch string `gorm:"column:git_branch"`
+	Title     string `gorm:"column:title"`
+	Tags      string `gorm:"column:tags"`
+	Summary   string `gorm:"column:summary"`
+	Content   string `gorm:"column:content"`
+	Timestamp string `gorm:"column:timestamp"`
+}
+
 // TableName 固定表名，避免 GORM 复数化规则影响既有数据表兼容性。
 func (Memory) TableName() string {
 	return "memories"
@@ -48,6 +59,19 @@ func (s *Store) ListAllMemories() ([]Memory, error) {
 func (s *Store) ListMemoriesByProjectAndType(projectName, memType string) ([]Memory, error) {
 	var items []Memory
 	err := s.db.Where("project_name = ? AND type = ?", strings.TrimSpace(projectName), strings.TrimSpace(memType)).Order("timestamp DESC").Order("id DESC").Find(&items).Error
+	return items, err
+}
+
+// ListMemoryLitesByProjectTypeAndIDs 在候选打分后再回表取正文，避免语义搜索先全量加载全部记忆内容。
+func (s *Store) ListMemoryLitesByProjectTypeAndIDs(projectName, memType string, memoryIDs []int64) ([]MemoryLite, error) {
+	if len(memoryIDs) == 0 {
+		return []MemoryLite{}, nil
+	}
+	var items []MemoryLite
+	err := s.db.Model(&Memory{}).
+		Select("id, git_branch, title, tags, summary, content, timestamp").
+		Where("project_name = ? AND type = ? AND id IN ?", strings.TrimSpace(projectName), strings.TrimSpace(memType), memoryIDs).
+		Find(&items).Error
 	return items, err
 }
 

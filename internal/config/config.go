@@ -10,23 +10,39 @@ import (
 )
 
 const (
-	defaultServerBaseURL    = "http://127.0.0.1:8080"
-	defaultServerListenAddr = ":8080"
-	defaultJWTSecret        = "hive-change-me"
+	defaultServerBaseURL               = "http://127.0.0.1:8080"
+	defaultServerListenAddr            = ":8080"
+	defaultJWTSecret                   = "hive-change-me"
+	defaultSearchErrorHitLimit         = 10
+	defaultSearchSummaryHitLimit       = 10
+	defaultSemanticSimilarityThreshold = 0.15
+	defaultSemanticCandidateBatchSize  = 256
+	defaultSemanticCandidateMaxCount   = 1024
+	defaultSemanticHitFetchLimit       = 64
 )
 
 // EmbeddingConfig 统一描述嵌入配置，避免不同模块各自解释字段语义。
 type EmbeddingConfig struct {
-	BaseURL        string
-	APIKey         string
-	Model          string
-	TimeoutSeconds float64
+	BaseURL                     string
+	APIKey                      string
+	Model                       string
+	TimeoutSeconds              float64
+	SemanticSimilarityThreshold float64
+	SemanticCandidateBatchSize  int
+	SemanticCandidateMaxCount   int
+	SemanticHitFetchLimit       int
 }
 
 // DatabaseConfig 统一描述数据库连接信息，兼容本地 SQLite 和远端 PostgreSQL 两种模式。
 type DatabaseConfig struct {
 	Driver string
 	DSN    string
+}
+
+// SearchConfig 统一描述搜索结果裁剪策略，避免不同搜索入口返回条数不一致。
+type SearchConfig struct {
+	LowConfidenceErrorHitLimit   int
+	LowConfidenceSummaryHitLimit int
 }
 
 // AppConfig 统一描述脚本与服务端共用配置，降低多入口行为漂移风险。
@@ -38,26 +54,34 @@ type AppConfig struct {
 	JWTSecret        string
 	DatabaseConfig   *DatabaseConfig
 	EmbeddingConfig  *EmbeddingConfig
+	SearchConfig     *SearchConfig
 }
 
 var (
-	serverSectionKeys    = []string{"server"}
-	serverBaseURLKeys    = []string{"base_url", "baseUrl", "url", "address"}
-	serverListenAddrKeys = []string{"listen_addr", "listenAddr", "listen_address", "listenAddress", "bind", "bind_addr", "bindAddr"}
-	serverFlatURLKeys    = []string{"server_url", "serverUrl", "service_url", "serviceUrl"}
-	serverFlatListenKeys = []string{"server_listen_addr", "serverListenAddr", "listen_addr", "listenAddr"}
-	embeddingSectionKeys = []string{"embedding", "embeddings"}
-	embeddingBaseURLKeys = []string{"base_url", "baseUrl", "url", "endpoint"}
-	embeddingAPIKeyKeys  = []string{"api_key", "apiKey"}
-	embeddingModelKeys   = []string{"model", "embedding_model", "embeddingModel"}
-	embeddingTimeoutKeys = []string{"timeout_seconds", "timeoutSeconds"}
-	authSectionKeys      = []string{"auth"}
-	authJWTSecretKeys    = []string{"jwt_secret", "jwtSecret"}
-	databaseSectionKeys  = []string{"database", "db"}
-	databaseDriverKeys   = []string{"driver", "dialect", "type"}
-	databaseDSNKeys      = []string{"dsn", "url", "uri"}
-	databaseFlatDriver   = []string{"database_driver", "databaseDriver", "db_driver", "dbDriver"}
-	databaseFlatDSN      = []string{"database_dsn", "databaseDsn", "db_dsn", "dbDsn", "database_url", "databaseUrl"}
+	serverSectionKeys                        = []string{"server"}
+	serverBaseURLKeys                        = []string{"base_url", "baseUrl", "url", "address"}
+	serverListenAddrKeys                     = []string{"listen_addr", "listenAddr", "listen_address", "listenAddress", "bind", "bind_addr", "bindAddr"}
+	serverFlatURLKeys                        = []string{"server_url", "serverUrl", "service_url", "serviceUrl"}
+	serverFlatListenKeys                     = []string{"server_listen_addr", "serverListenAddr", "listen_addr", "listenAddr"}
+	embeddingSectionKeys                     = []string{"embedding", "embeddings"}
+	embeddingBaseURLKeys                     = []string{"base_url", "baseUrl", "url", "endpoint"}
+	embeddingAPIKeyKeys                      = []string{"api_key", "apiKey"}
+	embeddingModelKeys                       = []string{"model", "embedding_model", "embeddingModel"}
+	embeddingTimeoutKeys                     = []string{"timeout_seconds", "timeoutSeconds"}
+	embeddingSemanticSimilarityThresholdKeys = []string{"semantic_similarity_threshold", "semanticSimilarityThreshold"}
+	embeddingSemanticCandidateBatchSizeKeys  = []string{"semantic_candidate_batch_size", "semanticCandidateBatchSize"}
+	embeddingSemanticCandidateMaxCountKeys   = []string{"semantic_candidate_max_count", "semanticCandidateMaxCount"}
+	embeddingSemanticHitFetchLimitKeys       = []string{"semantic_hit_fetch_limit", "semanticHitFetchLimit"}
+	authSectionKeys                          = []string{"auth"}
+	authJWTSecretKeys                        = []string{"jwt_secret", "jwtSecret"}
+	databaseSectionKeys                      = []string{"database", "db"}
+	databaseDriverKeys                       = []string{"driver", "dialect", "type"}
+	databaseDSNKeys                          = []string{"dsn", "url", "uri"}
+	databaseFlatDriver                       = []string{"database_driver", "databaseDriver", "db_driver", "dbDriver"}
+	databaseFlatDSN                          = []string{"database_dsn", "databaseDsn", "db_dsn", "dbDsn", "database_url", "databaseUrl"}
+	searchSectionKeys                        = []string{"search"}
+	searchLowConfidenceErrorHitLimitKeys     = []string{"low_confidence_error_hit_limit", "lowConfidenceErrorHitLimit", "error_hit_limit", "errorHitLimit"}
+	searchLowConfidenceSummaryHitLimitKeys   = []string{"low_confidence_summary_hit_limit", "lowConfidenceSummaryHitLimit", "summary_hit_limit", "summaryHitLimit"}
 )
 
 // Load 读取并标准化配置，缺失时自动补默认配置降低首次使用门槛。
@@ -83,6 +107,7 @@ func Load() (AppConfig, error) {
 		DatabaseConfig:   resolveDatabaseConfig(payload),
 	}
 	config.EmbeddingConfig = resolveEmbeddingConfig(payload)
+	config.SearchConfig = resolveSearchConfig(payload)
 	return config, nil
 }
 
@@ -135,14 +160,22 @@ func buildDefaultPayload() (map[string]any, error) {
 			"listen_addr": defaultServerListenAddr,
 		},
 		"embedding": map[string]any{
-			"base_url":        "",
-			"api_key":         "",
-			"model":           "",
-			"timeout_seconds": 30,
+			"base_url":                      "",
+			"api_key":                       "",
+			"model":                         "",
+			"timeout_seconds":               30,
+			"semantic_similarity_threshold": defaultSemanticSimilarityThreshold,
+			"semantic_candidate_batch_size": defaultSemanticCandidateBatchSize,
+			"semantic_candidate_max_count":  defaultSemanticCandidateMaxCount,
+			"semantic_hit_fetch_limit":      defaultSemanticHitFetchLimit,
 		},
 		"database": map[string]any{
 			"driver": "sqlite",
 			"dsn":    "",
+		},
+		"search": map[string]any{
+			"low_confidence_error_hit_limit":   defaultSearchErrorHitLimit,
+			"low_confidence_summary_hit_limit": defaultSearchSummaryHitLimit,
 		},
 		"auth": map[string]any{
 			"jwt_secret": defaultJWTSecret,
@@ -209,7 +242,35 @@ func resolveEmbeddingConfig(payload map[string]any) *EmbeddingConfig {
 	if timeout < 1 {
 		timeout = 1
 	}
-	return &EmbeddingConfig{BaseURL: baseURL, APIKey: apiKey, Model: model, TimeoutSeconds: timeout}
+	semanticSimilarityThreshold := pickFloat(section, embeddingSemanticSimilarityThresholdKeys, defaultSemanticSimilarityThreshold)
+	if semanticSimilarityThreshold <= 0 {
+		semanticSimilarityThreshold = defaultSemanticSimilarityThreshold
+	}
+	semanticCandidateBatchSize := pickInt(section, embeddingSemanticCandidateBatchSizeKeys, defaultSemanticCandidateBatchSize)
+	if semanticCandidateBatchSize < 1 {
+		semanticCandidateBatchSize = defaultSemanticCandidateBatchSize
+	}
+	semanticCandidateMaxCount := pickInt(section, embeddingSemanticCandidateMaxCountKeys, defaultSemanticCandidateMaxCount)
+	if semanticCandidateMaxCount < semanticCandidateBatchSize {
+		semanticCandidateMaxCount = semanticCandidateBatchSize
+	}
+	semanticHitFetchLimit := pickInt(section, embeddingSemanticHitFetchLimitKeys, defaultSemanticHitFetchLimit)
+	if semanticHitFetchLimit < 1 {
+		semanticHitFetchLimit = defaultSemanticHitFetchLimit
+	}
+	if semanticHitFetchLimit > semanticCandidateMaxCount {
+		semanticHitFetchLimit = semanticCandidateMaxCount
+	}
+	return &EmbeddingConfig{
+		BaseURL:                     baseURL,
+		APIKey:                      apiKey,
+		Model:                       model,
+		TimeoutSeconds:              timeout,
+		SemanticSimilarityThreshold: semanticSimilarityThreshold,
+		SemanticCandidateBatchSize:  semanticCandidateBatchSize,
+		SemanticCandidateMaxCount:   semanticCandidateMaxCount,
+		SemanticHitFetchLimit:       semanticHitFetchLimit,
+	}
 }
 
 // resolveJWTSecret 统一读取 JWT 密钥，避免管理接口鉴权在不同入口出现不一致的签名结果。
@@ -236,6 +297,20 @@ func resolveDatabaseConfig(payload map[string]any) *DatabaseConfig {
 		return nil
 	}
 	return &DatabaseConfig{Driver: driver, DSN: dsn}
+}
+
+// resolveSearchConfig 统一解析搜索返回上限，确保所有入口都遵循同一结果裁剪策略。
+func resolveSearchConfig(payload map[string]any) *SearchConfig {
+	section := findSection(payload, searchSectionKeys)
+	errorLimit := pickInt(section, searchLowConfidenceErrorHitLimitKeys, defaultSearchErrorHitLimit)
+	if errorLimit < 0 {
+		errorLimit = 0
+	}
+	summaryLimit := pickInt(section, searchLowConfidenceSummaryHitLimitKeys, defaultSearchSummaryHitLimit)
+	if summaryLimit < 0 {
+		summaryLimit = 0
+	}
+	return &SearchConfig{LowConfidenceErrorHitLimit: errorLimit, LowConfidenceSummaryHitLimit: summaryLimit}
 }
 
 // findSection 优先读取嵌套配置，必要时兼容平铺结构减少升级摩擦。
@@ -296,6 +371,35 @@ func pickFloat(payload map[string]any, keys []string, fallback float64) float64 
 			return float64(typed)
 		case string:
 			parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+			if err == nil {
+				return parsed
+			}
+		}
+	}
+	return fallback
+}
+
+// pickInt 宽松解析整数配置，避免数值类开关因 JSON 类型差异失效。
+func pickInt(payload map[string]any, keys []string, fallback int) int {
+	for _, key := range keys {
+		if payload == nil {
+			break
+		}
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case float64:
+			return int(typed)
+		case float32:
+			return int(typed)
+		case int:
+			return typed
+		case int64:
+			return int(typed)
+		case string:
+			parsed, err := strconv.Atoi(strings.TrimSpace(typed))
 			if err == nil {
 				return parsed
 			}

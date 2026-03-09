@@ -7,6 +7,13 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// MemoryEmbeddingCandidate 描述语义搜索阶段的最小候选集，避免打分前提前读取完整记忆正文。
+type MemoryEmbeddingCandidate struct {
+	MemoryID  int64  `gorm:"column:memory_id"`
+	Vector    string `gorm:"column:vector"`
+	Timestamp string `gorm:"column:timestamp"`
+}
+
 // MemoryEmbedding 对应 memory_embeddings 表，保存记忆向量和项目隔离维度。
 type MemoryEmbedding struct {
 	MemoryID    int64  `gorm:"column:memory_id;primaryKey"`
@@ -55,11 +62,32 @@ func (s *Store) ListMemoryEmbeddings(projectName string, memoryIDs []int64) (map
 	}
 	out := make(map[int64][]float64, len(items))
 	for _, item := range items {
-		if vector := decodeVector(item.Vector); len(vector) > 0 {
+		if vector := DecodeVector(item.Vector); len(vector) > 0 {
 			out[item.MemoryID] = vector
 		}
 	}
 	return out, nil
+}
+
+// ListSemanticEmbeddingCandidates 分页读取指定项目和类型的向量候选，让服务层按批打分而不是一次性全量载入。
+func (s *Store) ListSemanticEmbeddingCandidates(projectName, memType string, limit, offset int) ([]MemoryEmbeddingCandidate, error) {
+	if limit <= 0 {
+		return []MemoryEmbeddingCandidate{}, nil
+	}
+	var items []MemoryEmbeddingCandidate
+	err := s.db.Table("memory_embeddings AS me").
+		Select("me.memory_id, me.vector, m.timestamp").
+		Joins("JOIN memories AS m ON m.id = me.memory_id").
+		Where("me.project_name = ? AND m.project_name = ? AND m.type = ?", projectName, projectName, memType).
+		Order("m.timestamp DESC").
+		Order("me.memory_id DESC").
+		Limit(limit).
+		Offset(offset).
+		Scan(&items).Error
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 // EncodeVector 序列化向量，避免关系型数据库缺少原生数组列时出现兼容差异。
@@ -68,8 +96,8 @@ func EncodeVector(vector []float64) string {
 	return string(data)
 }
 
-// decodeVector 宽松解析向量内容，避免单条坏数据拖垮整次检索流程。
-func decodeVector(raw string) []float64 {
+// DecodeVector 宽松解析向量内容，避免单条坏数据拖垮整次检索流程。
+func DecodeVector(raw string) []float64 {
 	var payload []float64
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		return nil

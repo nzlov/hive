@@ -76,11 +76,19 @@
     "driver": "sqlite",
     "dsn": ""
   },
+  "search": {
+    "low_confidence_error_hit_limit": 10,
+    "low_confidence_summary_hit_limit": 10
+  },
   "embedding": {
     "base_url": "",
     "api_key": "",
     "model": "",
-    "timeout_seconds": 30
+    "timeout_seconds": 30,
+    "semantic_similarity_threshold": 0.15,
+    "semantic_candidate_batch_size": 256,
+    "semantic_candidate_max_count": 1024,
+    "semantic_hit_fetch_limit": 64
   }
 }
 ```
@@ -207,10 +215,16 @@ make -f Markfile dev-ui
 - `auth.jwt_secret`：管理后台 JWT 签名密钥
 - `database.driver`：数据库驱动，支持 `sqlite` / `postgresql`
 - `database.dsn`：数据库连接串；SQLite 为空时使用默认文件路径
+- `search.low_confidence_error_hit_limit`：错误记忆中低于 1 分置信度的最大返回条数
+- `search.low_confidence_summary_hit_limit`：总结记忆中低于 1 分置信度的最大返回条数
 - `embedding.base_url`：OpenAI 兼容 Embeddings 服务根地址
 - `embedding.api_key`：嵌入服务认证令牌
 - `embedding.model`：嵌入模型名
 - `embedding.timeout_seconds`：嵌入请求超时秒数
+- `embedding.semantic_similarity_threshold`：语义命中阈值
+- `embedding.semantic_candidate_batch_size`：每批读取的向量候选数
+- `embedding.semantic_candidate_max_count`：单次语义搜索最多扫描的候选数
+- `embedding.semantic_hit_fetch_limit`：最终回表读取正文的高分候选上限
 
 ## 客户端配置
 
@@ -379,6 +393,13 @@ Hive 通过 `project_name` 在单库中隔离项目，而不是通过“每个�
 
 当 `embedding.base_url` 和 `embedding.model` 配置完整时，会启用语义检索；`api_key` 可为空，以兼容本地无鉴权服务。
 
+可选调优项：
+
+- `embedding.semantic_similarity_threshold` 默认 `0.15`
+- `embedding.semantic_candidate_batch_size` 默认 `256`
+- `embedding.semantic_candidate_max_count` 默认 `1024`
+- `embedding.semantic_hit_fetch_limit` 默认 `64`
+
 启用后行为：
 
 - 写入时同步写入向量
@@ -386,6 +407,12 @@ Hive 通过 `project_name` 在单库中隔离项目，而不是通过“每个�
 - 服务启动时检查当前模型与数据库记录是否一致
 - 模型切换时自动重建 `memory_embeddings`
 - 向量记录继续通过 `project_name` 做隔离
+
+搜索结果裁剪规则：
+
+- `confidence == 1` 的命中始终返回
+- `confidence < 1` 的错误记忆数量由 `search.low_confidence_error_hit_limit` 控制
+- `confidence < 1` 的总结记忆数量由 `search.low_confidence_summary_hit_limit` 控制
 
 兼容的接口形式：
 

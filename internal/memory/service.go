@@ -68,8 +68,8 @@ func (s *Service) Search(ctx context.Context, projectName string, queries []stri
 		Query:         strings.Join(queries, ", "),
 		ProjectName:   effectiveProjectName,
 		DebugCommands: debugCommands,
-		ErrorHits:     mergeHits(errorKeywordHits, errorSemanticHits),
-		SummaryHits:   mergeHits(summaryKeywordHits, summarySemanticHits),
+		ErrorHits:     s.limitSearchHits(mergeHits(errorKeywordHits, errorSemanticHits), s.lowConfidenceErrorHitLimit()),
+		SummaryHits:   s.limitSearchHits(mergeHits(summaryKeywordHits, summarySemanticHits), s.lowConfidenceSummaryHitLimit()),
 	}
 	return result, nil
 }
@@ -273,38 +273,14 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 	if err != nil || len(vectors) == 0 {
 		return nil, err
 	}
-	storedRows, err := store.ListMemoriesByProjectAndType(projectName, source)
-	if err != nil {
-		return nil, err
-	}
-	rows := make([]Row, 0, len(storedRows))
-	for _, item := range storedRows {
-		rows = append(rows, memoryRowFromModel(item))
-	}
-	filteredRows := make([]Row, 0, len(rows))
-	memoryIDs := make([]int64, 0, len(rows))
-	for _, row := range rows {
-		filteredRows = append(filteredRows, row)
-		memoryIDs = append(memoryIDs, row.ID)
-	}
-	embeddings, err := store.ListMemoryEmbeddings(projectName, memoryIDs)
-	if err != nil {
-		return nil, err
-	}
 	now := time.Now().UTC()
-	hits := make([]Hit, 0)
-	for _, row := range filteredRows {
-		vector, ok := embeddings[row.ID]
-		if !ok {
-			continue
-		}
-		semanticScore := maxSemanticSimilarity(vectors, vector)
-		if semanticScore <= 0.15 {
-			continue
-		}
-		ts := parseTimestamp(row.Timestamp)
-		ageScore := confidenceByAge(ts, now)
-		hits = append(hits, Hit{ID: row.ID, Source: source, GitBranch: row.GitBranch, Title: row.Title, Tags: models.DecodeTags(row.Tags), Timestamp: ts, Confidence: math.Max(semanticScore, ageScore*0.5+semanticScore*0.5), FileContent: strings.TrimSpace(row.Content)})
+	candidates, err := s.collectSemanticCandidates(store, source, projectName, vectors, now)
+	if err != nil {
+		return nil, err
+	}
+	hits, err := s.buildSemanticHits(store, source, projectName, candidates)
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].Confidence == hits[j].Confidence {
@@ -312,6 +288,93 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 		}
 		return hits[i].Confidence > hits[j].Confidence
 	})
+	return hits, nil
+}
+
+type semanticCandidate struct {
+	MemoryID    int64
+	Timestamp   time.Time
+	Confidence  float64
+	SemanticRaw float64
+}
+
+// collectSemanticCandidates 先从向量表分页读取候选并打分，避免语义搜索阶段提前全量搬运正文。
+func (s *Service) collectSemanticCandidates(store *models.Store, source string, projectName string, vectors [][]float64, now time.Time) ([]semanticCandidate, error) {
+	offset := 0
+	processed := 0
+	hitFetchLimit := s.semanticHitFetchLimit()
+	best := make([]semanticCandidate, 0, hitFetchLimit)
+	maxCandidateCount := s.semanticCandidateMaxCount()
+	for processed < maxCandidateCount {
+		remaining := maxCandidateCount - processed
+		batchSize := minInt(s.semanticCandidateBatchSize(), remaining)
+		items, err := store.ListSemanticEmbeddingCandidates(projectName, source, batchSize, offset)
+		if err != nil {
+			return nil, err
+		}
+		if len(items) == 0 {
+			break
+		}
+		for _, item := range items {
+			vector := models.DecodeVector(item.Vector)
+			if len(vector) == 0 {
+				continue
+			}
+			semanticScore := maxSemanticSimilarity(vectors, vector)
+			if semanticScore <= s.semanticSimilarityThreshold() {
+				continue
+			}
+			ts := parseTimestamp(item.Timestamp)
+			ageScore := confidenceByAge(ts, now)
+			candidate := semanticCandidate{
+				MemoryID:    item.MemoryID,
+				Timestamp:   ts,
+				SemanticRaw: semanticScore,
+				Confidence:  math.Max(semanticScore, ageScore*0.5+semanticScore*0.5),
+			}
+			best = appendSemanticCandidate(best, candidate, hitFetchLimit)
+		}
+		processed += len(items)
+		offset += len(items)
+		if len(items) < batchSize {
+			break
+		}
+	}
+	return best, nil
+}
+
+// buildSemanticHits 仅对高分候选回表读取正文，减少非命中记录在语义搜索中的 IO 和内存占用。
+func (s *Service) buildSemanticHits(store *models.Store, source string, projectName string, candidates []semanticCandidate) ([]Hit, error) {
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	memoryIDs := make([]int64, 0, len(candidates))
+	candidateByID := make(map[int64]semanticCandidate, len(candidates))
+	for _, item := range candidates {
+		memoryIDs = append(memoryIDs, item.MemoryID)
+		candidateByID[item.MemoryID] = item
+	}
+	memoryItems, err := store.ListMemoryLitesByProjectTypeAndIDs(projectName, source, memoryIDs)
+	if err != nil {
+		return nil, err
+	}
+	hits := make([]Hit, 0, len(memoryItems))
+	for _, item := range memoryItems {
+		candidate, ok := candidateByID[item.ID]
+		if !ok {
+			continue
+		}
+		hits = append(hits, Hit{
+			ID:          item.ID,
+			Source:      source,
+			GitBranch:   item.GitBranch,
+			Title:       item.Title,
+			Tags:        models.DecodeTags(item.Tags),
+			Timestamp:   candidate.Timestamp,
+			Confidence:  candidate.Confidence,
+			FileContent: strings.TrimSpace(item.Content),
+		})
+	}
 	return hits, nil
 }
 
@@ -335,6 +398,97 @@ func maxSemanticSimilarity(queryVectors [][]float64, target []float64) float64 {
 		}
 	}
 	return best
+}
+
+// appendSemanticCandidate 只保留最高分候选，避免候选数量持续增长挤占搜索时内存。
+func appendSemanticCandidate(items []semanticCandidate, candidate semanticCandidate, limit int) []semanticCandidate {
+	items = append(items, candidate)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Confidence == items[j].Confidence {
+			return items[i].Timestamp.After(items[j].Timestamp)
+		}
+		return items[i].Confidence > items[j].Confidence
+	})
+	if len(items) > limit {
+		return items[:limit]
+	}
+	return items
+}
+
+// limitSearchHits 对满分命中不做裁剪，其余命中按分类上限保留，避免强匹配结果被返回上限误伤。
+func (s *Service) limitSearchHits(hits []Hit, lowConfidenceLimit int) []Hit {
+	if len(hits) == 0 {
+		return nil
+	}
+	limited := make([]Hit, 0, len(hits))
+	lowConfidenceCount := 0
+	for _, hit := range hits {
+		if isPerfectConfidence(hit.Confidence) {
+			limited = append(limited, hit)
+			continue
+		}
+		if lowConfidenceCount >= lowConfidenceLimit {
+			continue
+		}
+		limited = append(limited, hit)
+		lowConfidenceCount++
+	}
+	return limited
+}
+
+// isPerfectConfidence 把满分命中单独识别出来，避免浮点误差导致精确命中被错误裁剪。
+func isPerfectConfidence(value float64) bool {
+	return value >= 1-1e-9
+}
+
+// lowConfidenceErrorHitLimit 返回错误记忆的低置信度上限，避免错误结果列表被弱相关记忆淹没。
+func (s *Service) lowConfidenceErrorHitLimit() int {
+	if s.config.SearchConfig == nil || s.config.SearchConfig.LowConfidenceErrorHitLimit < 0 {
+		return 10
+	}
+	return s.config.SearchConfig.LowConfidenceErrorHitLimit
+}
+
+// lowConfidenceSummaryHitLimit 返回总结记忆的低置信度上限，兼顾回忆广度与结果可读性。
+func (s *Service) lowConfidenceSummaryHitLimit() int {
+	if s.config.SearchConfig == nil || s.config.SearchConfig.LowConfidenceSummaryHitLimit < 0 {
+		return 10
+	}
+	return s.config.SearchConfig.LowConfidenceSummaryHitLimit
+}
+
+// semanticSimilarityThreshold 返回语义召回阈值，允许通过配置在召回率与精度之间做权衡。
+func (s *Service) semanticSimilarityThreshold() float64 {
+	if s.config.EmbeddingConfig == nil || s.config.EmbeddingConfig.SemanticSimilarityThreshold <= 0 {
+		return 0.15
+	}
+	return s.config.EmbeddingConfig.SemanticSimilarityThreshold
+}
+
+// semanticCandidateBatchSize 返回单批候选量，避免每轮查询读取过多向量造成瞬时内存抖动。
+func (s *Service) semanticCandidateBatchSize() int {
+	if s.config.EmbeddingConfig == nil || s.config.EmbeddingConfig.SemanticCandidateBatchSize < 1 {
+		return 256
+	}
+	return s.config.EmbeddingConfig.SemanticCandidateBatchSize
+}
+
+// semanticCandidateMaxCount 返回最大候选窗口，限制单次语义搜索扫描的向量数量上界。
+func (s *Service) semanticCandidateMaxCount() int {
+	batchSize := s.semanticCandidateBatchSize()
+	if s.config.EmbeddingConfig == nil || s.config.EmbeddingConfig.SemanticCandidateMaxCount < batchSize {
+		return maxInt(1024, batchSize)
+	}
+	return s.config.EmbeddingConfig.SemanticCandidateMaxCount
+}
+
+// semanticHitFetchLimit 返回最终允许回表的候选上限，避免高分候选过多时再次拉大正文开销。
+func (s *Service) semanticHitFetchLimit() int {
+	maxCount := s.semanticCandidateMaxCount()
+	if s.config.EmbeddingConfig == nil || s.config.EmbeddingConfig.SemanticHitFetchLimit < 1 {
+		return minInt(64, maxCount)
+	}
+	return minInt(s.config.EmbeddingConfig.SemanticHitFetchLimit, maxCount)
 }
 
 // memoryRowFromModel 收敛模型层到业务层的数据映射，避免搜索逻辑直接依赖 GORM 结构体。
@@ -722,6 +876,14 @@ func ParseQueries(raw []string) ([]string, error) {
 // minInt 为片段窗口截取提供最小值比较，避免重复写边界分支。
 func minInt(left, right int) int {
 	if left < right {
+		return left
+	}
+	return right
+}
+
+// maxInt 为候选窗口下限提供最大值比较，避免配置修正逻辑散落多处。
+func maxInt(left, right int) int {
+	if left > right {
 		return left
 	}
 	return right
