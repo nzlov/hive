@@ -301,7 +301,7 @@ func (s *Service) collectHits(store *models.Store, source string, projectName st
 			Title:      row.Title,
 			Tags:       models.DecodeTags(row.Tags),
 			Timestamp:  ts,
-			Confidence: confidenceByAge(ts, now),
+			Confidence: s.confidenceByAgeForType(source, ts, now),
 		}
 		if metadataMatched && len(lineNumbers) == 0 {
 			hit.FileContent = strings.TrimSpace(row.Content)
@@ -345,7 +345,10 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 
 // buildSemanticHitsFromBackend 使用数据库向量能力完成检索，避免服务层再做全量候选扫描。
 func (s *Service) buildSemanticHitsFromBackend(store *models.Store, source string, projectName string, queryVectors [][]float64) ([]Hit, error) {
-	hitFetchLimit := s.semanticHitFetchLimit()
+	hitFetchLimit, err := s.semanticHitFetchLimitForQuery(store, source, projectName)
+	if err != nil {
+		return nil, err
+	}
 	bestByID := map[int64]float64{}
 	for _, queryVector := range queryVectors {
 		items, err := store.SearchMemoryEmbeddingsByVector(projectName, source, queryVector, hitFetchLimit)
@@ -380,7 +383,7 @@ func (s *Service) buildSemanticHitsFromBackend(store *models.Store, source strin
 			continue
 		}
 		ts := parseTimestamp(item.Timestamp)
-		ageScore := confidenceByAge(ts, now)
+		ageScore := s.confidenceByAgeForType(source, ts, now)
 		hits = append(hits, Hit{
 			ID:          item.ID,
 			Source:      source,
@@ -388,7 +391,7 @@ func (s *Service) buildSemanticHitsFromBackend(store *models.Store, source strin
 			Title:       item.Title,
 			Tags:        models.DecodeTags(item.Tags),
 			Timestamp:   ts,
-			Confidence:  math.Max(semanticScore, ageScore*0.5+semanticScore*0.5),
+			Confidence:  s.blendSemanticConfidence(semanticScore, ageScore),
 			FileContent: strings.TrimSpace(item.Content),
 		})
 	}
@@ -406,9 +409,15 @@ type semanticCandidate struct {
 func (s *Service) collectSemanticCandidates(store *models.Store, source string, projectName string, vectors [][]float64, now time.Time) ([]semanticCandidate, error) {
 	offset := 0
 	processed := 0
-	hitFetchLimit := s.semanticHitFetchLimit()
+	hitFetchLimit, err := s.semanticHitFetchLimitForQuery(store, source, projectName)
+	if err != nil {
+		return nil, err
+	}
 	best := make([]semanticCandidate, 0, hitFetchLimit)
-	maxCandidateCount := s.semanticCandidateMaxCount()
+	maxCandidateCount, err := s.semanticCandidateMaxCountForQuery(store, source, projectName)
+	if err != nil {
+		return nil, err
+	}
 	for processed < maxCandidateCount {
 		remaining := maxCandidateCount - processed
 		batchSize := minInt(s.semanticCandidateBatchSize(), remaining)
@@ -429,12 +438,12 @@ func (s *Service) collectSemanticCandidates(store *models.Store, source string, 
 				continue
 			}
 			ts := parseTimestamp(item.Timestamp)
-			ageScore := confidenceByAge(ts, now)
+			ageScore := s.confidenceByAgeForType(source, ts, now)
 			candidate := semanticCandidate{
 				MemoryID:    item.MemoryID,
 				Timestamp:   ts,
 				SemanticRaw: semanticScore,
-				Confidence:  math.Max(semanticScore, ageScore*0.5+semanticScore*0.5),
+				Confidence:  s.blendSemanticConfidence(semanticScore, ageScore),
 			}
 			best = appendSemanticCandidate(best, candidate, hitFetchLimit)
 		}
@@ -586,6 +595,44 @@ func (s *Service) semanticCandidateMaxCount() int {
 	return s.config.EmbeddingConfig.SemanticCandidateMaxCount
 }
 
+// semanticCandidateMaxCountForQuery 根据配置策略动态计算候选窗口，避免固定窗口在大小库下表现失衡。
+func (s *Service) semanticCandidateMaxCountForQuery(store *models.Store, source, projectName string) (int, error) {
+	if s.config.EmbeddingConfig == nil {
+		return s.semanticCandidateMaxCount(), nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(s.config.EmbeddingConfig.SemanticWindowMode), "dynamic") {
+		base := s.config.EmbeddingConfig.SemanticWindowBaseMaxCount
+		if base < 1 {
+			base = s.semanticCandidateMaxCount()
+		}
+		return maxInt(base, 1), nil
+	}
+	candidateCount, err := store.CountMemoryEmbeddingsByProjectAndType(projectName, source)
+	if err != nil {
+		return 0, err
+	}
+	minCount := maxInt(s.config.EmbeddingConfig.SemanticWindowDynamicMin, 1)
+	maxCount := s.config.EmbeddingConfig.SemanticWindowDynamicMax
+	if maxCount < minCount {
+		maxCount = minCount
+	}
+	ratio := s.config.EmbeddingConfig.SemanticWindowDynamicRatio
+	if ratio <= 0 {
+		ratio = 0.2
+	}
+	computed := int(math.Ceil(float64(candidateCount) * ratio))
+	if computed <= 0 {
+		computed = s.config.EmbeddingConfig.SemanticWindowBaseMaxCount
+	}
+	if computed < minCount {
+		computed = minCount
+	}
+	if computed > maxCount {
+		computed = maxCount
+	}
+	return computed, nil
+}
+
 // semanticHitFetchLimit 返回最终允许回表的候选上限，避免高分候选过多时再次拉大正文开销。
 func (s *Service) semanticHitFetchLimit() int {
 	maxCount := s.semanticCandidateMaxCount()
@@ -593,6 +640,28 @@ func (s *Service) semanticHitFetchLimit() int {
 		return minInt(64, maxCount)
 	}
 	return minInt(s.config.EmbeddingConfig.SemanticHitFetchLimit, maxCount)
+}
+
+// semanticHitFetchLimitForQuery 按查询维度约束回表上限，确保动态窗口生效后回表规模同步受控。
+func (s *Service) semanticHitFetchLimitForQuery(store *models.Store, source, projectName string) (int, error) {
+	if s.config.EmbeddingConfig == nil {
+		return s.semanticHitFetchLimit(), nil
+	}
+	maxCount, err := s.semanticCandidateMaxCountForQuery(store, source, projectName)
+	if err != nil {
+		return 0, err
+	}
+	fetchLimit := s.config.EmbeddingConfig.SemanticHitFetchLimit
+	if fetchLimit < 1 {
+		fetchLimit = s.semanticHitFetchLimit()
+	}
+	if fetchLimit > maxCount {
+		fetchLimit = maxCount
+	}
+	if fetchLimit < 1 {
+		fetchLimit = 1
+	}
+	return fetchLimit, nil
 }
 
 // memoryRowFromModel 收敛模型层到业务层的数据映射，避免搜索逻辑直接依赖 GORM 结构体。
@@ -754,9 +823,55 @@ func parseTimestamp(timestamp string) time.Time {
 }
 
 // confidenceByAge 保留时间衰减逻辑，让旧记忆自然降权而不是直接丢弃。
-func confidenceByAge(ts, now time.Time) float64 {
+func confidenceByAge(ts, now time.Time, halfLifeDays float64) float64 {
 	ageDays := math.Max(0, now.Sub(ts).Hours()/24)
-	return math.Pow(0.5, ageDays/30)
+	effectiveHalfLifeDays := halfLifeDays
+	if effectiveHalfLifeDays <= 0 {
+		effectiveHalfLifeDays = 1
+	}
+	return math.Pow(0.5, ageDays/effectiveHalfLifeDays)
+}
+
+// confidenceByAgeForType 按记忆类型应用不同的时间衰减，避免错误记忆和总结记忆使用同一时效曲线。
+func (s *Service) confidenceByAgeForType(source string, ts, now time.Time) float64 {
+	return confidenceByAge(ts, now, s.decayHalfLifeDays(source))
+}
+
+// decayHalfLifeDays 返回指定类型的半衰期，确保召回时效策略可完全由配置控制。
+func (s *Service) decayHalfLifeDays(source string) float64 {
+	if s.config.EmbeddingConfig == nil {
+		return 30
+	}
+	if strings.EqualFold(strings.TrimSpace(source), "error") {
+		if s.config.EmbeddingConfig.DecayErrorHalfLifeDays > 0 {
+			return s.config.EmbeddingConfig.DecayErrorHalfLifeDays
+		}
+		return 90
+	}
+	if s.config.EmbeddingConfig.DecaySummaryHalfLifeDays > 0 {
+		return s.config.EmbeddingConfig.DecaySummaryHalfLifeDays
+	}
+	return 30
+}
+
+// blendSemanticConfidence 按配置融合语义分与时效分，避免语义召回权重在代码里写死。
+func (s *Service) blendSemanticConfidence(semanticScore, ageScore float64) float64 {
+	if s.config.EmbeddingConfig == nil || !s.config.EmbeddingConfig.DecayEnabled {
+		return semanticScore
+	}
+	ageWeight := s.config.EmbeddingConfig.DecayAgeWeight
+	semanticWeight := s.config.EmbeddingConfig.DecaySemanticWeight
+	if ageWeight < 0 {
+		ageWeight = 0
+	}
+	if semanticWeight < 0 {
+		semanticWeight = 0
+	}
+	if ageWeight+semanticWeight <= 0 {
+		return semanticScore
+	}
+	weighted := (ageScore*ageWeight + semanticScore*semanticWeight) / (ageWeight + semanticWeight)
+	return math.Max(semanticScore, weighted)
 }
 
 // normalizeMemoryContent 统一正文落库规则，避免为兼容旧头部格式继续引入额外解析成本。

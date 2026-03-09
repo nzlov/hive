@@ -72,6 +72,17 @@ func (s *Store) CountMemoryEmbeddings() (int64, error) {
 	return total, err
 }
 
+// CountMemoryEmbeddingsByProjectAndType 按项目和类型统计向量总量，便于服务层动态调整语义召回窗口。
+func (s *Store) CountMemoryEmbeddingsByProjectAndType(projectName, memType string) (int64, error) {
+	var total int64
+	db := s.db.Model(&MemoryEmbedding{}).Where("type = ?", strings.TrimSpace(memType))
+	if cleanedProjectName := strings.TrimSpace(projectName); cleanedProjectName != "" {
+		db = db.Where("project_name = ?", cleanedProjectName)
+	}
+	err := db.Count(&total).Error
+	return total, err
+}
+
 // CountMemoryEmbeddingsMissingSearchFields 返回缺少搜索筛选字段的向量数，确保迁移后能触发一次补全重建。
 func (s *Store) CountMemoryEmbeddingsMissingSearchFields() (int64, error) {
 	return 0, nil

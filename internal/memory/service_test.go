@@ -709,3 +709,72 @@ func TestServiceListKeepsAllSemanticHits(t *testing.T) {
 		}
 	}
 }
+
+// TestServiceSemanticSearchUsesDynamicWindow 验证动态候选窗口会约束语义回表数量，避免大库查询一次返回过多低区分度结果。
+func TestServiceSemanticSearchUsesDynamicWindow(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{
+		MemoryRoot: t.TempDir(),
+		EmbeddingConfig: &config.EmbeddingConfig{
+			SemanticCandidateBatchSize:  16,
+			SemanticCandidateMaxCount:   256,
+			SemanticHitFetchLimit:       64,
+			SemanticSimilarityThreshold: 0.15,
+			SemanticWindowMode:          "dynamic",
+			SemanticWindowBaseMaxCount:  32,
+			SemanticWindowDynamicMin:    2,
+			SemanticWindowDynamicMax:    2,
+			SemanticWindowDynamicRatio:  0.01,
+			DecayEnabled:                false,
+		},
+	})
+	ctx := testContextWithStore(t, service.config)
+	service.provider = &queryEmbeddingProvider{vector: []float64{1, 0}}
+
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		t.Fatalf("读取模型存储失败: %v", err)
+	}
+	base := time.Date(2026, 3, 9, 10, 0, 0, 0, time.UTC)
+	for idx := 0; idx < 10; idx++ {
+		seedSemanticMemory(
+			t,
+			store,
+			"dynamic-window-project",
+			"summary",
+			fmt.Sprintf("动态窗口候选-%d", idx+1),
+			fmt.Sprintf("## Summary\n\n- 详情: 动态窗口候选 %d。", idx+1),
+			base.Add(-time.Duration(idx)*time.Minute).Format("20060102150405"),
+			[]float64{1, 0},
+		)
+	}
+
+	result, err := service.Search(ctx, "dynamic-window-project", []string{"动态窗口语义查询"}, false)
+	if err != nil {
+		t.Fatalf("语义搜索失败: %v", err)
+	}
+	if len(result.SummaryHits) != 2 {
+		t.Fatalf("动态窗口应把语义结果限制为 2 条，实际=%d", len(result.SummaryHits))
+	}
+}
+
+// TestServiceConfidenceByAgeForType 验证不同记忆类型使用不同半衰期，避免错误记忆被与总结记忆相同速率衰减。
+func TestServiceConfidenceByAgeForType(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{
+		EmbeddingConfig: &config.EmbeddingConfig{
+			DecayEnabled:             true,
+			DecayAgeWeight:           1,
+			DecaySemanticWeight:      0,
+			DecaySummaryHalfLifeDays: 30,
+			DecayErrorHalfLifeDays:   90,
+		},
+	})
+	now := time.Now().UTC()
+	ts := now.Add(-60 * 24 * time.Hour)
+	summaryConfidence := service.confidenceByAgeForType("summary", ts, now)
+	errorConfidence := service.confidenceByAgeForType("error", ts, now)
+	if errorConfidence <= summaryConfidence {
+		t.Fatalf("错误记忆衰减应慢于总结记忆: error=%v summary=%v", errorConfidence, summaryConfidence)
+	}
+}
