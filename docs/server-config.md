@@ -70,6 +70,7 @@
 - `search.cache.semanticHitsTtlSeconds`：语义命中缓存 TTL（秒）
 - `search.cache.maxEntries`：缓存最大条目数
 - `search.cache.statsRefreshIntervalSeconds`：管理端缓存统计刷新间隔（秒），`0` 表示仅首次加载
+- `search.searchStageConcurrency`：搜索编排阶段最大并发数
 - `embedding.baseUrl`：OpenAI 兼容 Embeddings 服务根地址
 - `embedding.apiKey`：嵌入服务认证令牌
 - `embedding.model`：嵌入模型名
@@ -78,6 +79,7 @@
 - `embedding.semanticCandidateBatchSize`：每批读取的向量候选数
 - `embedding.semanticCandidateMaxCount`：单次语义搜索最多扫描的候选数
 - `embedding.semanticHitFetchLimit`：最终回表读取正文的高分候选上限
+- `embedding.semanticSearchConcurrency`：单次语义搜索内多查询向量的数据库检索最大并发数
 - `embedding.semanticWindow.mode`：语义候选窗口模式，支持 `static` / `dynamic`
 - `embedding.semanticWindow.baseMaxCount`：静态窗口上限，或动态模式下的保底值
 - `embedding.semanticWindow.dynamicMinCount`：动态窗口最小值
@@ -97,6 +99,7 @@
   "search": {
     "lowConfidenceErrorHitLimit": 10,
     "lowConfidenceSummaryHitLimit": 10,
+    "searchStageConcurrency": 2,
     "keyword": {
       "mode": "bm25",
       "backend": "auto",
@@ -131,6 +134,7 @@
     }
   },
   "embedding": {
+    "semanticSearchConcurrency": 4,
     "semanticWindow": {
       "mode": "static",
       "baseMaxCount": 1024,

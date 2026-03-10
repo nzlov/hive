@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,13 +19,13 @@ type stubEmbeddingProvider struct {
 	enabled bool
 	model   string
 	vector  []float64
-	calls   int
+	calls   int64
 }
 
 // queryEmbeddingProvider 只为查询阶段返回固定向量，便于测试候选筛选与分页逻辑。
 type queryEmbeddingProvider struct {
 	vector []float64
-	calls  int
+	calls  int64
 }
 
 // Enabled 让语义搜索路径保持开启，避免测试退化为关键字分支。
@@ -35,7 +36,7 @@ func (p *queryEmbeddingProvider) ModelName() string { return "query-only-model" 
 
 // EmbedTexts 为每个查询词返回同一查询向量，让测试聚焦候选过滤而非远程协议。
 func (p *queryEmbeddingProvider) EmbedTexts(texts []string) ([][]float64, error) {
-	p.calls++
+	atomic.AddInt64(&p.calls, 1)
 	vectors := make([][]float64, 0, len(texts))
 	for range texts {
 		vector := make([]float64, len(p.vector))
@@ -53,7 +54,7 @@ func (p *stubEmbeddingProvider) ModelName() string { return p.model }
 
 // EmbedTexts 为每条输入返回同一组向量，让测试只关注重建触发条件而非算法细节。
 func (p *stubEmbeddingProvider) EmbedTexts(texts []string) ([][]float64, error) {
-	p.calls++
+	atomic.AddInt64(&p.calls, 1)
 	vectors := make([][]float64, 0, len(texts))
 	for range texts {
 		vector := make([]float64, len(p.vector))
@@ -338,8 +339,8 @@ func TestServiceEnsureEmbeddingsReadyRebuildsOnModelMismatch(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("写入旧模型记忆失败: %v", err)
 	}
-	if oldProvider.calls != 1 {
-		t.Fatalf("旧模型写入时应生成一次向量，实际次数=%d", oldProvider.calls)
+	if got := atomic.LoadInt64(&oldProvider.calls); got != 1 {
+		t.Fatalf("旧模型写入时应生成一次向量，实际次数=%d", got)
 	}
 
 	newProvider := &stubEmbeddingProvider{enabled: true, model: "new-model", vector: []float64{0, 1}}
@@ -354,8 +355,8 @@ func TestServiceEnsureEmbeddingsReadyRebuildsOnModelMismatch(t *testing.T) {
 	if !strings.Contains(result.Message, "new-model") {
 		t.Fatalf("重建结果未包含新模型名: %+v", result)
 	}
-	if newProvider.calls != 1 {
-		t.Fatalf("模型切换后应执行一次重建，实际次数=%d", newProvider.calls)
+	if got := atomic.LoadInt64(&newProvider.calls); got != 1 {
+		t.Fatalf("模型切换后应执行一次重建，实际次数=%d", got)
 	}
 
 	store, err := models.StoreFromContext(ctx)
@@ -411,8 +412,8 @@ func TestServiceEnsureEmbeddingsReadyRebuildsLegacyEmbeddings(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("写入旧版测试记忆失败: %v", err)
 	}
-	if provider.calls != 1 {
-		t.Fatalf("初次写入应生成一次向量，实际次数=%d", provider.calls)
+	if got := atomic.LoadInt64(&provider.calls); got != 1 {
+		t.Fatalf("初次写入应生成一次向量，实际次数=%d", got)
 	}
 
 	store, err := models.StoreFromContext(ctx)
@@ -446,8 +447,8 @@ func TestServiceEnsureEmbeddingsReadyRebuildsLegacyEmbeddings(t *testing.T) {
 	if result.Changed {
 		t.Fatalf("模型未变化且数量一致时不应重建: %+v", result)
 	}
-	if provider.calls != 1 {
-		t.Fatalf("模型未变化时不应额外重建，实际次数=%d", provider.calls)
+	if got := atomic.LoadInt64(&provider.calls); got != 1 {
+		t.Fatalf("模型未变化时不应额外重建，实际次数=%d", got)
 	}
 }
 
@@ -548,8 +549,8 @@ func TestServiceSemanticSearchFindsMatchAcrossBatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("语义搜索失败: %v", err)
 	}
-	if provider.calls != 2 {
-		t.Fatalf("查询向量应按 error/summary 两类各生成一次，实际次数=%d", provider.calls)
+	if got := atomic.LoadInt64(&provider.calls); got != 1 {
+		t.Fatalf("并发搜索应复用同一组查询向量，实际次数=%d", got)
 	}
 	if len(result.SummaryHits) == 0 {
 		t.Fatalf("语义搜索未返回跨批次候选: %+v", result.SummaryHits)
@@ -900,8 +901,8 @@ func TestServiceSemanticSearchUsesCache(t *testing.T) {
 	if _, err := service.Search(ctx, "cache-project", []string{"缓存查询"}, false); err != nil {
 		t.Fatalf("第二次搜索失败: %v", err)
 	}
-	if provider.calls != 1 {
-		t.Fatalf("缓存生效后应只在首轮调用一次嵌入，实际=%d", provider.calls)
+	if got := atomic.LoadInt64(&provider.calls); got != 1 {
+		t.Fatalf("缓存生效后应只在首轮调用一次嵌入，实际=%d", got)
 	}
 }
 
