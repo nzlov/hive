@@ -110,9 +110,23 @@ export function fetchMemoryProjects() {
   return request('/api/v1/admin/memories/projects')
 }
 
+// fetchProjectTags 拉取指定项目下的标签列表，避免前端从分页记忆中拼接残缺标签集。
+export function fetchProjectTags(projectName) {
+  const params = new URLSearchParams({ project_name: String(projectName || '').trim() })
+  return request(`/api/v1/admin/memories/project-tags?${params.toString()}`)
+}
+
 // mergeMemoryProject 把副项目记忆并入主项目，并由后端同步重建相关向量。
 export function mergeMemoryProject(payload) {
   return request('/api/v1/admin/memories/merge-project', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+// mergeMemoryTags 把同一项目内多个副标签并入主标签，并同步刷新涉及记忆的向量与审批快照。
+export function mergeMemoryTags(payload) {
+  return request('/api/v1/admin/memories/merge-tags', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

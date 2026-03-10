@@ -20,7 +20,10 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-var errInvalidProjectMergeInput = errors.New("无效的项目合并请求")
+var (
+	errInvalidProjectMergeInput = errors.New("无效的项目合并请求")
+	errInvalidTagMergeInput     = errors.New("无效的标签合并请求")
+)
 
 // embeddingModelMetaKey 保存当前向量模型元数据键名，避免多处硬编码同一个存储键。
 const embeddingModelMetaKey = "embedding_model"
@@ -332,6 +335,106 @@ func (s *Service) ListProjectNames(ctx context.Context) ([]string, error) {
 	return store.ListDistinctProjectNames()
 }
 
+// ListProjectTags 返回指定项目下的标签列表，避免前端从当前分页结果中拼接残缺标签集。
+func (s *Service) ListProjectTags(ctx context.Context, projectName string) ([]string, error) {
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cleanedProjectName := strings.TrimSpace(projectName)
+	if cleanedProjectName == "" {
+		return nil, fmt.Errorf("%w: 项目名不能为空", errInvalidTagMergeInput)
+	}
+	projectNames, err := store.ListDistinctProjectNames()
+	if err != nil {
+		return nil, err
+	}
+	if !containsString(projectNames, cleanedProjectName) {
+		return nil, fmt.Errorf("%w: 项目不存在", errInvalidTagMergeInput)
+	}
+	return s.listProjectTagsWithStore(store, cleanedProjectName)
+}
+
+// MergeMemoryTags 把项目内多个副标签合并到主标签，并同步刷新向量与相关审批快照。
+func (s *Service) MergeMemoryTags(ctx context.Context, projectName string, sourceTags []string, targetTag string) (TagMergeResult, error) {
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		return TagMergeResult{}, err
+	}
+	cleanedProjectName := strings.TrimSpace(projectName)
+	if cleanedProjectName == "" {
+		return TagMergeResult{}, fmt.Errorf("%w: 项目名不能为空", errInvalidTagMergeInput)
+	}
+	cleanedTargetTag := strings.TrimSpace(targetTag)
+	if cleanedTargetTag == "" {
+		return TagMergeResult{}, fmt.Errorf("%w: 主标签不能为空", errInvalidTagMergeInput)
+	}
+	cleanedSourceTags := normalizeTagInputs(sourceTags)
+	if len(cleanedSourceTags) == 0 {
+		return TagMergeResult{}, fmt.Errorf("%w: 至少需要一个待合并标签", errInvalidTagMergeInput)
+	}
+	if containsString(cleanedSourceTags, cleanedTargetTag) {
+		return TagMergeResult{}, fmt.Errorf("%w: 主标签不能出现在待合并标签中", errInvalidTagMergeInput)
+	}
+	projectNames, err := store.ListDistinctProjectNames()
+	if err != nil {
+		return TagMergeResult{}, err
+	}
+	if !containsString(projectNames, cleanedProjectName) {
+		return TagMergeResult{}, fmt.Errorf("%w: 项目不存在", errInvalidTagMergeInput)
+	}
+	projectTags, err := s.listProjectTagsWithStore(store, cleanedProjectName)
+	if err != nil {
+		return TagMergeResult{}, err
+	}
+	projectTagSet := make(map[string]struct{}, len(projectTags))
+	for _, tag := range projectTags {
+		projectTagSet[tag] = struct{}{}
+	}
+	for _, tag := range cleanedSourceTags {
+		if _, ok := projectTagSet[tag]; !ok {
+			return TagMergeResult{}, fmt.Errorf("%w: 标签 %s 不存在于项目 %s", errInvalidTagMergeInput, tag, cleanedProjectName)
+		}
+	}
+	result := TagMergeResult{ProjectName: cleanedProjectName, SourceTags: cleanedSourceTags, TargetTag: cleanedTargetTag}
+	const batchSize = 200
+	var lastID int64
+	for {
+		tagRows, err := store.ListMemoryTagRowsByProjectAfterID(cleanedProjectName, lastID, batchSize)
+		if err != nil {
+			return TagMergeResult{}, err
+		}
+		if len(tagRows) == 0 {
+			break
+		}
+		lastID = tagRows[len(tagRows)-1].ID
+		matchedIDs := make([]int64, 0, len(tagRows))
+		for _, row := range tagRows {
+			if hasAnyTag(models.DecodeTags(row.Tags), cleanedSourceTags) {
+				matchedIDs = append(matchedIDs, row.ID)
+			}
+		}
+		if len(matchedIDs) == 0 {
+			continue
+		}
+		result.BatchCount++
+		batchResult, err := s.mergeMemoryTagsBatch(store, cleanedProjectName, matchedIDs, cleanedSourceTags, cleanedTargetTag)
+		if err != nil {
+			return TagMergeResult{}, err
+		}
+		result.AffectedMemoryCount += batchResult.AffectedMemoryCount
+		result.RebuiltEmbeddingCount += batchResult.RebuiltEmbeddingCount
+		result.ClearedPendingReviewCount += batchResult.ClearedPendingReviewCount
+		result.InvalidatedApprovedReviewCount += batchResult.InvalidatedApprovedReviewCount
+	}
+	if result.AffectedMemoryCount == 0 {
+		return TagMergeResult{}, fmt.Errorf("%w: 指定项目下没有命中待合并标签的记忆", errInvalidTagMergeInput)
+	}
+	s.invalidateSearchCache()
+	result.Message = fmt.Sprintf("已在项目 %s 中将 %d 个标签合并到 %s，更新 %d 条记忆，重建 %d 条向量，清除 %d 条待审核记录，并使 %d 条已批准记录失效。", cleanedProjectName, len(cleanedSourceTags), cleanedTargetTag, result.AffectedMemoryCount, result.RebuiltEmbeddingCount, result.ClearedPendingReviewCount, result.InvalidatedApprovedReviewCount)
+	return result, nil
+}
+
 // MergeProjectMemories 把副项目记忆并入主项目，并同步重建向量与清理旧审核快照。
 func (s *Service) MergeProjectMemories(ctx context.Context, sourceProjectName, targetProjectName string) (ProjectMergeResult, error) {
 	store, err := models.StoreFromContext(ctx)
@@ -438,6 +541,113 @@ func (s *Service) MergeProjectMemories(ctx context.Context, sourceProjectName, t
 // IsInvalidProjectMergeInput 用于区分项目合并的参数错误和服务端故障，避免路由层误报状态码。
 func IsInvalidProjectMergeInput(err error) bool {
 	return errors.Is(err, errInvalidProjectMergeInput)
+}
+
+// IsInvalidTagMergeInput 用于区分标签合并参数错误和服务端故障，避免路由层误报状态码。
+func IsInvalidTagMergeInput(err error) bool {
+	return errors.Is(err, errInvalidTagMergeInput)
+}
+
+// mergeMemoryTagsBatch 在单批记忆上完成标签替换、向量刷新与审批记录清理，避免一次事务覆盖整个大项目。
+func (s *Service) mergeMemoryTagsBatch(store *models.Store, projectName string, memoryIDs []int64, sourceTags []string, targetTag string) (TagMergeResult, error) {
+	result := TagMergeResult{}
+	err := store.WithTx(func(txStore *models.Store) error {
+		rows, err := txStore.ListMemoryRowsByIDs(memoryIDs)
+		if err != nil {
+			return err
+		}
+		matchedIDs := make([]int64, 0, len(rows))
+		updatedRows := make([]models.Memory, 0, len(rows))
+		for _, item := range rows {
+			if strings.TrimSpace(item.ProjectName) != projectName {
+				continue
+			}
+			mergedTags, changed := mergeTags(models.DecodeTags(item.Tags), sourceTags, targetTag)
+			if !changed {
+				continue
+			}
+			encodedTags := models.EncodeTags(mergedTags)
+			if err := txStore.UpdateMemoryTagsByID(item.ID, encodedTags); err != nil {
+				return err
+			}
+			item.Tags = encodedTags
+			updatedRows = append(updatedRows, item)
+			matchedIDs = append(matchedIDs, item.ID)
+		}
+		if len(matchedIDs) == 0 {
+			return nil
+		}
+		clearedPendingReviewCount, err := txStore.DeleteCleanupReviewsByMemoryIDsAndStatus(matchedIDs, "pending")
+		if err != nil {
+			return err
+		}
+		result.ClearedPendingReviewCount = clearedPendingReviewCount
+		invalidatedApprovedReviewCount, err := txStore.UpdateCleanupReviewsStatusByMemoryIDsAndStatus(matchedIDs, "approved", "rejected", "system:tag-merge", time.Now().UTC().Format(time.RFC3339Nano), fmt.Sprintf("项目 %s 发生标签合并，原批准清理记录已失效。", projectName))
+		if err != nil {
+			return err
+		}
+		result.InvalidatedApprovedReviewCount = invalidatedApprovedReviewCount
+		if err := txStore.DeleteMemoryEmbeddingsByMemoryIDs(matchedIDs); err != nil {
+			return err
+		}
+		result.AffectedMemoryCount = len(matchedIDs)
+		if !s.provider.Enabled() {
+			return nil
+		}
+		texts := make([]string, 0, len(updatedRows))
+		for _, item := range updatedRows {
+			texts = append(texts, BuildMemoryEmbeddingText(memoryRowFromModel(item)))
+		}
+		vectors, err := s.provider.EmbedTexts(texts)
+		if err != nil {
+			return err
+		}
+		updatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+		embeddings := make([]models.MemoryEmbedding, 0, minInt(len(updatedRows), len(vectors)))
+		for idx, item := range updatedRows {
+			if idx >= len(vectors) {
+				break
+			}
+			embeddings = append(embeddings, models.MemoryEmbedding{MemoryID: item.ID, ProjectName: item.ProjectName, Type: item.Type, Vector: models.EncodeVector(vectors[idx]), Timestamp: item.Timestamp, UpdatedAt: updatedAt})
+		}
+		if err := txStore.UpsertMemoryEmbeddings(embeddings); err != nil {
+			return err
+		}
+		result.RebuiltEmbeddingCount = len(embeddings)
+		return txStore.SetMemoryMetadata(embeddingModelMetaKey, s.provider.ModelName(), updatedAt)
+	})
+	if err != nil {
+		return TagMergeResult{}, err
+	}
+	return result, nil
+}
+
+// listProjectTagsWithStore 按批聚合项目标签，避免大项目一次性把全部标签 JSON 读入内存。
+func (s *Service) listProjectTagsWithStore(store *models.Store, projectName string) ([]string, error) {
+	tagSet := map[string]struct{}{}
+	const batchSize = 200
+	var lastID int64
+	for {
+		rows, err := store.ListMemoryTagRowsByProjectAfterID(projectName, lastID, batchSize)
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) == 0 {
+			break
+		}
+		lastID = rows[len(rows)-1].ID
+		for _, row := range rows {
+			for _, tag := range normalizeTagInputs(models.DecodeTags(row.Tags)) {
+				tagSet[tag] = struct{}{}
+			}
+		}
+	}
+	items := make([]string, 0, len(tagSet))
+	for tag := range tagSet {
+		items = append(items, tag)
+	}
+	sort.Strings(items)
+	return items, nil
 }
 
 // EnsureEmbeddingsReady 在服务启动阶段校验模型一致性，避免请求到来后才暴露旧向量问题。
@@ -1614,6 +1824,93 @@ func computeTotalPages(total int64, pageSize int) int {
 // normalizeGitBranch 统一裁剪分支名，避免头部记录被无意义空白污染。
 func normalizeGitBranch(gitBranch string) string {
 	return strings.TrimSpace(gitBranch)
+}
+
+// normalizeTagInputs 统一裁剪并去重标签输入，避免同一标签因重复提交造成结果统计失真。
+func normalizeTagInputs(tags []string) []string {
+	out := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		cleaned := strings.TrimSpace(tag)
+		if cleaned == "" {
+			continue
+		}
+		if _, ok := seen[cleaned]; ok {
+			continue
+		}
+		seen[cleaned] = struct{}{}
+		out = append(out, cleaned)
+	}
+	return out
+}
+
+// containsString 判断切片中是否包含目标值，避免分散手写循环导致校验逻辑不一致。
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAnyTag 判断标签集合是否命中任一源标签，确保标签合并只处理真正受影响的记忆。
+func hasAnyTag(tags []string, expected []string) bool {
+	if len(tags) == 0 || len(expected) == 0 {
+		return false
+	}
+	tagSet := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tagSet[strings.TrimSpace(tag)] = struct{}{}
+	}
+	for _, tag := range expected {
+		if _, ok := tagSet[tag]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeTags 统一执行标签替换与去重，避免主标签和副标签混合时产生重复项。
+func mergeTags(tags []string, sourceTags []string, targetTag string) ([]string, bool) {
+	if len(tags) == 0 {
+		return []string{targetTag}, true
+	}
+	sourceTagSet := make(map[string]struct{}, len(sourceTags))
+	for _, tag := range sourceTags {
+		sourceTagSet[tag] = struct{}{}
+	}
+	out := make([]string, 0, len(tags)+1)
+	seen := make(map[string]struct{}, len(tags)+1)
+	hitSource := false
+	targetExists := false
+	for _, rawTag := range tags {
+		cleanedTag := strings.TrimSpace(rawTag)
+		if cleanedTag == "" {
+			continue
+		}
+		if _, ok := sourceTagSet[cleanedTag]; ok {
+			hitSource = true
+			continue
+		}
+		if cleanedTag == targetTag {
+			targetExists = true
+		}
+		if _, ok := seen[cleanedTag]; ok {
+			continue
+		}
+		seen[cleanedTag] = struct{}{}
+		out = append(out, cleanedTag)
+	}
+	if !hitSource {
+		return out, false
+	}
+	if !targetExists {
+		if _, ok := seen[targetTag]; !ok {
+			out = append(out, targetTag)
+		}
+	}
+	return out, true
 }
 
 // isHeadingLine 识别 Markdown 标题，便于按章节返回更完整上下文。

@@ -793,6 +793,147 @@ func TestRouterMergeProjectMemoriesRejectsEmptyProjectNames(t *testing.T) {
 	}
 }
 
+// TestRouterAdminCanListAndMergeProjectTags 验证管理员可读取项目标签并执行项目内标签合并。
+func TestRouterAdminCanListAndMergeProjectTags(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	admin, password, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+	if _, err := service.Write(ctx, "tag-project", "main", admin.UserID, []api.MemoryWriteItem{
+		{Type: "summary", Title: "记忆A", Tags: []string{"旧标签", "主标签"}, Summary: "A", Context: "A"},
+		{Type: "summary", Title: "记忆B", Tags: []string{"待统一"}, Summary: "B", Context: "B"},
+	}); err != nil {
+		t.Fatalf("写入标签项目记忆失败: %v", err)
+	}
+	items, err := store.ListMemoriesByProjectAndType("tag-project", "summary")
+	if err != nil || len(items) != 2 {
+		t.Fatalf("读取标签项目记忆失败: err=%v items=%+v", err, items)
+	}
+	runAt := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := store.ReplacePendingCleanupReviews(runAt, "summary", []models.MemoryCleanupReview{{MemoryID: items[0].ID, ProjectName: "tag-project", Type: "summary", Status: "pending", Score: 0.8, ReasonJSON: "{}", SnapshotJSON: "{}", RunAt: runAt, CreatedAt: runAt}}); err != nil {
+		t.Fatalf("写入标签项目待审核记录失败: %v", err)
+	}
+	approvedAt := time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano)
+	if err := store.ReplacePendingCleanupReviews(approvedAt, "summary", []models.MemoryCleanupReview{{MemoryID: items[1].ID, ProjectName: "tag-project", Type: "summary", Status: "approved", Score: 0.7, ReasonJSON: "{}", SnapshotJSON: "{}", RunAt: approvedAt, CreatedAt: approvedAt}}); err != nil {
+		t.Fatalf("写入标签项目已批准记录失败: %v", err)
+	}
+	token := loginAsAdmin(t, router, password)
+
+	tagListRequest := httptest.NewRequest(http.MethodGet, "/api/v1/admin/memories/project-tags?project_name=tag-project", nil)
+	tagListRequest.Header.Set("Authorization", "Bearer "+token)
+	tagListRecorder := httptest.NewRecorder()
+	router.ServeHTTP(tagListRecorder, tagListRequest)
+	if tagListRecorder.Code != http.StatusOK {
+		t.Fatalf("读取项目标签失败: status=%d body=%s", tagListRecorder.Code, tagListRecorder.Body.String())
+	}
+	var tagListResponse api.ProjectTagListResponse
+	if err := json.Unmarshal(tagListRecorder.Body.Bytes(), &tagListResponse); err != nil {
+		t.Fatalf("解析项目标签响应失败: %v", err)
+	}
+	if len(tagListResponse.Items) != 3 || tagListResponse.Items[0] != "主标签" || tagListResponse.Items[1] != "待统一" || tagListResponse.Items[2] != "旧标签" {
+		t.Fatalf("项目标签列表异常: %+v", tagListResponse)
+	}
+
+	mergeBody := bytes.NewReader([]byte(`{"project_name":"tag-project","source_tags":["旧标签","待统一"],"target_tag":"主标签"}`))
+	mergeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/memories/merge-tags", mergeBody)
+	mergeRequest.Header.Set("Content-Type", "application/json")
+	mergeRequest.Header.Set("Authorization", "Bearer "+token)
+	mergeRecorder := httptest.NewRecorder()
+	router.ServeHTTP(mergeRecorder, mergeRequest)
+	if mergeRecorder.Code != http.StatusOK {
+		t.Fatalf("执行标签合并失败: status=%d body=%s", mergeRecorder.Code, mergeRecorder.Body.String())
+	}
+	var mergeResponse api.MergeTagsResponse
+	if err := json.Unmarshal(mergeRecorder.Body.Bytes(), &mergeResponse); err != nil {
+		t.Fatalf("解析标签合并响应失败: %v", err)
+	}
+	if mergeResponse.AffectedMemoryCount != 2 || mergeResponse.TargetTag != "主标签" {
+		t.Fatalf("标签合并响应异常: %+v", mergeResponse)
+	}
+	updatedItems, err := store.ListMemoriesByProjectAndType("tag-project", "summary")
+	if err != nil {
+		t.Fatalf("读取合并后的项目记忆失败: %v", err)
+	}
+	for _, item := range updatedItems {
+		tags := models.DecodeTags(item.Tags)
+		if strings.Contains(item.Title, "记忆") {
+			if countString(tags, "主标签") != 1 {
+				t.Fatalf("主标签应已去重: %+v", tags)
+			}
+			if countString(tags, "旧标签") != 0 || countString(tags, "待统一") != 0 {
+				t.Fatalf("副标签应已被移除: %+v", tags)
+			}
+		}
+	}
+	pendingReviews, pendingTotal, err := store.ListCleanupReviews("pending", "summary", "tag-project", 1, 10)
+	if err != nil {
+		t.Fatalf("读取标签项目待审核记录失败: %v", err)
+	}
+	if pendingTotal != 0 || len(pendingReviews) != 0 {
+		t.Fatalf("待审核记录应已清理: total=%d items=%+v", pendingTotal, pendingReviews)
+	}
+	rejectedReviews, rejectedTotal, err := store.ListCleanupReviews("rejected", "summary", "tag-project", 1, 10)
+	if err != nil {
+		t.Fatalf("读取标签项目失效记录失败: %v", err)
+	}
+	if rejectedTotal != 1 || len(rejectedReviews) != 1 {
+		t.Fatalf("已批准记录应被失效化: total=%d items=%+v", rejectedTotal, rejectedReviews)
+	}
+}
+
+// TestRouterMergeProjectTagsRejectsNonAdmin 验证普通用户不能执行标签合并，避免越权修改项目记忆标签。
+func TestRouterMergeProjectTagsRejectsNonAdmin(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	admin, password, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+	if _, err := service.Write(ctx, "tag-project", "main", admin.UserID, []api.MemoryWriteItem{{Type: "summary", Title: "记忆A", Tags: []string{"旧标签"}, Summary: "A", Context: "A"}}); err != nil {
+		t.Fatalf("写入标签项目记忆失败: %v", err)
+	}
+	memberCreateBody := bytes.NewReader([]byte(`{"username":"member","real_name":"普通成员","password":"member-pass","is_admin":false}`))
+	memberCreateRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/users", memberCreateBody)
+	memberCreateRequest.Header.Set("Content-Type", "application/json")
+	memberCreateRequest.Header.Set("Authorization", "Bearer "+loginAsAdmin(t, router, password))
+	memberCreateRecorder := httptest.NewRecorder()
+	router.ServeHTTP(memberCreateRecorder, memberCreateRequest)
+	if memberCreateRecorder.Code != http.StatusOK {
+		t.Fatalf("创建普通用户失败: status=%d body=%s", memberCreateRecorder.Code, memberCreateRecorder.Body.String())
+	}
+	memberLoginBody := bytes.NewReader([]byte(`{"username":"member","password":"member-pass"}`))
+	memberLoginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/users/auth/login", memberLoginBody)
+	memberLoginRequest.Header.Set("Content-Type", "application/json")
+	memberLoginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(memberLoginRecorder, memberLoginRequest)
+	if memberLoginRecorder.Code != http.StatusOK {
+		t.Fatalf("普通用户登录失败: status=%d body=%s", memberLoginRecorder.Code, memberLoginRecorder.Body.String())
+	}
+	var memberLoginResponse api.LoginResponse
+	if err := json.Unmarshal(memberLoginRecorder.Body.Bytes(), &memberLoginResponse); err != nil {
+		t.Fatalf("解析普通用户登录响应失败: %v", err)
+	}
+	mergeBody := bytes.NewReader([]byte(`{"project_name":"tag-project","source_tags":["旧标签"],"target_tag":"主标签"}`))
+	mergeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/memories/merge-tags", mergeBody)
+	mergeRequest.Header.Set("Content-Type", "application/json")
+	mergeRequest.Header.Set("Authorization", "Bearer "+memberLoginResponse.Token)
+	mergeRecorder := httptest.NewRecorder()
+	router.ServeHTTP(mergeRecorder, mergeRequest)
+	if mergeRecorder.Code != http.StatusForbidden {
+		t.Fatalf("普通用户合并标签应被拒绝: status=%d body=%s", mergeRecorder.Code, mergeRecorder.Body.String())
+	}
+}
+
 // TestRouterProtectedTagCRUD 验证管理员可通过接口维护保护标签，避免白名单只能通过改配置文件管理。
 func TestRouterProtectedTagCRUD(t *testing.T) {
 	t.Helper()
@@ -975,4 +1116,15 @@ func loginAsAdmin(t *testing.T, router *gin.Engine, password string) string {
 		t.Fatalf("解析管理员登录响应失败: %v", err)
 	}
 	return loginResponse.Token
+}
+
+// countString 统计字符串切片中目标值出现次数，避免测试遗漏重复标签未清理的问题。
+func countString(items []string, target string) int {
+	count := 0
+	for _, item := range items {
+		if item == target {
+			count++
+		}
+	}
+	return count
 }

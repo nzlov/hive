@@ -185,6 +185,28 @@ type ProjectMergeResult struct {
 	Message string
 }
 
+// TagMergeResult 描述一次项目内标签合并结果，便于管理端展示影响范围与审批清理情况。
+type TagMergeResult struct {
+	// ProjectName 保存发生标签合并的项目名，便于页面回显隔离范围。
+	ProjectName string
+	// SourceTags 保存被并入主标签的副标签列表，便于结果提示复盘输入。
+	SourceTags []string
+	// TargetTag 保存承接所有副标签语义的主标签，便于调用方确认最终标签。
+	TargetTag string
+	// BatchCount 统计分页处理批次数，便于观察大项目是否按批完成。
+	BatchCount int
+	// AffectedMemoryCount 统计真正发生标签改写的记忆数，避免把仅扫描到的数据误记为成功。
+	AffectedMemoryCount int
+	// RebuiltEmbeddingCount 统计完成重建的向量数，便于确认检索索引已刷新。
+	RebuiltEmbeddingCount int
+	// ClearedPendingReviewCount 统计被删除的待审核记录数，便于解释治理页数量变化。
+	ClearedPendingReviewCount int64
+	// InvalidatedApprovedReviewCount 统计被失效化的已批准记录数，避免旧快照继续可执行。
+	InvalidatedApprovedReviewCount int64
+	// Message 保存可读摘要，便于接口直接复用。
+	Message string
+}
+
 // CleanupScoreDetail 保存清理评分拆解明细，便于后台解释候选为何进入待审核队列。
 type CleanupScoreDetail struct {
 	// AgeDays 记录记忆已存在天数，便于解释时间衰减部分得分。

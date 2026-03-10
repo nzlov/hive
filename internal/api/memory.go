@@ -191,6 +191,13 @@ type ProjectNameListResponse struct {
 	Error string   `json:"error,omitempty"`
 }
 
+// ProjectTagListResponse 返回指定项目下的标签列表，避免前端从分页结果里拼凑不完整标签集。
+type ProjectTagListResponse struct {
+	ProjectName string   `json:"project_name"`
+	Items       []string `json:"items"`
+	Error       string   `json:"error,omitempty"`
+}
+
 // MergeProjectRequest 描述项目记忆合并请求，要求把副项目全部并入主项目。
 type MergeProjectRequest struct {
 	SourceProjectName string `json:"source_project_name"`
@@ -208,6 +215,27 @@ type MergeProjectResponse struct {
 	InvalidatedApprovedReviewCount int64  `json:"invalidated_approved_review_count"`
 	Message                        string `json:"message,omitempty"`
 	Error                          string `json:"error,omitempty"`
+}
+
+// MergeTagsRequest 描述项目内标签合并请求，要求把多个副标签并入同一个主标签。
+type MergeTagsRequest struct {
+	ProjectName string   `json:"project_name"`
+	SourceTags  []string `json:"source_tags"`
+	TargetTag   string   `json:"target_tag"`
+}
+
+// MergeTagsResponse 返回标签合并结果摘要，便于前端解释影响范围与后续清理动作。
+type MergeTagsResponse struct {
+	ProjectName                    string   `json:"project_name"`
+	SourceTags                     []string `json:"source_tags"`
+	TargetTag                      string   `json:"target_tag"`
+	BatchCount                     int      `json:"batch_count"`
+	AffectedMemoryCount            int      `json:"affected_memory_count"`
+	RebuiltEmbeddingCount          int      `json:"rebuilt_embedding_count"`
+	ClearedPendingReviewCount      int64    `json:"cleared_pending_review_count"`
+	InvalidatedApprovedReviewCount int64    `json:"invalidated_approved_review_count"`
+	Message                        string   `json:"message,omitempty"`
+	Error                          string   `json:"error,omitempty"`
 }
 
 // ChangePasswordRequest 描述用户修改密码的请求参数，允许用户更新自己的登录密码。

@@ -395,6 +395,19 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		}
 		c.JSON(http.StatusOK, api.ProjectNameListResponse{Items: items})
 	})
+	adminMemoryGroup.GET("/project-tags", func(c *gin.Context) {
+		projectName := strings.TrimSpace(c.Query("project_name"))
+		items, err := memoryService.ListProjectTags(c.Request.Context(), projectName)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if memory.IsInvalidTagMergeInput(err) {
+				status = http.StatusBadRequest
+			}
+			c.JSON(status, api.ProjectTagListResponse{ProjectName: projectName, Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.ProjectTagListResponse{ProjectName: projectName, Items: items})
+	})
 	adminMemoryGroup.POST("/merge-project", func(c *gin.Context) {
 		var request api.MergeProjectRequest
 		if err := c.ShouldBindJSON(&request); err != nil {
@@ -417,6 +430,33 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 			MergedMemoryCount:              result.MergedMemoryCount,
 			RebuiltEmbeddingCount:          result.RebuiltEmbeddingCount,
 			ClearedReviewCount:             result.ClearedReviewCount,
+			InvalidatedApprovedReviewCount: result.InvalidatedApprovedReviewCount,
+			Message:                        result.Message,
+		})
+	})
+	adminMemoryGroup.POST("/merge-tags", func(c *gin.Context) {
+		var request api.MergeTagsRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, api.MergeTagsResponse{Error: err.Error()})
+			return
+		}
+		result, err := memoryService.MergeMemoryTags(c.Request.Context(), request.ProjectName, request.SourceTags, request.TargetTag)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if memory.IsInvalidTagMergeInput(err) {
+				status = http.StatusBadRequest
+			}
+			c.JSON(status, api.MergeTagsResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.MergeTagsResponse{
+			ProjectName:                    result.ProjectName,
+			SourceTags:                     result.SourceTags,
+			TargetTag:                      result.TargetTag,
+			BatchCount:                     result.BatchCount,
+			AffectedMemoryCount:            result.AffectedMemoryCount,
+			RebuiltEmbeddingCount:          result.RebuiltEmbeddingCount,
+			ClearedPendingReviewCount:      result.ClearedPendingReviewCount,
 			InvalidatedApprovedReviewCount: result.InvalidatedApprovedReviewCount,
 			Message:                        result.Message,
 		})

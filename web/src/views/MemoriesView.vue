@@ -10,7 +10,10 @@
           </div>
           <div class="flex flex-col items-stretch gap-3 sm:items-end">
             <button class="ghost-btn" type="button" @click="loadMemories">刷新列表</button>
-            <button v-if="user.is_admin" class="primary-btn" type="button" @click="openMergeModal">合并项目</button>
+            <div v-if="user.is_admin" class="flex flex-wrap justify-end gap-3">
+              <button class="ghost-btn" type="button" @click="openTagMergeModal">合并标签</button>
+              <button class="primary-btn" type="button" @click="openMergeModal">合并项目</button>
+            </div>
           </div>
         </div>
 
@@ -341,13 +344,71 @@
         </form>
       </section>
     </div>
+
+    <div v-if="tagMergeVisible" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8">
+      <button class="absolute inset-0 cursor-default" type="button" aria-label="关闭标签合并弹窗" @click="closeTagMergeModal" />
+      <section class="relative z-10 max-h-full w-full max-w-3xl overflow-y-auto rounded-[2rem] bg-white p-6 shadow-2xl sm:p-8">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <p class="text-xs uppercase tracking-[0.35em] text-slate-400">Tag Merge</p>
+            <h3 class="mt-3 text-2xl font-semibold text-ink">合并项目标签</h3>
+            <p class="mt-2 text-sm text-slate-500">只能在选定项目内把多个副标签合并到一个主标签，重复标签会自动去重。</p>
+          </div>
+          <button class="ghost-btn" type="button" :disabled="tagMergeSubmitting" @click="closeTagMergeModal">关闭</button>
+        </div>
+
+        <p class="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+          提交后会只更新当前项目下命中副标签的记忆，自动过滤重复标签，重跑相关向量，并仅清理这些记忆关联的待审核/已批准清理记录。
+        </p>
+        <p v-if="tagMergeLoading" class="mt-6 text-sm text-slate-400">正在加载项目或标签列表...</p>
+        <p v-else-if="tagMergeError" class="mt-6 rounded-2xl bg-coral/10 px-4 py-3 text-sm text-coral">{{ tagMergeError }}</p>
+
+        <form v-else class="mt-6 space-y-6" @submit.prevent="handleMergeTags">
+          <label class="block space-y-2">
+            <span class="text-sm font-medium text-slate-700">项目</span>
+            <select v-model="tagMergeForm.projectName" class="field" :disabled="tagMergeSubmitting" @change="handleTagMergeProjectChange">
+              <option value="">请选择项目</option>
+              <option v-for="item in projectOptions" :key="`tag-project-${item}`" :value="item">{{ item }}</option>
+            </select>
+          </label>
+
+          <label class="block space-y-2">
+            <span class="text-sm font-medium text-slate-700">主标签</span>
+            <select v-model="tagMergeForm.targetTag" class="field" :disabled="tagMergeSubmitting || !tagOptions.length" @change="handleTagMergeTargetChange">
+              <option value="">请选择主标签</option>
+              <option v-for="item in availableTargetTagOptions" :key="`target-tag-${item}`" :value="item">{{ item }}</option>
+            </select>
+          </label>
+
+          <label class="block space-y-2">
+            <span class="text-sm font-medium text-slate-700">待合并标签</span>
+            <select v-model="tagMergeForm.sourceTags" class="field min-h-48" multiple :disabled="tagMergeSubmitting || !availableSourceTagOptions.length">
+              <option v-for="item in availableSourceTagOptions" :key="`source-tag-${item}`" :value="item">{{ item }}</option>
+            </select>
+            <p class="text-xs leading-6 text-slate-400">按住 Ctrl / Command 可多选；主标签不会出现在可选副标签列表中。</p>
+          </label>
+
+          <div v-if="tagMergeForm.sourceTags.length" class="rounded-3xl border border-slate-200 bg-mist/60 p-4">
+            <p class="text-xs uppercase tracking-[0.3em] text-slate-400">本次合并</p>
+            <div class="mt-3 flex flex-wrap gap-2">
+              <span v-for="tag in tagMergeForm.sourceTags" :key="`preview-${tag}`" class="rounded-full bg-white px-3 py-1 text-xs text-slate-600">{{ tag }}</span>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap justify-end gap-3">
+            <button class="ghost-btn" type="button" :disabled="tagMergeSubmitting" @click="closeTagMergeModal">取消</button>
+            <button class="primary-btn" type="submit" :disabled="tagMergeSubmitting">{{ tagMergeSubmitting ? '合并中...' : '确认合并标签' }}</button>
+          </div>
+        </form>
+      </section>
+    </div>
   </AdminShell>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import AdminShell from '../components/AdminShell.vue'
-import { deleteMemory, fetchMemories, fetchMemoryDetail, fetchMemoryProjects, mergeMemoryProject, updateMemory } from '../lib/api'
+import { deleteMemory, fetchMemories, fetchMemoryDetail, fetchMemoryProjects, fetchProjectTags, mergeMemoryProject, mergeMemoryTags, updateMemory } from '../lib/api'
 import { getStoredUser } from '../lib/auth'
 
 const user = getStoredUser()
@@ -378,9 +439,17 @@ const mergeSubmitting = ref(false)
 const mergeError = ref('')
 const projectOptions = ref([])
 const mergeForm = reactive({ sourceProjectName: '', targetProjectName: '' })
+const tagMergeVisible = ref(false)
+const tagMergeLoading = ref(false)
+const tagMergeSubmitting = ref(false)
+const tagMergeError = ref('')
+const tagOptions = ref([])
+const tagMergeForm = reactive({ projectName: '', targetTag: '', sourceTags: [] })
 const pageSizeOptions = [10, 15, 20, 30, 50]
 
 const sourceProjectOptions = computed(() => projectOptions.value.filter((item) => item !== mergeForm.targetProjectName))
+const availableTargetTagOptions = computed(() => tagOptions.value.filter((item) => !tagMergeForm.sourceTags.includes(item)))
+const availableSourceTagOptions = computed(() => tagOptions.value.filter((item) => item !== tagMergeForm.targetTag))
 
 // buildQueries 统一按空白拆分关键字，确保后台列表与记忆搜索接口共享同样的多词匹配输入形式。
 function buildQueries() {
@@ -422,6 +491,27 @@ async function loadProjectOptions() {
   }
 }
 
+// loadProjectTags 在选中项目后拉取该项目的真实标签列表，避免跨项目残留标签误提交。
+async function loadProjectTags(projectName) {
+  const normalizedProjectName = String(projectName || '').trim()
+  tagOptions.value = []
+  tagMergeForm.targetTag = ''
+  tagMergeForm.sourceTags = []
+  if (!normalizedProjectName) {
+    return
+  }
+  tagMergeLoading.value = true
+  tagMergeError.value = ''
+  try {
+    const response = await fetchProjectTags(normalizedProjectName)
+    tagOptions.value = response.items || []
+  } catch (error) {
+    tagMergeError.value = error.message
+  } finally {
+    tagMergeLoading.value = false
+  }
+}
+
 // openMergeModal 打开项目合并弹窗前先加载项目列表，避免用户在空下拉里盲填项目名。
 async function openMergeModal() {
   mergeVisible.value = true
@@ -430,6 +520,28 @@ async function openMergeModal() {
   mergeForm.targetProjectName = ''
   projectOptions.value = []
   await loadProjectOptions()
+}
+
+// openTagMergeModal 打开标签合并弹窗前先加载项目列表，确保用户只能在真实项目范围内操作。
+async function openTagMergeModal() {
+  tagMergeVisible.value = true
+  tagMergeSubmitting.value = false
+  tagMergeError.value = ''
+  tagOptions.value = []
+  tagMergeForm.projectName = ''
+  tagMergeForm.targetTag = ''
+  tagMergeForm.sourceTags = []
+  if (!projectOptions.value.length) {
+    tagMergeLoading.value = true
+    try {
+      const response = await fetchMemoryProjects()
+      projectOptions.value = response.items || []
+    } catch (error) {
+      tagMergeError.value = error.message
+    } finally {
+      tagMergeLoading.value = false
+    }
+  }
 }
 
 // closeMergeModal 统一回收项目合并弹窗状态，避免上一次选择残留到下一次操作。
@@ -442,6 +554,30 @@ function closeMergeModal() {
   mergeError.value = ''
   mergeForm.sourceProjectName = ''
   mergeForm.targetProjectName = ''
+}
+
+// closeTagMergeModal 统一清理标签合并状态，避免上一次选择污染下一次操作。
+function closeTagMergeModal() {
+  if (tagMergeSubmitting.value) {
+    return
+  }
+  tagMergeVisible.value = false
+  tagMergeLoading.value = false
+  tagMergeError.value = ''
+  tagOptions.value = []
+  tagMergeForm.projectName = ''
+  tagMergeForm.targetTag = ''
+  tagMergeForm.sourceTags = []
+}
+
+// handleTagMergeProjectChange 在项目切换时重新加载标签列表，避免跨项目标签留在表单里。
+async function handleTagMergeProjectChange() {
+  await loadProjectTags(tagMergeForm.projectName)
+}
+
+// handleTagMergeTargetChange 在主标签变化时剔除副标签里的重复值，避免用户提交冲突组合。
+function handleTagMergeTargetChange() {
+  tagMergeForm.sourceTags = tagMergeForm.sourceTags.filter((item) => item !== tagMergeForm.targetTag)
 }
 
 // handleMergeProject 提交项目合并请求，并在成功后刷新列表和项目选项避免页面继续展示旧项目状态。
@@ -473,6 +609,49 @@ async function handleMergeProject() {
     mergeError.value = error.message
   } finally {
     mergeSubmitting.value = false
+  }
+}
+
+// handleMergeTags 提交项目内标签合并请求，并在成功后刷新列表避免页面继续展示旧标签状态。
+async function handleMergeTags() {
+  tagMergeError.value = ''
+  if (!tagMergeForm.projectName) {
+    tagMergeError.value = '请选择项目'
+    return
+  }
+  if (!tagMergeForm.targetTag) {
+    tagMergeError.value = '请选择主标签'
+    return
+  }
+  if (!tagMergeForm.sourceTags.length) {
+    tagMergeError.value = '请至少选择一个待合并标签'
+    return
+  }
+  if (tagMergeForm.sourceTags.includes(tagMergeForm.targetTag)) {
+    tagMergeError.value = '主标签不能出现在待合并标签中'
+    return
+  }
+  const sourceTags = [...new Set(tagMergeForm.sourceTags)]
+  if (!window.confirm(`确认在项目“${tagMergeForm.projectName}”中将标签“${sourceTags.join('、')}”合并到“${tagMergeForm.targetTag}”吗？\n\n系统会自动过滤重复标签，重跑相关向量，并清理这些记忆关联的待审核/已批准清理记录。`)) {
+    return
+  }
+  tagMergeSubmitting.value = true
+  try {
+    const response = await mergeMemoryTags({
+      project_name: tagMergeForm.projectName,
+      source_tags: sourceTags,
+      target_tag: tagMergeForm.targetTag,
+    })
+    actionMessage.value = response.message || '标签合并成功。'
+    errorMessage.value = ''
+    await loadMemories()
+    await loadProjectTags(tagMergeForm.projectName)
+    tagMergeSubmitting.value = false
+    closeTagMergeModal()
+  } catch (error) {
+    tagMergeError.value = error.message
+  } finally {
+    tagMergeSubmitting.value = false
   }
 }
 

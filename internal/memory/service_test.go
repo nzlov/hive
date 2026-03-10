@@ -454,6 +454,164 @@ func TestServiceMergeProjectMemoriesBatchesIDs(t *testing.T) {
 	}
 }
 
+// TestServiceMergeMemoryTagsKeepsProjectScope 验证标签合并只影响指定项目，并同步去重标签、重建向量和清理相关审核记录。
+func TestServiceMergeMemoryTagsKeepsProjectScope(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
+	provider := &textAwareEmbeddingProvider{model: "tag-merge-model"}
+	service.provider = provider
+	ctx := testContextWithStore(t, service.config)
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		t.Fatalf("读取模型存储失败: %v", err)
+	}
+	if _, err := service.Write(ctx, "target-project", "main", "admin", []api.MemoryWriteItem{
+		{Type: "summary", Title: "标签待合并-1", Tags: []string{"旧标签", "重复标签", "主标签"}, Summary: "待合并一", Context: "正文一"},
+		{Type: "summary", Title: "标签待合并-2", Tags: []string{"旧标签", "待统一"}, Summary: "待合并二", Context: "正文二"},
+		{Type: "summary", Title: "仅主标签", Tags: []string{"主标签"}, Summary: "保持不变", Context: "正文三"},
+	}); err != nil {
+		t.Fatalf("写入目标项目记忆失败: %v", err)
+	}
+	if _, err := service.Write(ctx, "other-project", "main", "admin", []api.MemoryWriteItem{{Type: "summary", Title: "其他项目", Tags: []string{"旧标签"}, Summary: "其他", Context: "其他正文"}}); err != nil {
+		t.Fatalf("写入其他项目记忆失败: %v", err)
+	}
+	targetItems, err := store.ListMemoriesByProjectAndType("target-project", "summary")
+	if err != nil {
+		t.Fatalf("读取目标项目记忆失败: %v", err)
+	}
+	affectedIDs := make([]int64, 0, 2)
+	for _, item := range targetItems {
+		if strings.HasPrefix(item.Title, "标签待合并-") {
+			affectedIDs = append(affectedIDs, item.ID)
+		}
+	}
+	beforeEmbeddings, err := store.ListMemoryEmbeddings("target-project", affectedIDs)
+	if err != nil {
+		t.Fatalf("读取合并前向量失败: %v", err)
+	}
+	runAt := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := store.ReplacePendingCleanupReviews(runAt, "summary", []models.MemoryCleanupReview{
+		{MemoryID: affectedIDs[0], ProjectName: "target-project", Type: "summary", Status: "pending", Score: 0.9, ReasonJSON: "{}", SnapshotJSON: "{}", RunAt: runAt, CreatedAt: runAt},
+		{MemoryID: affectedIDs[1], ProjectName: "target-project", Type: "summary", Status: "pending", Score: 0.8, ReasonJSON: "{}", SnapshotJSON: "{}", RunAt: runAt, CreatedAt: runAt},
+	}); err != nil {
+		t.Fatalf("写入待审核记录失败: %v", err)
+	}
+	approvedAt := time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano)
+	if err := store.ReplacePendingCleanupReviews(approvedAt, "summary", []models.MemoryCleanupReview{{MemoryID: affectedIDs[0], ProjectName: "target-project", Type: "summary", Status: "approved", Score: 0.7, ReasonJSON: "{}", SnapshotJSON: "{}", RunAt: approvedAt, CreatedAt: approvedAt}}); err != nil {
+		t.Fatalf("写入已批准记录失败: %v", err)
+	}
+	executedAt := time.Now().UTC().Add(2 * time.Second).Format(time.RFC3339Nano)
+	if err := store.ReplacePendingCleanupReviews(executedAt, "summary", []models.MemoryCleanupReview{{MemoryID: affectedIDs[0], ProjectName: "target-project", Type: "summary", Status: "executed", Score: 0.6, ReasonJSON: "{}", SnapshotJSON: "{}", RunAt: executedAt, CreatedAt: executedAt}}); err != nil {
+		t.Fatalf("写入已执行记录失败: %v", err)
+	}
+	otherItems, err := store.ListMemoriesByProjectAndType("other-project", "summary")
+	if err != nil || len(otherItems) != 1 {
+		t.Fatalf("读取其他项目记忆失败: err=%v items=%+v", err, otherItems)
+	}
+	otherRunAt := time.Now().UTC().Add(3 * time.Second).Format(time.RFC3339Nano)
+	if err := store.ReplacePendingCleanupReviews(otherRunAt, "summary", []models.MemoryCleanupReview{{MemoryID: otherItems[0].ID, ProjectName: "other-project", Type: "summary", Status: "pending", Score: 0.5, ReasonJSON: "{}", SnapshotJSON: "{}", RunAt: otherRunAt, CreatedAt: otherRunAt}}); err != nil {
+		t.Fatalf("写入其他项目审核记录失败: %v", err)
+	}
+
+	result, err := service.MergeMemoryTags(ctx, "target-project", []string{"旧标签", "待统一"}, "主标签")
+	if err != nil {
+		t.Fatalf("合并标签失败: %v", err)
+	}
+	if result.AffectedMemoryCount != 2 || result.RebuiltEmbeddingCount != 2 {
+		t.Fatalf("标签合并结果计数异常: %+v", result)
+	}
+	if result.ClearedPendingReviewCount != 2 || result.InvalidatedApprovedReviewCount != 1 {
+		t.Fatalf("标签合并审批清理统计异常: %+v", result)
+	}
+	updatedItems, err := store.ListMemoriesByProjectAndType("target-project", "summary")
+	if err != nil {
+		t.Fatalf("读取合并后目标项目记忆失败: %v", err)
+	}
+	for _, item := range updatedItems {
+		tags := models.DecodeTags(item.Tags)
+		if strings.HasPrefix(item.Title, "标签待合并-") {
+			if hasAnyTag(tags, []string{"旧标签", "待统一"}) {
+				t.Fatalf("副标签应已被移除: %+v", tags)
+			}
+			if countTag(tags, "主标签") != 1 {
+				t.Fatalf("主标签应去重后只保留一份: %+v", tags)
+			}
+		}
+	}
+	afterEmbeddings, err := store.ListMemoryEmbeddings("target-project", affectedIDs)
+	if err != nil {
+		t.Fatalf("读取合并后向量失败: %v", err)
+	}
+	for _, id := range affectedIDs {
+		beforeVector := beforeEmbeddings[id]
+		afterVector := afterEmbeddings[id]
+		if len(afterVector) == 0 {
+			t.Fatalf("合并后向量为空: id=%d", id)
+		}
+		if len(beforeVector) == len(afterVector) && len(afterVector) > 0 {
+			unchanged := true
+			for idx := range afterVector {
+				if beforeVector[idx] != afterVector[idx] {
+					unchanged = false
+					break
+				}
+			}
+			if unchanged {
+				t.Fatalf("标签合并后向量应已刷新: id=%d before=%v after=%v", id, beforeVector, afterVector)
+			}
+		}
+	}
+	otherUpdatedItems, err := store.ListMemoriesByProjectAndType("other-project", "summary")
+	if err != nil {
+		t.Fatalf("读取其他项目记忆失败: %v", err)
+	}
+	if countTag(models.DecodeTags(otherUpdatedItems[0].Tags), "旧标签") != 1 {
+		t.Fatalf("其他项目标签不应被改动: %+v", models.DecodeTags(otherUpdatedItems[0].Tags))
+	}
+	pendingReviews, pendingTotal, err := store.ListCleanupReviews("pending", "summary", "target-project", 1, 10)
+	if err != nil {
+		t.Fatalf("读取目标项目待审核记录失败: %v", err)
+	}
+	if pendingTotal != 0 || len(pendingReviews) != 0 {
+		t.Fatalf("目标项目待审核记录应已清空: total=%d items=%+v", pendingTotal, pendingReviews)
+	}
+	rejectedReviews, rejectedTotal, err := store.ListCleanupReviews("rejected", "summary", "target-project", 1, 10)
+	if err != nil {
+		t.Fatalf("读取目标项目已失效记录失败: %v", err)
+	}
+	if rejectedTotal != 1 || len(rejectedReviews) != 1 {
+		t.Fatalf("目标项目已批准记录应被失效化: total=%d items=%+v", rejectedTotal, rejectedReviews)
+	}
+	if !strings.Contains(rejectedReviews[0].ExecutionNote, "标签合并") {
+		t.Fatalf("已失效记录缺少标签合并说明: %+v", rejectedReviews[0])
+	}
+	executedReviews, executedTotal, err := store.ListCleanupReviews("executed", "summary", "target-project", 1, 10)
+	if err != nil {
+		t.Fatalf("读取目标项目已执行记录失败: %v", err)
+	}
+	if executedTotal != 1 || len(executedReviews) != 1 {
+		t.Fatalf("已执行记录应保留不动: total=%d items=%+v", executedTotal, executedReviews)
+	}
+	otherPendingReviews, otherPendingTotal, err := store.ListCleanupReviews("pending", "summary", "other-project", 1, 10)
+	if err != nil {
+		t.Fatalf("读取其他项目待审核记录失败: %v", err)
+	}
+	if otherPendingTotal != 1 || len(otherPendingReviews) != 1 {
+		t.Fatalf("其他项目待审核记录不应被清理: total=%d items=%+v", otherPendingTotal, otherPendingReviews)
+	}
+}
+
+// countTag 统计标签出现次数，避免测试里遗漏重复标签清理问题。
+func countTag(tags []string, target string) int {
+	count := 0
+	for _, tag := range tags {
+		if tag == target {
+			count++
+		}
+	}
+	return count
+}
+
 // TestServiceSearchReturnsBranchMetadata 验证查询会返回分支元信息，后续由脚本决定是否保留该条记忆。
 func TestServiceSearchReturnsBranchMetadata(t *testing.T) {
 	t.Helper()

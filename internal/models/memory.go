@@ -38,6 +38,12 @@ type MemoryLite struct {
 	Timestamp string `gorm:"column:timestamp;comment:记忆业务时间戳"`
 }
 
+// MemoryTagRow 仅保留标签扫描所需字段，避免标签聚合时把正文一并装入内存。
+type MemoryTagRow struct {
+	ID   int64  `gorm:"column:id;comment:记忆主键"`
+	Tags string `gorm:"column:tags;comment:标签 JSON 原文"`
+}
+
 // TableName 固定表名，避免 GORM 复数化规则影响既有数据表兼容性。
 func (Memory) TableName() string {
 	return "memories"
@@ -213,6 +219,13 @@ func (s *Store) UpdateMemoriesProjectNameByIDs(ids []int64, projectName string) 
 		Update("project_name", strings.TrimSpace(projectName)).Error
 }
 
+// UpdateMemoryTagsByID 批量改写单条记忆的标签 JSON，避免标签合并逐条保存放大往返次数。
+func (s *Store) UpdateMemoryTagsByID(id int64, encodedTags string) error {
+	return s.db.Model(&Memory{}).
+		Where("id = ?", id).
+		Update("tags", strings.TrimSpace(encodedTags)).Error
+}
+
 // ListMemoryRowsByIDs 按主键集合读取重建向量所需字段，避免项目迁移时回表拉取无关列。
 func (s *Store) ListMemoryRowsByIDs(memoryIDs []int64) ([]Memory, error) {
 	items, err := s.ListMemoriesByIDs(memoryIDs)
@@ -249,6 +262,54 @@ func (s *Store) ListDistinctProjectNames() ([]string, error) {
 			items = append(items, value)
 		}
 	}
+	return items, nil
+}
+
+// ListMemoryTagRowsByProjectAfterID 按主键游标分页读取项目下的标签字段，便于服务层做精确标签匹配。
+func (s *Store) ListMemoryTagRowsByProjectAfterID(projectName string, afterID int64, limit int) ([]MemoryTagRow, error) {
+	if limit <= 0 {
+		return []MemoryTagRow{}, nil
+	}
+	var rows []MemoryTagRow
+	err := s.db.Model(&Memory{}).
+		Select("id, tags").
+		Where("project_name = ? AND id > ?", strings.TrimSpace(projectName), afterID).
+		Order("id ASC").
+		Limit(limit).
+		Scan(&rows).Error
+	return rows, err
+}
+
+// ListDistinctTagsByProject 返回指定项目下去重后的标签集合，避免前端从分页列表中拼接残缺选项。
+func (s *Store) ListDistinctTagsByProject(projectName string) ([]string, error) {
+	cleanedProjectName := strings.TrimSpace(projectName)
+	if cleanedProjectName == "" {
+		return []string{}, nil
+	}
+	var rows []MemoryTagRow
+	err := s.db.Model(&Memory{}).
+		Select("id, tags").
+		Where("project_name = ?", cleanedProjectName).
+		Order("id ASC").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	tagSet := make(map[string]struct{})
+	for _, row := range rows {
+		for _, tag := range DecodeTags(row.Tags) {
+			cleanedTag := strings.TrimSpace(tag)
+			if cleanedTag == "" {
+				continue
+			}
+			tagSet[cleanedTag] = struct{}{}
+		}
+	}
+	items := make([]string, 0, len(tagSet))
+	for tag := range tagSet {
+		items = append(items, tag)
+	}
+	sort.Strings(items)
 	return items, nil
 }
 

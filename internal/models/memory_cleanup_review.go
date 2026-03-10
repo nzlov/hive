@@ -136,6 +136,31 @@ func (s *Store) UpdateCleanupReviewsStatusByProjectNameAndStatus(projectName, fr
 	return result.RowsAffected, result.Error
 }
 
+// DeleteCleanupReviewsByMemoryIDsAndStatus 删除指定记忆集合下的指定状态审核记录，避免标签合并误伤同项目其他记忆。
+func (s *Store) DeleteCleanupReviewsByMemoryIDsAndStatus(memoryIDs []int64, status string) (int64, error) {
+	if len(memoryIDs) == 0 {
+		return 0, nil
+	}
+	result := s.db.Where("memory_id IN ? AND status = ?", memoryIDs, strings.TrimSpace(status)).Delete(&MemoryCleanupReview{})
+	return result.RowsAffected, result.Error
+}
+
+// UpdateCleanupReviewsStatusByMemoryIDsAndStatus 批量改写指定记忆集合下的审核状态，避免旧批准快照继续删除已改标签记忆。
+func (s *Store) UpdateCleanupReviewsStatusByMemoryIDsAndStatus(memoryIDs []int64, fromStatus, toStatus, reviewedBy, reviewedAt, note string) (int64, error) {
+	if len(memoryIDs) == 0 {
+		return 0, nil
+	}
+	result := s.db.Model(&MemoryCleanupReview{}).
+		Where("memory_id IN ? AND status = ?", memoryIDs, strings.TrimSpace(fromStatus)).
+		Updates(map[string]any{
+			"status":         strings.TrimSpace(toStatus),
+			"reviewed_by":    strings.TrimSpace(reviewedBy),
+			"reviewed_at":    strings.TrimSpace(reviewedAt),
+			"execution_note": strings.TrimSpace(note),
+		})
+	return result.RowsAffected, result.Error
+}
+
 // LockMemoryCleanupReviewsForUpdate 在事务里锁定审核记录，避免并发执行清理任务时重复删除同一批记忆。
 func (s *Store) LockMemoryCleanupReviewsForUpdate(ids []int64) ([]MemoryCleanupReview, error) {
 	if len(ids) == 0 {
