@@ -13,7 +13,7 @@ description: Trigger this skill by default for search or analysis tasks. prior-c
 
 ## 检索记忆
 
-1. 查询使用关键词或描述，允许多个。
+1. 查询使用关键词或描述(尽量详细)，允许多个。
 2. 按时间倒序（新到旧）。
 3. 输出为 Markdown，多条记录用 `---` 分隔。
 4. 返回包含：
@@ -29,19 +29,19 @@ description: Trigger this skill by default for search or analysis tasks. prior-c
 使用命令：
 
 ```bash
-python3 scripts/main.py search --root '<项目根目录>' --query '["关键词","<描述>"]'
+python3 <hive目录>/scripts/main.py search --root '<项目根目录>' --query '["关键词","<描述>"]'
 ```
 
 PowerShell：
 
 ```powershell
-python scripts/main.py search --root "<项目根目录>" --query '["关键词","<描述>"]'
+python <hive目录>/scripts/main.py search --root "<项目根目录>" --query '["关键词","<描述>"]'
 ```
 
 cmd：
 
 ```cmd
-python scripts\main.py search --root "<项目根目录>" --query "[\"关键词\",\"<描述>\"]"
+python <hive目录>\scripts\main.py search --root "<项目根目录>" --query "[\"关键词\",\"<描述>\"]"
 ```
 
 ## 写入总结记忆
@@ -60,7 +60,7 @@ python scripts\main.py search --root "<项目根目录>" --query "[\"关键词\"
 使用命令：
 
 ```bash
-python3 scripts/main.py write \
+python3 <hive目录>/scripts/main.py write \
   --root '<项目根目录>' \
   --items-json '[
     {
@@ -83,13 +83,13 @@ python3 scripts/main.py write \
 PowerShell（建议优先使用 `--items-file`，避免长 JSON 转义不稳定）：
 
 ```powershell
-python scripts/main.py write --root "<项目根目录>" --items-file ".\memory-items.json"
+python <hive目录>/scripts/main.py write --root "<项目根目录>" --items-file ".\memory-items.json"
 ```
 
 cmd（建议优先使用 `--items-file`，避免长 JSON 转义不稳定）：
 
 ```cmd
-python scripts\main.py write --root "<项目根目录>" --items-file ".\memory-items.json"
+python <hive目录>\scripts\main.py write --root "<项目根目录>" --items-file ".\memory-items.json"
 ```
 
 说明：
@@ -109,7 +109,7 @@ python scripts\main.py write --root "<项目根目录>" --items-file ".\memory-i
 使用命令：
 
 ```bash
-python3 scripts/main.py write \
+python3 <hive目录>/scripts/main.py write \
   --root '<项目根目录>' \
   --items-json '[
     {
@@ -125,13 +125,13 @@ python3 scripts/main.py write \
 PowerShell：
 
 ```powershell
-python scripts/main.py write --root "<项目根目录>" --items-file ".\error-items.json"
+python <hive目录>/scripts/main.py write --root "<项目根目录>" --items-file ".\error-items.json"
 ```
 
 cmd：
 
 ```cmd
-python scripts\main.py write --root "<项目根目录>" --items-file ".\error-items.json"
+python <hive目录>\scripts\main.py write --root "<项目根目录>" --items-file ".\error-items.json"
 ```
 
 ## 执行环境注意事项
@@ -141,6 +141,7 @@ python scripts\main.py write --root "<项目根目录>" --items-file ".\error-it
 3. 通过 OpenCode `bash` 工具调用时，始终提供 `command` 与 `description`。
 4. Windows 下优先用 `python`（不是 `python3`），并优先使用 `--items-file`。
 5. 复杂 JSON 建议写入临时文件后通过 `--items-file` 传入。临时文件写入成功会自动清理。
+6. 注意脚本文件位置，所有的示例都是hive的相对路径，实际调用时使用全路径补全hive所在路径。
 
 ## 正文生成样例
 
