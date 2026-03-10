@@ -17,6 +17,42 @@
     "driver": "sqlite",
     "dsn": ""
   },
+  "schedule": {
+    "memoryCleanup": {
+      "enabled": false,
+      "spec": "0 3 * * *",
+      "mode": "review",
+      "dryRun": false,
+      "reviewTopN": 200,
+      "protectedTags": ["核心故障", "架构决策"],
+      "summary": {
+        "beforeDays": 30,
+        "batchSize": 100,
+        "minRemaining": 500,
+        "minRemainingPerProject": 20,
+        "scoreThreshold": 0.65,
+        "weights": {
+          "age": 0.3,
+          "useCount": 0.35,
+          "lastUsed": 0.25,
+          "projectPressure": 0.1
+        }
+      },
+      "error": {
+        "beforeDays": 120,
+        "batchSize": 30,
+        "minRemaining": 1000,
+        "minRemainingPerProject": 50,
+        "scoreThreshold": 0.8,
+        "weights": {
+          "age": 0.2,
+          "useCount": 0.25,
+          "lastUsed": 0.35,
+          "projectPressure": 0.2
+        }
+      }
+    }
+  },
   "search": {
     "lowConfidenceErrorHitLimit": 10,
     "lowConfidenceSummaryHitLimit": 10,
@@ -40,11 +76,12 @@
     },
     "fusion": {
       "enabled": true,
-      "formula": "weighted_sum",
+      "formula": "coverage_discount",
       "keywordWeight": 0.55,
       "semanticWeight": 0.45,
       "recencyWeight": 0.1,
-      "minSemanticScore": 0.15
+      "minSemanticScore": 0.15,
+      "coverageDiscountBase": 0.85
     },
     "cache": {
       "enabled": false,
@@ -89,6 +126,8 @@
 - `database.driver` 为空或缺失时，默认回落到 `SQLite`
 - `SQLite` 默认使用 `./.memory/memory.db`
 - `PostgreSQL` 需要显式设置 `database.driver=postgresql` 和 `database.dsn`
+- 建议记忆清理先使用 `schedule.memoryCleanup.mode=review` 观察候选，再切到 `auto`
+- `schedule.memoryCleanup.protectedTags` 只用于启动时补种默认白名单，后续应在后台“清理治理”页维护
 
 ## 启动服务端
 
@@ -154,3 +193,8 @@ make dev-ui
 
 - `/api/*` -> `http://127.0.0.1:8080`
 - `/tokenapi/*` -> `http://127.0.0.1:8080`
+
+## 清理治理入口
+
+- 管理员登录后可在后台侧边栏进入“清理治理”页面
+- 页面支持保护标签增删改、手动生成待审核候选、批量批准/拒绝、只对勾选且已批准的候选执行删除

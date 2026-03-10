@@ -112,7 +112,7 @@ func (s *Store) WithTx(fn func(*Store) error) error {
 
 // migrate 统一维护所有表结构，避免不同业务入口对初始化时机产生分歧。
 func (s *Store) migrate() error {
-	return s.db.AutoMigrate(&Memory{}, &MemoryEmbedding{}, &MemoryMetadata{}, &User{})
+	return s.db.AutoMigrate(&Memory{}, &MemoryEmbedding{}, &MemoryMetadata{}, &User{}, &MemoryProtectedTag{}, &MemoryCleanupReview{})
 }
 
 // buildDialector 根据配置构造当前数据库方言，默认回落到 SQLite 以兼容现有行为。

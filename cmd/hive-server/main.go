@@ -9,6 +9,7 @@ import (
 	"github.com/nzlov/hive/internal/models"
 	"github.com/nzlov/hive/internal/server"
 	"github.com/nzlov/hive/internal/user"
+	"github.com/robfig/cron/v3"
 )
 
 // main 负责组装配置、服务和路由，让服务端入口保持单一职责。
@@ -46,6 +47,25 @@ func main() {
 	}
 	if result.Message != "" {
 		log.Printf("嵌入模型检查完成: %s", result.Message)
+	}
+	if err := service.EnsureProtectedTagsSeeded(ctx); err != nil {
+		log.Fatalf("初始化保护标签失败: %v", err)
+	}
+	cronScheduler := cron.New()
+	if cfg.ScheduleConfig != nil && cfg.ScheduleConfig.MemoryCleanup.Enabled {
+		if _, err := cronScheduler.AddFunc(cfg.ScheduleConfig.MemoryCleanup.Spec, func() {
+			jobCtx := models.StoreToContext(context.Background(), store)
+			result, err := service.RunMemoryCleanupOnce(jobCtx)
+			if err != nil {
+				log.Printf("记忆清理任务失败: %v", err)
+				return
+			}
+			log.Printf("记忆清理任务完成: %s", result.Message)
+		}); err != nil {
+			log.Fatalf("注册记忆清理任务失败: %v", err)
+		}
+		cronScheduler.Start()
+		defer cronScheduler.Stop()
 	}
 	router := server.NewRouter(service, userService, store, statsService)
 	log.Printf("hive server listening on %s, %s", cfg.ServerListenAddr, cfg.String())

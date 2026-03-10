@@ -249,6 +249,9 @@ func TestResolveSearchConfigUsesDefaults(t *testing.T) {
 	if got.FusionFormula != defaultFusionFormula {
 		t.Fatalf("FusionFormula = %q, want %q", got.FusionFormula, defaultFusionFormula)
 	}
+	if got.FusionCoverageDiscountBase != defaultFusionCoverageDiscountBase {
+		t.Fatalf("FusionCoverageDiscountBase = %v, want %v", got.FusionCoverageDiscountBase, defaultFusionCoverageDiscountBase)
+	}
 	if got.CacheMaxEntries != defaultCacheMaxEntries {
 		t.Fatalf("CacheMaxEntries = %d, want %d", got.CacheMaxEntries, defaultCacheMaxEntries)
 	}
@@ -278,12 +281,13 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 				},
 			},
 			"fusion": map[string]any{
-				"enabled":          true,
-				"formula":          "weighted_sum",
-				"keywordWeight":    0.6,
-				"semanticWeight":   0.3,
-				"recencyWeight":    0.1,
-				"minSemanticScore": 0.2,
+				"enabled":              true,
+				"formula":              "coverage_discount",
+				"keywordWeight":        0.6,
+				"semanticWeight":       0.3,
+				"recencyWeight":        0.1,
+				"minSemanticScore":     0.2,
+				"coverageDiscountBase": 0.85,
 			},
 			"cache": map[string]any{
 				"enabled":                     true,
@@ -325,6 +329,9 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 	if !got.FusionEnabled {
 		t.Fatalf("FusionEnabled = %v, want true", got.FusionEnabled)
 	}
+	if got.FusionFormula != "coverage_discount" {
+		t.Fatalf("FusionFormula = %q, want coverage_discount", got.FusionFormula)
+	}
 	if got.FusionKeywordWeight != 0.6 {
 		t.Fatalf("FusionKeywordWeight = %v, want 0.6", got.FusionKeywordWeight)
 	}
@@ -336,6 +343,9 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 	}
 	if got.FusionMinSemanticScore != 0.2 {
 		t.Fatalf("FusionMinSemanticScore = %v, want 0.2", got.FusionMinSemanticScore)
+	}
+	if got.FusionCoverageDiscountBase != 0.85 {
+		t.Fatalf("FusionCoverageDiscountBase = %v, want 0.85", got.FusionCoverageDiscountBase)
 	}
 	if !got.CacheEnabled {
 		t.Fatalf("CacheEnabled = %v, want true", got.CacheEnabled)
@@ -351,6 +361,74 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 	}
 	if got.CacheStatsRefreshInterval != 5 {
 		t.Fatalf("CacheStatsRefreshInterval = %d, want 5", got.CacheStatsRefreshInterval)
+	}
+}
+
+// TestResolveScheduleConfigUsesDefaults 验证缺省场景会回退到统一清理任务默认值，避免首次启用治理功能时出现空配置。
+func TestResolveScheduleConfigUsesDefaults(t *testing.T) {
+	t.Helper()
+	got := resolveScheduleConfig(map[string]any{})
+	if got == nil {
+		t.Fatal("resolveScheduleConfig() 返回 nil, want 非空配置")
+	}
+	if got.MemoryCleanup.Spec != defaultCleanupSpec {
+		t.Fatalf("Spec = %q, want %q", got.MemoryCleanup.Spec, defaultCleanupSpec)
+	}
+	if got.MemoryCleanup.Mode != defaultCleanupMode {
+		t.Fatalf("Mode = %q, want %q", got.MemoryCleanup.Mode, defaultCleanupMode)
+	}
+	if got.MemoryCleanup.ReviewTopN != defaultCleanupReviewTopN {
+		t.Fatalf("ReviewTopN = %d, want %d", got.MemoryCleanup.ReviewTopN, defaultCleanupReviewTopN)
+	}
+	if got.MemoryCleanup.Summary.BeforeDays != defaultCleanupSummaryBeforeDays {
+		t.Fatalf("Summary.BeforeDays = %d, want %d", got.MemoryCleanup.Summary.BeforeDays, defaultCleanupSummaryBeforeDays)
+	}
+	if got.MemoryCleanup.Error.MinRemainingPerProject != defaultCleanupErrorProjectKeep {
+		t.Fatalf("Error.MinRemainingPerProject = %d, want %d", got.MemoryCleanup.Error.MinRemainingPerProject, defaultCleanupErrorProjectKeep)
+	}
+	if len(got.MemoryCleanup.ProtectedTags) != 2 {
+		t.Fatalf("ProtectedTags = %#v, want 2 default tags", got.MemoryCleanup.ProtectedTags)
+	}
+}
+
+// TestResolveScheduleConfigParsesCleanupPolicy 验证清理任务配置可被显式覆盖，避免 cron 与评分策略仍写死在代码中。
+func TestResolveScheduleConfigParsesCleanupPolicy(t *testing.T) {
+	t.Helper()
+	payload := map[string]any{
+		"schedule": map[string]any{
+			"memoryCleanup": map[string]any{
+				"enabled":       true,
+				"spec":          "15 4 * * *",
+				"mode":          "auto",
+				"dryRun":        true,
+				"reviewTopN":    50,
+				"protectedTags": []string{"长期保留"},
+				"summary": map[string]any{
+					"beforeDays":             14,
+					"batchSize":              20,
+					"minRemaining":           30,
+					"minRemainingPerProject": 4,
+					"scoreThreshold":         0.7,
+					"weights":                map[string]any{"age": 0.1, "useCount": 0.2, "lastUsed": 0.3, "projectPressure": 0.4},
+				},
+			},
+		},
+	}
+	got := resolveScheduleConfig(payload)
+	if !got.MemoryCleanup.Enabled || !got.MemoryCleanup.DryRun {
+		t.Fatalf("清理任务开关解析异常: %+v", got.MemoryCleanup)
+	}
+	if got.MemoryCleanup.Spec != "15 4 * * *" || got.MemoryCleanup.Mode != "auto" {
+		t.Fatalf("定时任务基础字段解析异常: %+v", got.MemoryCleanup)
+	}
+	if got.MemoryCleanup.ReviewTopN != 50 || got.MemoryCleanup.ProtectedTags[0] != "长期保留" {
+		t.Fatalf("待审数量或保护标签解析异常: %+v", got.MemoryCleanup)
+	}
+	if got.MemoryCleanup.Summary.BatchSize != 20 || got.MemoryCleanup.Summary.MinRemainingPerProject != 4 {
+		t.Fatalf("summary 策略解析异常: %+v", got.MemoryCleanup.Summary)
+	}
+	if got.MemoryCleanup.Summary.Weights.ProjectPressure != 0.4 {
+		t.Fatalf("summary 权重解析异常: %+v", got.MemoryCleanup.Summary.Weights)
 	}
 }
 

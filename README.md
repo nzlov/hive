@@ -13,13 +13,15 @@
 
 - 支持两类记忆：`summary` 与 `error`
 - 支持关键字检索（`like` / `bm25`）与可选语义检索
-- 支持关键字、语义、时效三路融合排序（可配置权重）
+- 支持关键字、语义、时效三路融合排序（可配置权重与融合公式）
 - 支持语义查询缓存与结果缓存（可配置开关和 TTL）
+- 支持搜索结果使用计数、最近使用时间记录与定时清理治理
 - 支持批量写入多条记忆
 - 支持通过 `project_name` 做单库项目隔离
 - 支持记录 `git_branch`，客户端可过滤未合入分支的历史记忆
 - 支持用户管理、JWT 登录和 API Token 鉴权
 - 支持在记忆写入时记录创建用户 `userid(UUID)`
+- 支持保护标签白名单、待清理审核清单和后台手动执行删除
 
 ## 目录结构
 
@@ -63,6 +65,37 @@
 ## 快速开始
 
 详见 [docs/getting-started.md](./docs/getting-started.md)
+
+## 搜索评分
+
+- 默认融合公式为 `coverage_discount`，用于避免单路高质量命中被缺失信号按 `0` 分拉低过多
+- 仍支持旧公式 `weighted_sum`，可通过 `config.json` 的 `search.fusion.formula` 切换
+- `coverage_discount` 默认折扣基线为 `0.85`，可通过 `search.fusion.coverageDiscountBase` 调整
+- 弱语义命中会先受 `search.fusion.minSemanticScore` 约束，低于阈值时不参与融合
+
+```json
+{
+  "search": {
+    "fusion": {
+      "enabled": true,
+      "formula": "coverage_discount",
+      "keywordWeight": 0.55,
+      "semanticWeight": 0.45,
+      "recencyWeight": 0.1,
+      "minSemanticScore": 0.15,
+      "coverageDiscountBase": 0.85
+    }
+  }
+}
+```
+
+## 记忆清理治理
+
+- 搜索接口只要真正返回命中结果，就会为对应记忆执行 `use_count + 1`，并刷新 `last_used_at`
+- 服务端支持按天执行定时清理任务，`summary` 与 `error` 使用独立策略
+- 清理候选默认走 `review` 模式，先生成待审核清单，再由管理员手动批准和执行
+- 保护标签白名单保存在数据库中，启动时只会把配置默认值补种入库，不会覆盖管理员在线修改
+- 后台新增“清理治理”页面，可维护保护标签、生成候选、审核和执行删除
 
 ## 文档索引
 

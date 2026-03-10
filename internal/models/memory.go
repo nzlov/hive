@@ -20,6 +20,8 @@ type Memory struct {
 	Tags        string `gorm:"column:tags;type:text;not null;default:'[]'"`
 	Summary     string `gorm:"column:summary;type:text;not null;default:''"`
 	Content     string `gorm:"column:content;type:text;not null"`
+	UseCount    int64  `gorm:"column:use_count;not null;default:0"`
+	LastUsedAt  string `gorm:"column:last_used_at;type:text;not null;default:''"`
 	Timestamp   string `gorm:"column:timestamp;type:text;not null;index:idx_memories_type_timestamp,priority:2;index:idx_memories_project_type_timestamp,priority:5"`
 	CreatedAt   string `gorm:"column:created_at;type:text;not null"`
 }
@@ -85,6 +87,57 @@ func (s *Store) SaveMemoryEditableFields(item Memory) (Memory, error) {
 // DeleteMemoryByID 删除单条记忆，供管理端和后续清理流程复用同一持久化入口。
 func (s *Store) DeleteMemoryByID(id int64) error {
 	return s.db.Delete(&Memory{}, id).Error
+}
+
+// DeleteMemoriesByIDs 批量删除记忆主记录，避免清理任务逐条删除放大事务成本。
+func (s *Store) DeleteMemoriesByIDs(ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return s.db.Delete(&Memory{}, "id IN ?", ids).Error
+}
+
+// IncrementMemoryUseCounts 为最终返回给调用方的记忆批量累计使用次数并刷新最近使用时间。
+func (s *Store) IncrementMemoryUseCounts(ids []int64, usedAt string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return s.db.Model(&Memory{}).
+		Where("id IN ?", ids).
+		Updates(map[string]any{
+			"use_count":    gorm.Expr("use_count + ?", 1),
+			"last_used_at": strings.TrimSpace(usedAt),
+		}).Error
+}
+
+// CountMemoriesByType 返回指定类型的记忆总数，供清理流程应用全局保底阈值。
+func (s *Store) CountMemoriesByType(memType string) (int64, error) {
+	var total int64
+	err := s.db.Model(&Memory{}).Where("type = ?", strings.TrimSpace(memType)).Count(&total).Error
+	return total, err
+}
+
+// CountMemoriesByProjectAndType 返回指定项目和类型的记忆总数，供清理流程应用项目保底阈值。
+func (s *Store) CountMemoriesByProjectAndType(projectName, memType string) (int64, error) {
+	var total int64
+	err := s.db.Model(&Memory{}).
+		Where("project_name = ? AND type = ?", strings.TrimSpace(projectName), strings.TrimSpace(memType)).
+		Count(&total).Error
+	return total, err
+}
+
+// ListMemoryCleanupCandidates 返回超过候选年龄的粗筛记忆，细粒度评分和保护规则交由服务层统一处理。
+func (s *Store) ListMemoryCleanupCandidates(memType, cutoffTimestamp string, limit int) ([]Memory, error) {
+	if limit <= 0 {
+		return []Memory{}, nil
+	}
+	var items []Memory
+	err := s.db.Where("type = ? AND timestamp < ?", strings.TrimSpace(memType), strings.TrimSpace(cutoffTimestamp)).
+		Order("timestamp ASC").
+		Order("id ASC").
+		Limit(limit).
+		Find(&items).Error
+	return items, err
 }
 
 // ListMemoriesPaginated 提供后台管理的分页列表，复用统一关键字搜索逻辑避免筛选口径不一致。

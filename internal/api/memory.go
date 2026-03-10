@@ -156,6 +156,8 @@ type MemoryDetail struct {
 	CreatorName string   `json:"creator_name"`
 	Timestamp   string   `json:"timestamp"`
 	CreatedAt   string   `json:"created_at"`
+	UseCount    int64    `json:"use_count"`
+	LastUsedAt  string   `json:"last_used_at"`
 }
 
 // MemoryListResponse 统一返回分页结果，避免前端自行推断总页数。
@@ -236,4 +238,81 @@ type DashboardStatsResponse struct {
 type DashboardCacheStatsResponse struct {
 	Cache DashboardCacheStats `json:"cache"`
 	Error string              `json:"error,omitempty"`
+}
+
+// ProtectedTagItem 描述后台可维护的保护标签，避免清理规则只能通过本地配置调整。
+type ProtectedTagItem struct {
+	ID          int64  `json:"id"`
+	Tag         string `json:"tag"`
+	Enabled     bool   `json:"enabled"`
+	Description string `json:"description"`
+	Source      string `json:"source"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// ProtectedTagListResponse 返回保护标签列表，便于管理页统一加载当前生效规则。
+type ProtectedTagListResponse struct {
+	Items []ProtectedTagItem `json:"items"`
+	Error string             `json:"error,omitempty"`
+}
+
+// ProtectedTagMutationRequest 描述保护标签的新增与编辑入参，允许管理员在线维护清理白名单。
+type ProtectedTagMutationRequest struct {
+	Tag         string `json:"tag"`
+	Enabled     bool   `json:"enabled"`
+	Description string `json:"description"`
+}
+
+// ProtectedTagMutationResponse 统一返回保护标签写操作结果，避免前端重复拼装对象。
+type ProtectedTagMutationResponse struct {
+	Item  ProtectedTagItem `json:"item,omitempty"`
+	Error string           `json:"error,omitempty"`
+}
+
+// CleanupReviewItem 描述待清理候选快照，便于管理页解释每条候选的评分依据。
+type CleanupReviewItem struct {
+	ID            int64          `json:"id"`
+	MemoryID      int64          `json:"memory_id"`
+	ProjectName   string         `json:"project_name"`
+	Type          string         `json:"type"`
+	Status        string         `json:"status"`
+	Score         float64        `json:"score"`
+	Reason        map[string]any `json:"reason"`
+	Snapshot      map[string]any `json:"snapshot"`
+	RunAt         string         `json:"run_at"`
+	ReviewedBy    string         `json:"reviewed_by"`
+	ReviewedAt    string         `json:"reviewed_at"`
+	ExecutionNote string         `json:"execution_note"`
+	CreatedAt     string         `json:"created_at"`
+}
+
+// CleanupReviewListRequest 描述审核列表查询参数，避免前端自行约定筛选字段名。
+type CleanupReviewListRequest struct {
+	Page        int    `form:"page"`
+	PageSize    int    `form:"page_size"`
+	Status      string `form:"status"`
+	Type        string `form:"type"`
+	ProjectName string `form:"project_name"`
+}
+
+// CleanupReviewListResponse 统一返回审核分页结果，降低前端分页与筛选实现复杂度。
+type CleanupReviewListResponse struct {
+	Items     []CleanupReviewItem `json:"items"`
+	Total     int64               `json:"total"`
+	Page      int                 `json:"page"`
+	PageSize  int                 `json:"page_size"`
+	TotalPage int                 `json:"total_page"`
+	Error     string              `json:"error,omitempty"`
+}
+
+// CleanupReviewActionRequest 描述批量审核或执行操作的目标记录集合。
+type CleanupReviewActionRequest struct {
+	IDs []int64 `json:"ids"`
+}
+
+// CleanupReviewRunResponse 返回一次候选生成或执行摘要，便于管理页提示管理员本轮结果。
+type CleanupReviewRunResponse struct {
+	Message string `json:"message,omitempty"`
+	Error   string `json:"error,omitempty"`
 }

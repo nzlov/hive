@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"mime"
 	"net/http"
@@ -386,6 +387,140 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		statsService.OnMemoryDeleted(deletedMemory)
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
+	adminMemoryGroup.GET("/protected-tags", func(c *gin.Context) {
+		items, err := memoryService.ListProtectedTags(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.ProtectedTagListResponse{Error: err.Error()})
+			return
+		}
+		response := api.ProtectedTagListResponse{Items: make([]api.ProtectedTagItem, 0, len(items))}
+		for _, item := range items {
+			response.Items = append(response.Items, protectedTagToItem(item))
+		}
+		c.JSON(http.StatusOK, response)
+	})
+	adminMemoryGroup.POST("/protected-tags", func(c *gin.Context) {
+		var request api.ProtectedTagMutationRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, api.ProtectedTagMutationResponse{Error: err.Error()})
+			return
+		}
+		item, err := memoryService.CreateProtectedTag(c.Request.Context(), request.Tag, request.Description, request.Enabled)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, api.ProtectedTagMutationResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.ProtectedTagMutationResponse{Item: protectedTagToItem(item)})
+	})
+	adminMemoryGroup.PUT("/protected-tags/:id", func(c *gin.Context) {
+		id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, api.ProtectedTagMutationResponse{Error: "无效的标签ID"})
+			return
+		}
+		var request api.ProtectedTagMutationRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, api.ProtectedTagMutationResponse{Error: err.Error()})
+			return
+		}
+		item, err := memoryService.UpdateProtectedTag(c.Request.Context(), id, request.Tag, request.Description, request.Enabled)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, models.ErrNotFound) {
+				status = http.StatusNotFound
+			}
+			c.JSON(status, api.ProtectedTagMutationResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.ProtectedTagMutationResponse{Item: protectedTagToItem(item)})
+	})
+	adminMemoryGroup.DELETE("/protected-tags/:id", func(c *gin.Context) {
+		id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, api.ProtectedTagMutationResponse{Error: "无效的标签ID"})
+			return
+		}
+		if err := memoryService.DeleteProtectedTag(c.Request.Context(), id); err != nil {
+			c.JSON(http.StatusInternalServerError, api.ProtectedTagMutationResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": true})
+	})
+	adminMemoryGroup.GET("/cleanup-reviews", func(c *gin.Context) {
+		var request api.CleanupReviewListRequest
+		if err := c.ShouldBindQuery(&request); err != nil {
+			c.JSON(http.StatusBadRequest, api.CleanupReviewListResponse{Error: err.Error()})
+			return
+		}
+		items, total, err := memoryService.ListCleanupReviews(c.Request.Context(), request.Status, request.Type, request.ProjectName, request.Page, request.PageSize)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.CleanupReviewListResponse{Error: err.Error()})
+			return
+		}
+		page := request.Page
+		if page < 1 {
+			page = 1
+		}
+		pageSize := request.PageSize
+		if pageSize < 1 {
+			pageSize = 10
+		}
+		response := api.CleanupReviewListResponse{Items: make([]api.CleanupReviewItem, 0, len(items)), Total: total, Page: page, PageSize: pageSize, TotalPage: buildTotalPages(total, pageSize)}
+		for _, item := range items {
+			response.Items = append(response.Items, cleanupReviewToItem(item))
+		}
+		c.JSON(http.StatusOK, response)
+	})
+	adminMemoryGroup.POST("/cleanup-reviews/run", func(c *gin.Context) {
+		result, err := memoryService.RunMemoryCleanupOnce(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.CleanupReviewRunResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.CleanupReviewRunResponse{Message: result.Message})
+	})
+	adminMemoryGroup.POST("/cleanup-reviews/approve", func(c *gin.Context) {
+		var request api.CleanupReviewActionRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, api.CleanupReviewRunResponse{Error: err.Error()})
+			return
+		}
+		if err := memoryService.ApproveCleanupReviews(c.Request.Context(), request.IDs, mustCurrentUser(c).UserID); err != nil {
+			c.JSON(http.StatusInternalServerError, api.CleanupReviewRunResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.CleanupReviewRunResponse{Message: "已批准所选候选。"})
+	})
+	adminMemoryGroup.POST("/cleanup-reviews/reject", func(c *gin.Context) {
+		var request api.CleanupReviewActionRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, api.CleanupReviewRunResponse{Error: err.Error()})
+			return
+		}
+		if err := memoryService.RejectCleanupReviews(c.Request.Context(), request.IDs, mustCurrentUser(c).UserID); err != nil {
+			c.JSON(http.StatusInternalServerError, api.CleanupReviewRunResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.CleanupReviewRunResponse{Message: "已拒绝所选候选。"})
+	})
+	adminMemoryGroup.POST("/cleanup-reviews/execute", func(c *gin.Context) {
+		var request api.CleanupReviewActionRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, api.CleanupReviewRunResponse{Error: err.Error()})
+			return
+		}
+		if len(request.IDs) == 0 {
+			c.JSON(http.StatusBadRequest, api.CleanupReviewRunResponse{Error: "请选择要执行的审核记录"})
+			return
+		}
+		limit := len(request.IDs)
+		result, err := memoryService.ExecuteApprovedCleanupReviews(c.Request.Context(), request.IDs, limit, mustCurrentUser(c).UserID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.CleanupReviewRunResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.CleanupReviewRunResponse{Message: result.Message})
+	})
 }
 
 // buildAdminOnlyMiddleware 统一拦截非管理员访问敏感接口，避免在每个处理器中重复权限分支。
@@ -585,6 +720,44 @@ func memoryToDetail(item models.Memory, creatorName string) api.MemoryDetail {
 		CreatorName: strings.TrimSpace(creatorName),
 		Timestamp:   item.Timestamp,
 		CreatedAt:   item.CreatedAt,
+		UseCount:    item.UseCount,
+		LastUsedAt:  item.LastUsedAt,
+	}
+}
+
+// protectedTagToItem 统一转换保护标签模型，避免前端直接依赖数据库字段命名。
+func protectedTagToItem(item models.MemoryProtectedTag) api.ProtectedTagItem {
+	return api.ProtectedTagItem{
+		ID:          item.ID,
+		Tag:         item.Tag,
+		Enabled:     item.Enabled,
+		Description: item.Description,
+		Source:      item.Source,
+		CreatedAt:   item.CreatedAt,
+		UpdatedAt:   item.UpdatedAt,
+	}
+}
+
+// cleanupReviewToItem 统一解析审核记录中的 JSON 快照，保证管理页能直接展示评分理由和候选摘要。
+func cleanupReviewToItem(item models.MemoryCleanupReview) api.CleanupReviewItem {
+	reason := map[string]any{}
+	snapshot := map[string]any{}
+	_ = json.Unmarshal([]byte(item.ReasonJSON), &reason)
+	_ = json.Unmarshal([]byte(item.SnapshotJSON), &snapshot)
+	return api.CleanupReviewItem{
+		ID:            item.ID,
+		MemoryID:      item.MemoryID,
+		ProjectName:   item.ProjectName,
+		Type:          item.Type,
+		Status:        item.Status,
+		Score:         item.Score,
+		Reason:        reason,
+		Snapshot:      snapshot,
+		RunAt:         item.RunAt,
+		ReviewedBy:    item.ReviewedBy,
+		ReviewedAt:    item.ReviewedAt,
+		ExecutionNote: item.ExecutionNote,
+		CreatedAt:     item.CreatedAt,
 	}
 }
 

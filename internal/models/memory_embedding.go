@@ -65,6 +65,14 @@ func (s *Store) DeleteMemoryEmbeddingByMemoryID(memoryID int64) error {
 	return s.db.Delete(&MemoryEmbedding{}, "memory_id = ?", memoryID).Error
 }
 
+// DeleteMemoryEmbeddingsByMemoryIDs 批量删除记忆向量，避免清理任务按单条循环删除拉长事务时间。
+func (s *Store) DeleteMemoryEmbeddingsByMemoryIDs(memoryIDs []int64) error {
+	if len(memoryIDs) == 0 {
+		return nil
+	}
+	return s.db.Delete(&MemoryEmbedding{}, "memory_id IN ?", memoryIDs).Error
+}
+
 // CountMemoryEmbeddings 返回向量总数，供启动时快速判断是否需要重建。
 func (s *Store) CountMemoryEmbeddings() (int64, error) {
 	var total int64

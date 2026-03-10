@@ -49,6 +49,24 @@
 - `auth.jwtSecret`：管理后台 JWT 签名密钥
 - `database.driver`：数据库驱动，支持 `sqlite` / `postgresql`
 - `database.dsn`：数据库连接串；SQLite 为空时使用默认文件路径
+- `schedule.memoryCleanup.enabled`：是否启用记忆定时清理任务
+- `schedule.memoryCleanup.spec`：清理任务 cron 表达式，使用 5 段格式
+- `schedule.memoryCleanup.mode`：清理模式，支持 `review` / `auto`
+- `schedule.memoryCleanup.dryRun`：是否只生成结果而不真正写入/删除
+- `schedule.memoryCleanup.reviewTopN`：单轮最多生成多少条待审核候选
+- `schedule.memoryCleanup.protectedTags`：服务启动时补种到数据库的默认保护标签
+- `schedule.memoryCleanup.summary.beforeDays`：总结记忆进入候选前至少保留天数
+- `schedule.memoryCleanup.summary.batchSize`：总结记忆单轮最多处理条数
+- `schedule.memoryCleanup.summary.minRemaining`：总结记忆全局最少保留数
+- `schedule.memoryCleanup.summary.minRemainingPerProject`：每个项目的总结记忆最少保留数
+- `schedule.memoryCleanup.summary.scoreThreshold`：总结记忆进入候选的最低清理分
+- `schedule.memoryCleanup.summary.weights.*`：总结记忆评分权重，支持 `age/useCount/lastUsed/projectPressure`
+- `schedule.memoryCleanup.error.beforeDays`：错误记忆进入候选前至少保留天数
+- `schedule.memoryCleanup.error.batchSize`：错误记忆单轮最多处理条数
+- `schedule.memoryCleanup.error.minRemaining`：错误记忆全局最少保留数
+- `schedule.memoryCleanup.error.minRemainingPerProject`：每个项目的错误记忆最少保留数
+- `schedule.memoryCleanup.error.scoreThreshold`：错误记忆进入候选的最低清理分
+- `schedule.memoryCleanup.error.weights.*`：错误记忆评分权重，支持 `age/useCount/lastUsed/projectPressure`
 - `search.lowConfidenceErrorHitLimit`：错误记忆中低于 1 分置信度的最大返回条数
 - `search.lowConfidenceSummaryHitLimit`：总结记忆中低于 1 分置信度的最大返回条数
 - `search.keyword.mode`：关键字模式，支持 `like` / `bm25`
@@ -60,11 +78,12 @@
 - `search.keyword.synonyms.enabled`：是否启用同义词扩展
 - `search.keyword.synonyms.groups`：同义词分组，例如 `[ ["error", "故障", "失败"] ]`
 - `search.fusion.enabled`：是否启用关键字/语义融合排序
-- `search.fusion.formula`：融合公式，当前支持 `weighted_sum`
+- `search.fusion.formula`：融合公式，支持 `weighted_sum` / `coverage_discount`，默认 `coverage_discount`
 - `search.fusion.keywordWeight`：关键字权重
 - `search.fusion.semanticWeight`：语义权重
 - `search.fusion.recencyWeight`：时效权重
 - `search.fusion.minSemanticScore`：语义分最低有效阈值
+- `search.fusion.coverageDiscountBase`：`coverage_discount` 公式的覆盖率折扣基线，默认 `0.85`
 - `search.cache.enabled`：是否启用查询缓存
 - `search.cache.queryEmbeddingTtlSeconds`：查询向量缓存 TTL（秒）
 - `search.cache.semanticHitsTtlSeconds`：语义命中缓存 TTL（秒）
@@ -96,6 +115,42 @@
 
 ```json
 {
+  "schedule": {
+    "memoryCleanup": {
+      "enabled": false,
+      "spec": "0 3 * * *",
+      "mode": "review",
+      "dryRun": false,
+      "reviewTopN": 200,
+      "protectedTags": ["核心故障", "架构决策"],
+      "summary": {
+        "beforeDays": 30,
+        "batchSize": 100,
+        "minRemaining": 500,
+        "minRemainingPerProject": 20,
+        "scoreThreshold": 0.65,
+        "weights": {
+          "age": 0.3,
+          "useCount": 0.35,
+          "lastUsed": 0.25,
+          "projectPressure": 0.1
+        }
+      },
+      "error": {
+        "beforeDays": 120,
+        "batchSize": 30,
+        "minRemaining": 1000,
+        "minRemainingPerProject": 50,
+        "scoreThreshold": 0.8,
+        "weights": {
+          "age": 0.2,
+          "useCount": 0.25,
+          "lastUsed": 0.35,
+          "projectPressure": 0.2
+        }
+      }
+    }
+  },
   "search": {
     "lowConfidenceErrorHitLimit": 10,
     "lowConfidenceSummaryHitLimit": 10,
@@ -119,11 +174,12 @@
     },
     "fusion": {
       "enabled": true,
-      "formula": "weighted_sum",
+      "formula": "coverage_discount",
       "keywordWeight": 0.55,
       "semanticWeight": 0.45,
       "recencyWeight": 0.1,
-      "minSemanticScore": 0.15
+      "minSemanticScore": 0.15,
+      "coverageDiscountBase": 0.85
     },
     "cache": {
       "enabled": false,
@@ -155,3 +211,10 @@
   }
 }
 ```
+
+## 清理治理说明
+
+- 搜索真正返回给调用方的命中结果时，服务端会自动累计 `use_count` 并更新 `last_used_at`
+- 保护标签以数据库表 `memory_protected_tags` 为运行时真值，配置里的 `protectedTags` 只用于首次补种
+- `review` 模式下 cron 只生成待审核清单；`auto` 模式下会直接执行删除
+- 审核和执行删除都通过管理端接口完成，避免定时任务误删未确认候选

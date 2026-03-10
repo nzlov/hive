@@ -104,3 +104,73 @@ export function updateMemory(id, payload) {
 export function deleteMemory(id) {
   return request(`/api/v1/admin/memories/${id}`, { method: 'DELETE' })
 }
+
+// fetchProtectedTags 拉取保护标签列表，便于管理员维护清理白名单。
+export function fetchProtectedTags() {
+  return request('/api/v1/admin/memories/protected-tags')
+}
+
+// createProtectedTag 创建新的保护标签规则，避免只能通过改配置文件维护白名单。
+export function createProtectedTag(payload) {
+  return request('/api/v1/admin/memories/protected-tags', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+// updateProtectedTag 更新保护标签内容或启用状态，确保后台改动可立即生效。
+export function updateProtectedTag(id, payload) {
+  return request(`/api/v1/admin/memories/protected-tags/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+// deleteProtectedTag 删除不再需要的保护标签规则。
+export function deleteProtectedTag(id) {
+  return request(`/api/v1/admin/memories/protected-tags/${id}`, { method: 'DELETE' })
+}
+
+// fetchCleanupReviews 拉取待清理候选列表，支持按状态、类型和项目筛选。
+export function fetchCleanupReviews(page = 1, pageSize = 10, filters = {}) {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  if (String(filters.status || '').trim()) {
+    params.set('status', String(filters.status).trim())
+  }
+  if (String(filters.type || '').trim()) {
+    params.set('type', String(filters.type).trim())
+  }
+  if (String(filters.project_name || '').trim()) {
+    params.set('project_name', String(filters.project_name).trim())
+  }
+  return request(`/api/v1/admin/memories/cleanup-reviews?${params.toString()}`)
+}
+
+// runCleanupReviews 手动生成一轮待审核候选，方便管理员在页面里即时预览规则效果。
+export function runCleanupReviews() {
+  return request('/api/v1/admin/memories/cleanup-reviews/run', { method: 'POST' })
+}
+
+// approveCleanupReviews 批量批准候选进入执行队列。
+export function approveCleanupReviews(ids) {
+  return request('/api/v1/admin/memories/cleanup-reviews/approve', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  })
+}
+
+// rejectCleanupReviews 批量拒绝候选，避免误删重要记忆。
+export function rejectCleanupReviews(ids) {
+  return request('/api/v1/admin/memories/cleanup-reviews/reject', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  })
+}
+
+// executeCleanupReviews 执行已批准的候选删除。
+export function executeCleanupReviews(ids = []) {
+  return request('/api/v1/admin/memories/cleanup-reviews/execute', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  })
+}
