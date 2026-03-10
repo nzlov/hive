@@ -21,8 +21,8 @@ def default_config_payload() -> dict[str, Any]:
     """缺省时写出最小可用配置骨架，帮助用户在首次运行后直接补全必要字段。"""
 
     return {
-        "default_server_base_url": DEFAULT_SERVER_BASE_URL,
-        "api_token": "",
+        "defaultServerBaseUrl": DEFAULT_SERVER_BASE_URL,
+        "apiToken": "",
         "projects": {},
     }
 
@@ -87,23 +87,11 @@ def load_config() -> dict[str, Any]:
 
 
 def resolve_default_server_base_url(config: dict[str, Any]) -> str:
-    """优先读取默认服务地址配置，避免脚本和服务端地址硬编码漂移。"""
+    """统一读取一级默认服务地址配置，避免脚本和服务端地址硬编码漂移。"""
 
-    for key in ("default_server_base_url", "defaultServerBaseUrl"):
-        value = config.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.rstrip("/")
-
-    server = config.get("server")
-    if isinstance(server, dict):
-        for key in ("base_url", "baseUrl", "url", "address"):
-            value = server.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.rstrip("/")
-    for key in ("server_url", "serverUrl", "service_url", "serviceUrl"):
-        value = config.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.rstrip("/")
+    value = config.get("defaultServerBaseUrl")
+    if isinstance(value, str) and value.strip():
+        return value.rstrip("/")
     return DEFAULT_SERVER_BASE_URL
 
 
@@ -177,61 +165,34 @@ def resolve_default_project_name(project_root: str) -> str:
 
 
 def resolve_server_value(payload: dict[str, Any]) -> str:
-    """统一兼容多种服务地址字段命名，减少配置迁移成本。"""
+    """统一读取一级服务地址字段，确保项目级覆盖与全局配置一致。"""
 
-    server = payload.get("server")
-    if isinstance(server, dict):
-        for key in ("base_url", "baseUrl", "url", "address"):
-            value = server.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.rstrip("/")
-
-    for key in (
-        "server_url",
-        "serverUrl",
-        "service_url",
-        "serviceUrl",
-        "base_url",
-        "baseUrl",
-        "url",
-        "address",
-    ):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.rstrip("/")
+    value = payload.get("baseUrl")
+    if isinstance(value, str) and value.strip():
+        return value.rstrip("/")
     return ""
 
 
 def resolve_project_alias(project_config: dict[str, Any]) -> str:
-    """兼容项目别名的不同键名，避免配置字段调整影响调用链路。"""
+    """统一读取项目名覆盖项，避免项目记忆空间被目录名误拆分。"""
 
-    for key in (
-        "alias",
-        "project_alias",
-        "projectAlias",
-        "project_name",
-        "projectName",
-        "name",
-    ):
-        value = project_config.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+    value = project_config.get("projectName")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
     return ""
 
 
 def resolve_api_token(payload: dict[str, Any]) -> str:
-    """统一兼容多种 API Token 字段命名，避免客户端配置升级时请求链路失效。"""
+    """统一读取 API Token 字段，避免请求链路依赖隐式兼容逻辑。"""
 
     auth = payload.get("auth")
     if isinstance(auth, dict):
-        for key in ("api_token", "apiToken", "apitoken", "token"):
-            value = auth.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    for key in ("api_token", "apiToken", "apitoken", "token"):
-        value = payload.get(key)
+        value = auth.get("apiToken")
         if isinstance(value, str) and value.strip():
             return value.strip()
+    value = payload.get("apiToken")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
     return ""
 
 
@@ -596,7 +557,7 @@ def run_search(
         raise SystemExit("--query 至少需要一个非空关键词")
     if not api_token.strip():
         raise SystemExit(
-            "缺少 API Token，请在 ~/.config/hive/config.json 中配置 api_token"
+            "缺少 API Token，请在 ~/.config/hive/config.json 中配置 apiToken"
         )
     response = post_json(
         base_url,
@@ -639,7 +600,7 @@ def run_write(
     current_branch = resolve_current_git_branch(project_root)
     if not api_token.strip():
         raise SystemExit(
-            "缺少 API Token，请在 ~/.config/hive/config.json 中配置 api_token"
+            "缺少 API Token，请在 ~/.config/hive/config.json 中配置 apiToken"
         )
     post_json(
         base_url,

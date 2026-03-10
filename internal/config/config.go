@@ -114,67 +114,63 @@ type AppConfig struct {
 }
 
 var (
-	serverSectionKeys                        = []string{"server"}
-	serverBaseURLKeys                        = []string{"base_url", "baseUrl", "url", "address"}
-	serverListenAddrKeys                     = []string{"listen_addr", "listenAddr", "listen_address", "listenAddress", "bind", "bind_addr", "bindAddr"}
-	serverFlatURLKeys                        = []string{"server_url", "serverUrl", "service_url", "serviceUrl"}
-	serverFlatListenKeys                     = []string{"server_listen_addr", "serverListenAddr", "listen_addr", "listenAddr"}
-	embeddingSectionKeys                     = []string{"embedding", "embeddings"}
-	embeddingBaseURLKeys                     = []string{"base_url", "baseUrl", "url", "endpoint"}
-	embeddingAPIKeyKeys                      = []string{"api_key", "apiKey"}
-	embeddingModelKeys                       = []string{"model", "embedding_model", "embeddingModel"}
-	embeddingTimeoutKeys                     = []string{"timeout_seconds", "timeoutSeconds"}
-	embeddingSemanticSimilarityThresholdKeys = []string{"semantic_similarity_threshold", "semanticSimilarityThreshold"}
-	embeddingSemanticCandidateBatchSizeKeys  = []string{"semantic_candidate_batch_size", "semanticCandidateBatchSize"}
-	embeddingSemanticCandidateMaxCountKeys   = []string{"semantic_candidate_max_count", "semanticCandidateMaxCount"}
-	embeddingSemanticHitFetchLimitKeys       = []string{"semantic_hit_fetch_limit", "semanticHitFetchLimit"}
-	embeddingSemanticWindowSectionKeys       = []string{"semantic_window", "semanticWindow"}
-	embeddingDecaySectionKeys                = []string{"decay"}
-	embeddingSemanticWindowModeKeys          = []string{"mode"}
-	embeddingSemanticWindowBaseMaxCountKeys  = []string{"base_max_count", "baseMaxCount"}
-	embeddingSemanticWindowDynamicMinKeys    = []string{"dynamic_min_count", "dynamicMinCount"}
-	embeddingSemanticWindowDynamicMaxKeys    = []string{"dynamic_max_count", "dynamicMaxCount"}
-	embeddingSemanticWindowDynamicRatioKeys  = []string{"dynamic_ratio", "dynamicRatio"}
-	embeddingSemanticWindowReferenceSizeKeys = []string{"reference_corpus_size", "referenceCorpusSize"}
-	embeddingDecayEnabledKeys                = []string{"enabled"}
-	embeddingDecayAgeWeightKeys              = []string{"age_weight", "ageWeight"}
-	embeddingDecaySemanticWeightKeys         = []string{"semantic_weight", "semanticWeight"}
-	embeddingDecayHalfLifeSectionKeys        = []string{"half_life_days", "halfLifeDays"}
-	embeddingDecaySummaryHalfLifeKeys        = []string{"summary"}
-	embeddingDecayErrorHalfLifeKeys          = []string{"error"}
-	authSectionKeys                          = []string{"auth"}
-	authJWTSecretKeys                        = []string{"jwt_secret", "jwtSecret"}
-	databaseSectionKeys                      = []string{"database", "db"}
-	databaseDriverKeys                       = []string{"driver", "dialect", "type"}
-	databaseDSNKeys                          = []string{"dsn", "url", "uri"}
-	databaseFlatDriver                       = []string{"database_driver", "databaseDriver", "db_driver", "dbDriver"}
-	databaseFlatDSN                          = []string{"database_dsn", "databaseDsn", "db_dsn", "dbDsn", "database_url", "databaseUrl"}
-	searchSectionKeys                        = []string{"search"}
-	searchLowConfidenceErrorHitLimitKeys     = []string{"low_confidence_error_hit_limit", "lowConfidenceErrorHitLimit", "error_hit_limit", "errorHitLimit"}
-	searchLowConfidenceSummaryHitLimitKeys   = []string{"low_confidence_summary_hit_limit", "lowConfidenceSummaryHitLimit", "summary_hit_limit", "summaryHitLimit"}
-	searchKeywordSectionKeys                 = []string{"keyword"}
-	searchKeywordModeKeys                    = []string{"mode"}
-	searchKeywordBackendKeys                 = []string{"backend"}
-	searchKeywordFieldsKeys                  = []string{"fields"}
-	searchKeywordFieldWeightsKeys            = []string{"field_weights", "fieldWeights"}
-	searchKeywordSynonymsSectionKeys         = []string{"synonyms"}
-	searchKeywordSynonymsEnabledKeys         = []string{"enabled"}
-	searchKeywordSynonymsGroupsKeys          = []string{"groups"}
-	searchKeywordBM25K1Keys                  = []string{"bm25_k1", "bm25K1"}
-	searchKeywordBM25BKeys                   = []string{"bm25_b", "bm25B"}
-	searchFusionSectionKeys                  = []string{"fusion"}
-	searchFusionEnabledKeys                  = []string{"enabled"}
-	searchFusionFormulaKeys                  = []string{"formula"}
-	searchFusionKeywordWeightKeys            = []string{"keyword_weight", "keywordWeight"}
-	searchFusionSemanticWeightKeys           = []string{"semantic_weight", "semanticWeight"}
-	searchFusionRecencyWeightKeys            = []string{"recency_weight", "recencyWeight"}
-	searchFusionMinSemanticScoreKeys         = []string{"min_semantic_score", "minSemanticScore"}
-	searchCacheSectionKeys                   = []string{"cache"}
-	searchCacheEnabledKeys                   = []string{"enabled"}
-	searchCacheQueryEmbeddingTTLKeys         = []string{"query_embedding_ttl_seconds", "queryEmbeddingTtlSeconds"}
-	searchCacheSemanticHitsTTLKeys           = []string{"semantic_hits_ttl_seconds", "semanticHitsTtlSeconds"}
-	searchCacheMaxEntriesKeys                = []string{"max_entries", "maxEntries"}
-	searchCacheStatsRefreshIntervalKeys      = []string{"stats_refresh_interval_seconds", "statsRefreshIntervalSeconds"}
+	serverSectionKeys                        = "server"
+	serverBaseURLKeys                        = "baseUrl"
+	serverListenAddrKeys                     = "listenAddr"
+	embeddingSectionKeys                     = "embedding"
+	embeddingBaseURLKeys                     = "baseUrl"
+	embeddingAPIKeyKeys                      = "apiKey"
+	embeddingModelKeys                       = "model"
+	embeddingTimeoutKeys                     = "timeoutSeconds"
+	embeddingSemanticSimilarityThresholdKeys = "semanticSimilarityThreshold"
+	embeddingSemanticCandidateBatchSizeKeys  = "semanticCandidateBatchSize"
+	embeddingSemanticCandidateMaxCountKeys   = "semanticCandidateMaxCount"
+	embeddingSemanticHitFetchLimitKeys       = "semanticHitFetchLimit"
+	embeddingSemanticWindowSectionKeys       = "semanticWindow"
+	embeddingDecaySectionKeys                = "decay"
+	embeddingSemanticWindowModeKeys          = "mode"
+	embeddingSemanticWindowBaseMaxCountKeys  = "baseMaxCount"
+	embeddingSemanticWindowDynamicMinKeys    = "dynamicMinCount"
+	embeddingSemanticWindowDynamicMaxKeys    = "dynamicMaxCount"
+	embeddingSemanticWindowDynamicRatioKeys  = "dynamicRatio"
+	embeddingSemanticWindowReferenceSizeKeys = "referenceCorpusSize"
+	embeddingDecayEnabledKeys                = "enabled"
+	embeddingDecayAgeWeightKeys              = "ageWeight"
+	embeddingDecaySemanticWeightKeys         = "semanticWeight"
+	embeddingDecayHalfLifeSectionKeys        = "halfLifeDays"
+	embeddingDecaySummaryHalfLifeKeys        = "summary"
+	embeddingDecayErrorHalfLifeKeys          = "error"
+	authSectionKeys                          = "auth"
+	authJWTSecretKeys                        = "jwtSecret"
+	databaseSectionKeys                      = "database"
+	databaseDriverKeys                       = "driver"
+	databaseDSNKeys                          = "dsn"
+	searchSectionKeys                        = "search"
+	searchLowConfidenceErrorHitLimitKeys     = "lowConfidenceErrorHitLimit"
+	searchLowConfidenceSummaryHitLimitKeys   = "lowConfidenceSummaryHitLimit"
+	searchKeywordSectionKeys                 = "keyword"
+	searchKeywordModeKeys                    = "mode"
+	searchKeywordBackendKeys                 = "backend"
+	searchKeywordFieldsKeys                  = "fields"
+	searchKeywordFieldWeightsKeys            = "fieldWeights"
+	searchKeywordSynonymsSectionKeys         = "synonyms"
+	searchKeywordSynonymsEnabledKeys         = "enabled"
+	searchKeywordSynonymsGroupsKeys          = "groups"
+	searchKeywordBM25K1Keys                  = "bm25K1"
+	searchKeywordBM25BKeys                   = "bm25B"
+	searchFusionSectionKeys                  = "fusion"
+	searchFusionEnabledKeys                  = "enabled"
+	searchFusionFormulaKeys                  = "formula"
+	searchFusionKeywordWeightKeys            = "keywordWeight"
+	searchFusionSemanticWeightKeys           = "semanticWeight"
+	searchFusionRecencyWeightKeys            = "recencyWeight"
+	searchFusionMinSemanticScoreKeys         = "minSemanticScore"
+	searchCacheSectionKeys                   = "cache"
+	searchCacheEnabledKeys                   = "enabled"
+	searchCacheQueryEmbeddingTTLKeys         = "queryEmbeddingTtlSeconds"
+	searchCacheSemanticHitsTTLKeys           = "semanticHitsTtlSeconds"
+	searchCacheMaxEntriesKeys                = "maxEntries"
+	searchCacheStatsRefreshIntervalKeys      = "statsRefreshIntervalSeconds"
 )
 
 // Load 读取并标准化配置，缺失时自动补默认配置降低首次使用门槛。
@@ -259,31 +255,31 @@ func loadPayload(configPath string) (map[string]any, error) {
 func buildDefaultPayload() (map[string]any, error) {
 	return map[string]any{
 		"server": map[string]any{
-			"base_url":    defaultServerBaseURL,
-			"listen_addr": defaultServerListenAddr,
+			"baseUrl":    defaultServerBaseURL,
+			"listenAddr": defaultServerListenAddr,
 		},
 		"embedding": map[string]any{
-			"base_url":                      "",
-			"api_key":                       "",
-			"model":                         "",
-			"timeout_seconds":               30,
-			"semantic_similarity_threshold": defaultSemanticSimilarityThreshold,
-			"semantic_candidate_batch_size": defaultSemanticCandidateBatchSize,
-			"semantic_candidate_max_count":  defaultSemanticCandidateMaxCount,
-			"semantic_hit_fetch_limit":      defaultSemanticHitFetchLimit,
-			"semantic_window": map[string]any{
-				"mode":                  defaultSemanticWindowMode,
-				"base_max_count":        defaultSemanticCandidateMaxCount,
-				"dynamic_min_count":     defaultSemanticWindowDynamicMin,
-				"dynamic_max_count":     defaultSemanticWindowDynamicMax,
-				"dynamic_ratio":         defaultSemanticWindowDynamicRatio,
-				"reference_corpus_size": defaultSemanticWindowReferenceSize,
+			"baseUrl":                     "",
+			"apiKey":                      "",
+			"model":                       "",
+			"timeoutSeconds":              30,
+			"semanticSimilarityThreshold": defaultSemanticSimilarityThreshold,
+			"semanticCandidateBatchSize":  defaultSemanticCandidateBatchSize,
+			"semanticCandidateMaxCount":   defaultSemanticCandidateMaxCount,
+			"semanticHitFetchLimit":       defaultSemanticHitFetchLimit,
+			"semanticWindow": map[string]any{
+				"mode":                defaultSemanticWindowMode,
+				"baseMaxCount":        defaultSemanticCandidateMaxCount,
+				"dynamicMinCount":     defaultSemanticWindowDynamicMin,
+				"dynamicMaxCount":     defaultSemanticWindowDynamicMax,
+				"dynamicRatio":        defaultSemanticWindowDynamicRatio,
+				"referenceCorpusSize": defaultSemanticWindowReferenceSize,
 			},
 			"decay": map[string]any{
-				"enabled":         defaultDecayEnabled,
-				"age_weight":      defaultDecayAgeWeight,
-				"semantic_weight": defaultDecaySemanticWeight,
-				"half_life_days": map[string]any{
+				"enabled":        defaultDecayEnabled,
+				"ageWeight":      defaultDecayAgeWeight,
+				"semanticWeight": defaultDecaySemanticWeight,
+				"halfLifeDays": map[string]any{
 					"summary": defaultDecaySummaryHalfLifeDays,
 					"error":   defaultDecayErrorHalfLifeDays,
 				},
@@ -294,15 +290,15 @@ func buildDefaultPayload() (map[string]any, error) {
 			"dsn":    "",
 		},
 		"search": map[string]any{
-			"low_confidence_error_hit_limit":   defaultSearchErrorHitLimit,
-			"low_confidence_summary_hit_limit": defaultSearchSummaryHitLimit,
+			"lowConfidenceErrorHitLimit":   defaultSearchErrorHitLimit,
+			"lowConfidenceSummaryHitLimit": defaultSearchSummaryHitLimit,
 			"keyword": map[string]any{
 				"mode":    defaultKeywordMode,
 				"backend": defaultKeywordBackend,
-				"bm25_k1": defaultKeywordBM25K1,
-				"bm25_b":  defaultKeywordBM25B,
+				"bm25K1":  defaultKeywordBM25K1,
+				"bm25B":   defaultKeywordBM25B,
 				"fields":  []string{"title", "summary", "tags", "content", "project_name"},
-				"field_weights": map[string]any{
+				"fieldWeights": map[string]any{
 					"title":        2.0,
 					"summary":      1.5,
 					"tags":         1.5,
@@ -315,23 +311,23 @@ func buildDefaultPayload() (map[string]any, error) {
 				},
 			},
 			"fusion": map[string]any{
-				"enabled":            defaultFusionEnabled,
-				"formula":            defaultFusionFormula,
-				"keyword_weight":     defaultFusionKeywordWeight,
-				"semantic_weight":    defaultFusionSemanticWeight,
-				"recency_weight":     defaultFusionRecencyWeight,
-				"min_semantic_score": defaultSemanticSimilarityThreshold,
+				"enabled":          defaultFusionEnabled,
+				"formula":          defaultFusionFormula,
+				"keywordWeight":    defaultFusionKeywordWeight,
+				"semanticWeight":   defaultFusionSemanticWeight,
+				"recencyWeight":    defaultFusionRecencyWeight,
+				"minSemanticScore": defaultSemanticSimilarityThreshold,
 			},
 			"cache": map[string]any{
-				"enabled":                        defaultCacheEnabled,
-				"query_embedding_ttl_seconds":    defaultCacheQueryEmbeddingTTL,
-				"semantic_hits_ttl_seconds":      defaultCacheSemanticHitsTTL,
-				"max_entries":                    defaultCacheMaxEntries,
-				"stats_refresh_interval_seconds": defaultCacheStatsRefreshInterval,
+				"enabled":                     defaultCacheEnabled,
+				"queryEmbeddingTtlSeconds":    defaultCacheQueryEmbeddingTTL,
+				"semanticHitsTtlSeconds":      defaultCacheSemanticHitsTTL,
+				"maxEntries":                  defaultCacheMaxEntries,
+				"statsRefreshIntervalSeconds": defaultCacheStatsRefreshInterval,
 			},
 		},
 		"auth": map[string]any{
-			"jwt_secret": defaultJWTSecret,
+			"jwtSecret": defaultJWTSecret,
 		},
 	}, nil
 }
@@ -510,20 +506,20 @@ func renderConfigJSONCObject(obj map[string]any, parentPath string, indentLevel 
 // orderedConfigKeys 按固定顺序输出键，避免配置文件每次自动补齐后顺序漂移影响可读性。
 func orderedConfigKeys(parentPath string, obj map[string]any) []string {
 	preferred := map[string][]string{
-		"":                               {"server", "auth", "database", "search", "embedding"},
-		"server":                         {"base_url", "listen_addr"},
-		"auth":                           {"jwt_secret"},
-		"database":                       {"driver", "dsn"},
-		"search":                         {"low_confidence_error_hit_limit", "low_confidence_summary_hit_limit", "keyword", "fusion", "cache"},
-		"search.keyword":                 {"mode", "backend", "bm25_k1", "bm25_b", "fields", "field_weights", "synonyms"},
-		"search.keyword.field_weights":   {"title", "summary", "tags", "content", "project_name"},
-		"search.keyword.synonyms":        {"enabled", "groups"},
-		"search.fusion":                  {"enabled", "formula", "keyword_weight", "semantic_weight", "recency_weight", "min_semantic_score"},
-		"search.cache":                   {"enabled", "query_embedding_ttl_seconds", "semantic_hits_ttl_seconds", "max_entries", "stats_refresh_interval_seconds"},
-		"embedding":                      {"base_url", "api_key", "model", "timeout_seconds", "semantic_similarity_threshold", "semantic_candidate_batch_size", "semantic_candidate_max_count", "semantic_hit_fetch_limit", "semantic_window", "decay"},
-		"embedding.semantic_window":      {"mode", "base_max_count", "dynamic_min_count", "dynamic_max_count", "dynamic_ratio", "reference_corpus_size"},
-		"embedding.decay":                {"enabled", "age_weight", "semantic_weight", "half_life_days"},
-		"embedding.decay.half_life_days": {"summary", "error"},
+		"":                             {"server", "auth", "database", "search", "embedding"},
+		"server":                       {"baseUrl", "listenAddr"},
+		"auth":                         {"jwtSecret"},
+		"database":                     {"driver", "dsn"},
+		"search":                       {"lowConfidenceErrorHitLimit", "lowConfidenceSummaryHitLimit", "keyword", "fusion", "cache"},
+		"search.keyword":               {"mode", "backend", "bm25K1", "bm25B", "fields", "fieldWeights", "synonyms"},
+		"search.keyword.fieldWeights":  {"title", "summary", "tags", "content", "project_name"},
+		"search.keyword.synonyms":      {"enabled", "groups"},
+		"search.fusion":                {"enabled", "formula", "keywordWeight", "semanticWeight", "recencyWeight", "minSemanticScore"},
+		"search.cache":                 {"enabled", "queryEmbeddingTtlSeconds", "semanticHitsTtlSeconds", "maxEntries", "statsRefreshIntervalSeconds"},
+		"embedding":                    {"baseUrl", "apiKey", "model", "timeoutSeconds", "semanticSimilarityThreshold", "semanticCandidateBatchSize", "semanticCandidateMaxCount", "semanticHitFetchLimit", "semanticWindow", "decay"},
+		"embedding.semanticWindow":     {"mode", "baseMaxCount", "dynamicMinCount", "dynamicMaxCount", "dynamicRatio", "referenceCorpusSize"},
+		"embedding.decay":              {"enabled", "ageWeight", "semanticWeight", "halfLifeDays"},
+		"embedding.decay.halfLifeDays": {"summary", "error"},
 	}
 	ordered := make([]string, 0, len(obj))
 	used := map[string]struct{}{}
@@ -550,68 +546,68 @@ func orderedConfigKeys(parentPath string, obj map[string]any) []string {
 // configCommentForPath 返回配置项说明，确保注释跟随每一项输出而不是集中在文件顶部。
 func configCommentForPath(path string) string {
 	comments := map[string]string{
-		"server":                                "服务端监听与对外访问配置",
-		"server.base_url":                       "服务端对外访问地址，客户端会以此作为 API 入口",
-		"server.listen_addr":                    "服务端本地监听地址",
-		"auth":                                  "鉴权相关配置",
-		"auth.jwt_secret":                       "管理后台 JWT 签名密钥，生产环境应替换",
-		"database":                              "数据库连接配置",
-		"database.driver":                       "数据库驱动，支持 sqlite/postgres/postgresql",
-		"database.dsn":                          "数据库连接串，sqlite 为空时使用默认本地文件",
-		"search":                                "搜索层配置",
-		"search.low_confidence_error_hit_limit": "错误记忆中低于 1 分置信度的最大返回条数",
-		"search.low_confidence_summary_hit_limit": "总结记忆中低于 1 分置信度的最大返回条数",
-		"search.keyword":                              "关键字检索配置",
-		"search.keyword.mode":                         "关键字模式，like 为子串匹配，bm25 为加权相关性排序",
-		"search.keyword.backend":                      "关键字后端类型预留项，默认 auto",
-		"search.keyword.bm25_k1":                      "BM25 的 k1 参数，控制词频饱和速度",
-		"search.keyword.bm25_b":                       "BM25 的 b 参数，控制文档长度归一化强度",
-		"search.keyword.fields":                       "BM25 参与打分字段列表",
-		"search.keyword.field_weights":                "BM25 各字段权重映射",
-		"search.keyword.field_weights.title":          "标题字段权重",
-		"search.keyword.field_weights.summary":        "摘要字段权重",
-		"search.keyword.field_weights.tags":           "标签字段权重",
-		"search.keyword.field_weights.content":        "正文字段权重",
-		"search.keyword.field_weights.project_name":   "项目名字段权重",
-		"search.keyword.synonyms":                     "同义词扩展配置",
-		"search.keyword.synonyms.enabled":             "是否启用同义词扩展",
-		"search.keyword.synonyms.groups":              "同义词分组，每组内词会互相扩展",
-		"search.fusion":                               "多路打分融合配置",
-		"search.fusion.enabled":                       "是否启用关键字/语义/时效融合评分",
-		"search.fusion.formula":                       "融合公式，当前支持 weighted_sum",
-		"search.fusion.keyword_weight":                "关键字分在融合中的权重",
-		"search.fusion.semantic_weight":               "语义分在融合中的权重",
-		"search.fusion.recency_weight":                "时效分在融合中的权重",
-		"search.fusion.min_semantic_score":            "语义分最低有效阈值，低于该值会被视为弱语义",
-		"search.cache":                                "搜索缓存配置",
-		"search.cache.enabled":                        "是否启用查询向量与语义结果缓存",
-		"search.cache.query_embedding_ttl_seconds":    "查询向量缓存 TTL（秒）",
-		"search.cache.semantic_hits_ttl_seconds":      "语义命中缓存 TTL（秒）",
-		"search.cache.max_entries":                    "每类缓存的最大条目数",
-		"search.cache.stats_refresh_interval_seconds": "管理端缓存统计刷新间隔（秒），0 表示仅手动刷新",
-		"embedding":                                       "嵌入与语义召回配置",
-		"embedding.base_url":                              "OpenAI 兼容 Embeddings 服务地址",
-		"embedding.api_key":                               "Embeddings 服务鉴权令牌",
-		"embedding.model":                                 "嵌入模型名称",
-		"embedding.timeout_seconds":                       "嵌入请求超时时间（秒）",
-		"embedding.semantic_similarity_threshold":         "语义命中阈值，低于该值不进入候选",
-		"embedding.semantic_candidate_batch_size":         "每批扫描的语义候选数量",
-		"embedding.semantic_candidate_max_count":          "语义扫描候选总上限",
-		"embedding.semantic_hit_fetch_limit":              "语义高分候选回表上限",
-		"embedding.semantic_window":                       "语义候选窗口策略",
-		"embedding.semantic_window.mode":                  "窗口模式，static 固定窗口，dynamic 按语料规模动态计算",
-		"embedding.semantic_window.base_max_count":        "静态模式窗口上限，动态模式下作为兜底值",
-		"embedding.semantic_window.dynamic_min_count":     "动态窗口最小值",
-		"embedding.semantic_window.dynamic_max_count":     "动态窗口最大值",
-		"embedding.semantic_window.dynamic_ratio":         "动态窗口比例因子（候选数≈语料量*比例）",
-		"embedding.semantic_window.reference_corpus_size": "动态窗口参考语料规模预留项",
-		"embedding.decay":                                 "时效衰减配置",
-		"embedding.decay.enabled":                         "是否启用时间衰减融合",
-		"embedding.decay.age_weight":                      "时效分权重",
-		"embedding.decay.semantic_weight":                 "语义分权重",
-		"embedding.decay.half_life_days":                  "不同记忆类型的半衰期配置（天）",
-		"embedding.decay.half_life_days.summary":          "总结记忆半衰期（天）",
-		"embedding.decay.half_life_days.error":            "错误记忆半衰期（天）",
+		"server":                                       "服务端监听与对外访问配置",
+		"server.baseUrl":                               "服务端对外访问地址，客户端会以此作为 API 入口",
+		"server.listenAddr":                            "服务端本地监听地址",
+		"auth":                                         "鉴权相关配置",
+		"auth.jwtSecret":                               "管理后台 JWT 签名密钥，生产环境应替换",
+		"database":                                     "数据库连接配置",
+		"database.driver":                              "数据库驱动，支持 sqlite/postgres/postgresql",
+		"database.dsn":                                 "数据库连接串，sqlite 为空时使用默认本地文件",
+		"search":                                       "搜索层配置",
+		"search.lowConfidenceErrorHitLimit":            "错误记忆中低于 1 分置信度的最大返回条数",
+		"search.lowConfidenceSummaryHitLimit":          "总结记忆中低于 1 分置信度的最大返回条数",
+		"search.keyword":                               "关键字检索配置",
+		"search.keyword.mode":                          "关键字模式，like 为子串匹配，bm25 为加权相关性排序",
+		"search.keyword.backend":                       "关键字后端类型预留项，默认 auto",
+		"search.keyword.bm25K1":                        "BM25 的 k1 参数，控制词频饱和速度",
+		"search.keyword.bm25B":                         "BM25 的 b 参数，控制文档长度归一化强度",
+		"search.keyword.fields":                        "BM25 参与打分字段列表",
+		"search.keyword.fieldWeights":                  "BM25 各字段权重映射",
+		"search.keyword.fieldWeights.title":            "标题字段权重",
+		"search.keyword.fieldWeights.summary":          "摘要字段权重",
+		"search.keyword.fieldWeights.tags":             "标签字段权重",
+		"search.keyword.fieldWeights.content":          "正文字段权重",
+		"search.keyword.fieldWeights.project_name":     "项目名字段权重",
+		"search.keyword.synonyms":                      "同义词扩展配置",
+		"search.keyword.synonyms.enabled":              "是否启用同义词扩展",
+		"search.keyword.synonyms.groups":               "同义词分组，每组内词会互相扩展",
+		"search.fusion":                                "多路打分融合配置",
+		"search.fusion.enabled":                        "是否启用关键字/语义/时效融合评分",
+		"search.fusion.formula":                        "融合公式，当前支持 weighted_sum",
+		"search.fusion.keywordWeight":                  "关键字分在融合中的权重",
+		"search.fusion.semanticWeight":                 "语义分在融合中的权重",
+		"search.fusion.recencyWeight":                  "时效分在融合中的权重",
+		"search.fusion.minSemanticScore":               "语义分最低有效阈值，低于该值会被视为弱语义",
+		"search.cache":                                 "搜索缓存配置",
+		"search.cache.enabled":                         "是否启用查询向量与语义结果缓存",
+		"search.cache.queryEmbeddingTtlSeconds":        "查询向量缓存 TTL（秒）",
+		"search.cache.semanticHitsTtlSeconds":          "语义命中缓存 TTL（秒）",
+		"search.cache.maxEntries":                      "每类缓存的最大条目数",
+		"search.cache.statsRefreshIntervalSeconds":     "管理端缓存统计刷新间隔（秒），0 表示仅手动刷新",
+		"embedding":                                    "嵌入与语义召回配置",
+		"embedding.baseUrl":                            "OpenAI 兼容 Embeddings 服务地址",
+		"embedding.apiKey":                             "Embeddings 服务鉴权令牌",
+		"embedding.model":                              "嵌入模型名称",
+		"embedding.timeoutSeconds":                     "嵌入请求超时时间（秒）",
+		"embedding.semanticSimilarityThreshold":        "语义命中阈值，低于该值不进入候选",
+		"embedding.semanticCandidateBatchSize":         "每批扫描的语义候选数量",
+		"embedding.semanticCandidateMaxCount":          "语义扫描候选总上限",
+		"embedding.semanticHitFetchLimit":              "语义高分候选回表上限",
+		"embedding.semanticWindow":                     "语义候选窗口策略",
+		"embedding.semanticWindow.mode":                "窗口模式，static 固定窗口，dynamic 按语料规模动态计算",
+		"embedding.semanticWindow.baseMaxCount":        "静态模式窗口上限，动态模式下作为兜底值",
+		"embedding.semanticWindow.dynamicMinCount":     "动态窗口最小值",
+		"embedding.semanticWindow.dynamicMaxCount":     "动态窗口最大值",
+		"embedding.semanticWindow.dynamicRatio":        "动态窗口比例因子（候选数≈语料量*比例）",
+		"embedding.semanticWindow.referenceCorpusSize": "动态窗口参考语料规模预留项",
+		"embedding.decay":                              "时效衰减配置",
+		"embedding.decay.enabled":                      "是否启用时间衰减融合",
+		"embedding.decay.ageWeight":                    "时效分权重",
+		"embedding.decay.semanticWeight":               "语义分权重",
+		"embedding.decay.halfLifeDays":                 "不同记忆类型的半衰期配置（天）",
+		"embedding.decay.halfLifeDays.summary":         "总结记忆半衰期（天）",
+		"embedding.decay.halfLifeDays.error":           "错误记忆半衰期（天）",
 	}
 	return comments[path]
 }
@@ -681,34 +677,22 @@ func stripJSONCComments(input string) string {
 
 // resolveServerBaseURL 统一解析服务端地址，确保脚本侧 HTTP 调用入口稳定。
 func resolveServerBaseURL(payload map[string]any) string {
-	for _, key := range serverSectionKeys {
-		section, ok := payload[key].(map[string]any)
-		if !ok {
-			continue
-		}
+	section, ok := payload[serverSectionKeys].(map[string]any)
+	if ok {
 		if value := pickStrings(section, serverBaseURLKeys); value != "" {
 			return strings.TrimRight(value, "/")
 		}
-	}
-	if value := pickStrings(payload, serverFlatURLKeys); value != "" {
-		return strings.TrimRight(value, "/")
 	}
 	return defaultServerBaseURL
 }
 
 // resolveServerListenAddr 统一解析服务端监听地址，避免服务入口继续写死端口。
 func resolveServerListenAddr(payload map[string]any) string {
-	for _, key := range serverSectionKeys {
-		section, ok := payload[key].(map[string]any)
-		if !ok {
-			continue
-		}
+	section, ok := payload[serverSectionKeys].(map[string]any)
+	if ok {
 		if value := pickStrings(section, serverListenAddrKeys); value != "" {
 			return value
 		}
-	}
-	if value := pickStrings(payload, serverFlatListenKeys); value != "" {
-		return value
 	}
 	return defaultServerListenAddr
 }
@@ -834,13 +818,7 @@ func resolveJWTSecret(payload map[string]any) string {
 func resolveDatabaseConfig(payload map[string]any) *DatabaseConfig {
 	section := findSection(payload, databaseSectionKeys)
 	driver := pickStrings(section, databaseDriverKeys)
-	if driver == "" {
-		driver = pickStrings(payload, databaseFlatDriver)
-	}
 	dsn := pickStrings(section, databaseDSNKeys)
-	if dsn == "" {
-		dsn = pickStrings(payload, databaseFlatDSN)
-	}
 	if driver == "" && dsn == "" {
 		return nil
 	}
@@ -964,23 +942,20 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 	}
 }
 
-// findSection 优先读取嵌套配置，必要时兼容平铺结构减少升级摩擦。
-func findSection(payload map[string]any, keys []string) map[string]any {
-	for _, key := range keys {
-		section, ok := payload[key].(map[string]any)
-		if ok {
-			return section
-		}
+// findSection 读取指定节配置，确保各模块按统一层级解析。
+
+func findSection(payload map[string]any, key string) map[string]any {
+	section, ok := payload[key].(map[string]any)
+	if ok {
+		return section
 	}
 	return payload
 }
 
 // pickStrings 从候选字段中取第一个非空字符串，避免调用方重复写兼容逻辑。
-func pickStrings(payload map[string]any, keys []string) string {
-	for _, key := range keys {
-		if value := pickString(payload, key); value != "" {
-			return value
-		}
+func pickStrings(payload map[string]any, key string) string {
+	if value := pickString(payload, key); value != "" {
+		return value
 	}
 	return ""
 }
@@ -1002,219 +977,213 @@ func pickString(payload map[string]any, key string) string {
 }
 
 // pickFloat 宽松解析数值，避免配置格式变化导致整个能力失效。
-func pickFloat(payload map[string]any, keys []string, fallback float64) float64 {
-	for _, key := range keys {
-		if payload == nil {
-			break
-		}
-		value, ok := payload[key]
-		if !ok {
-			continue
-		}
-		switch typed := value.(type) {
-		case float64:
-			return typed
-		case float32:
-			return float64(typed)
-		case int:
-			return float64(typed)
-		case int64:
-			return float64(typed)
-		case string:
-			parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
-			if err == nil {
-				return parsed
-			}
+
+func pickFloat(payload map[string]any, key string, fallback float64) float64 {
+	if payload == nil {
+		return fallback
+	}
+	value, ok := payload[key]
+	if !ok {
+		return fallback
+	}
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err == nil {
+			return parsed
 		}
 	}
 	return fallback
 }
 
 // pickInt 宽松解析整数配置，避免数值类开关因 JSON 类型差异失效。
-func pickInt(payload map[string]any, keys []string, fallback int) int {
-	for _, key := range keys {
-		if payload == nil {
-			break
-		}
-		value, ok := payload[key]
-		if !ok {
-			continue
-		}
-		switch typed := value.(type) {
-		case float64:
-			return int(typed)
-		case float32:
-			return int(typed)
-		case int:
-			return typed
-		case int64:
-			return int(typed)
-		case string:
-			parsed, err := strconv.Atoi(strings.TrimSpace(typed))
-			if err == nil {
-				return parsed
-			}
+
+func pickInt(payload map[string]any, key string, fallback int) int {
+	if payload == nil {
+		return fallback
+	}
+	value, ok := payload[key]
+	if !ok {
+		return fallback
+	}
+	switch typed := value.(type) {
+	case float64:
+		return int(typed)
+	case float32:
+		return int(typed)
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err == nil {
+			return parsed
 		}
 	}
 	return fallback
 }
 
 // pickBool 宽松解析布尔配置，避免 true/false 的字符串写法导致配置失效。
-func pickBool(payload map[string]any, keys []string, fallback bool) bool {
-	for _, key := range keys {
-		if payload == nil {
-			break
+
+func pickBool(payload map[string]any, key string, fallback bool) bool {
+	if payload == nil {
+		return fallback
+	}
+	value, ok := payload[key]
+	if !ok {
+		return fallback
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(typed))
+		if normalized == "true" || normalized == "1" || normalized == "yes" || normalized == "on" {
+			return true
 		}
-		value, ok := payload[key]
-		if !ok {
-			continue
-		}
-		switch typed := value.(type) {
-		case bool:
-			return typed
-		case string:
-			normalized := strings.ToLower(strings.TrimSpace(typed))
-			if normalized == "true" || normalized == "1" || normalized == "yes" || normalized == "on" {
-				return true
-			}
-			if normalized == "false" || normalized == "0" || normalized == "no" || normalized == "off" {
-				return false
-			}
+		if normalized == "false" || normalized == "0" || normalized == "no" || normalized == "off" {
+			return false
 		}
 	}
 	return fallback
 }
 
 // pickStringSlice 宽松解析字符串数组，避免 JSON 写法差异影响字段列表配置。
-func pickStringSlice(payload map[string]any, keys []string) []string {
-	for _, key := range keys {
-		if payload == nil {
-			break
-		}
-		value, ok := payload[key]
-		if !ok {
-			continue
-		}
-		out := []string{}
-		switch typed := value.(type) {
-		case []any:
-			out = make([]string, 0, len(typed))
-			for _, item := range typed {
-				text := strings.TrimSpace(fmt.Sprint(item))
-				if text != "" {
-					out = append(out, text)
-				}
+
+func pickStringSlice(payload map[string]any, key string) []string {
+	if payload == nil {
+		return nil
+	}
+	value, ok := payload[key]
+	if !ok {
+		return nil
+	}
+	out := []string{}
+	switch typed := value.(type) {
+	case []any:
+		out = make([]string, 0, len(typed))
+		for _, item := range typed {
+			text := strings.TrimSpace(fmt.Sprint(item))
+			if text != "" {
+				out = append(out, text)
 			}
-		case []string:
-			out = make([]string, 0, len(typed))
-			for _, item := range typed {
-				text := strings.TrimSpace(item)
-				if text != "" {
-					out = append(out, text)
-				}
+		}
+	case []string:
+		out = make([]string, 0, len(typed))
+		for _, item := range typed {
+			text := strings.TrimSpace(item)
+			if text != "" {
+				out = append(out, text)
 			}
-		default:
-			continue
 		}
-		if len(out) > 0 {
-			return out
-		}
+	default:
+		return nil
+	}
+	if len(out) > 0 {
+		return out
 	}
 	return nil
 }
 
 // pickFloatMap 宽松解析权重映射，避免数字类型差异导致字段权重被整体忽略。
-func pickFloatMap(payload map[string]any, keys []string) map[string]float64 {
-	for _, key := range keys {
-		if payload == nil {
-			break
-		}
-		value, ok := payload[key]
-		if !ok {
-			continue
-		}
-		out := map[string]float64{}
-		switch typed := value.(type) {
-		case map[string]any:
-			for field, weightRaw := range typed {
-				fieldName := strings.TrimSpace(field)
-				if fieldName == "" {
-					continue
-				}
-				weight := pickFloat(map[string]any{"value": weightRaw}, []string{"value"}, 0)
-				if weight <= 0 {
-					continue
-				}
-				out[fieldName] = weight
+
+func pickFloatMap(payload map[string]any, key string) map[string]float64 {
+	if payload == nil {
+		return nil
+	}
+	value, ok := payload[key]
+	if !ok {
+		return nil
+	}
+	out := map[string]float64{}
+	switch typed := value.(type) {
+	case map[string]any:
+		for field, weightRaw := range typed {
+			fieldName := strings.TrimSpace(field)
+			if fieldName == "" {
+				continue
 			}
-		case map[string]float64:
-			for field, weight := range typed {
-				fieldName := strings.TrimSpace(field)
-				if fieldName == "" || weight <= 0 {
-					continue
-				}
-				out[fieldName] = weight
+			weight := pickFloat(map[string]any{"value": weightRaw}, "value", 0)
+			if weight <= 0 {
+				continue
 			}
-		default:
-			continue
+			out[fieldName] = weight
 		}
-		if len(out) > 0 {
-			return out
+	case map[string]float64:
+		for field, weight := range typed {
+			fieldName := strings.TrimSpace(field)
+			if fieldName == "" || weight <= 0 {
+				continue
+			}
+			out[fieldName] = weight
 		}
+	default:
+		return nil
+	}
+	if len(out) > 0 {
+		return out
 	}
 	return nil
 }
 
 // pickStringGroups 宽松解析同义词分组，避免输入存在空白词时污染查询扩展结果。
-func pickStringGroups(payload map[string]any, keys []string) [][]string {
-	for _, key := range keys {
-		if payload == nil {
-			break
-		}
-		value, ok := payload[key]
-		if !ok {
-			continue
-		}
-		groups := [][]string{}
-		switch typed := value.(type) {
-		case []any:
-			groups = make([][]string, 0, len(typed))
-			for _, groupRaw := range typed {
-				inner, ok := groupRaw.([]any)
-				if !ok {
-					continue
-				}
-				group := make([]string, 0, len(inner))
-				for _, item := range inner {
-					text := strings.TrimSpace(fmt.Sprint(item))
-					if text != "" {
-						group = append(group, text)
-					}
-				}
-				if len(group) > 0 {
-					groups = append(groups, group)
+
+func pickStringGroups(payload map[string]any, key string) [][]string {
+	if payload == nil {
+		return nil
+	}
+	value, ok := payload[key]
+	if !ok {
+		return nil
+	}
+	groups := [][]string{}
+	switch typed := value.(type) {
+	case []any:
+		groups = make([][]string, 0, len(typed))
+		for _, groupRaw := range typed {
+			inner, ok := groupRaw.([]any)
+			if !ok {
+				continue
+			}
+			group := make([]string, 0, len(inner))
+			for _, item := range inner {
+				text := strings.TrimSpace(fmt.Sprint(item))
+				if text != "" {
+					group = append(group, text)
 				}
 			}
-		case [][]string:
-			groups = make([][]string, 0, len(typed))
-			for _, rawGroup := range typed {
-				group := make([]string, 0, len(rawGroup))
-				for _, item := range rawGroup {
-					text := strings.TrimSpace(item)
-					if text != "" {
-						group = append(group, text)
-					}
-				}
-				if len(group) > 0 {
-					groups = append(groups, group)
+			if len(group) > 0 {
+				groups = append(groups, group)
+			}
+		}
+	case [][]string:
+		groups = make([][]string, 0, len(typed))
+		for _, rawGroup := range typed {
+			group := make([]string, 0, len(rawGroup))
+			for _, item := range rawGroup {
+				text := strings.TrimSpace(item)
+				if text != "" {
+					group = append(group, text)
 				}
 			}
-		default:
-			continue
+			if len(group) > 0 {
+				groups = append(groups, group)
+			}
 		}
-		if len(groups) > 0 {
-			return groups
-		}
+	default:
+		return nil
+	}
+	if len(groups) > 0 {
+		return groups
 	}
 	return nil
 }

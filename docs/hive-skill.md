@@ -37,8 +37,8 @@ Hive 客户端脚本读取本地配置文件：
 
 ```json
 {
-  "default_server_base_url": "http://127.0.0.1:8080",
-  "api_token": "",
+  "defaultServerBaseUrl": "http://127.0.0.1:8080",
+  "apiToken": "",
   "projects": {}
 }
 ```
@@ -47,18 +47,18 @@ Hive 客户端脚本读取本地配置文件：
 
 ```json
 {
-  "default_server_base_url": "http://127.0.0.1:8080",
-  "api_token": "global-token",
+  "defaultServerBaseUrl": "http://127.0.0.1:8080",
+  "apiToken": "global-token",
   "projects": {
     "/home/dev/work/repo-a": {
-      "alias": "team/repo-a",
-      "server_url": "http://127.0.0.1:8080",
-      "api_token": "repo-a-token"
+      "projectName": "team/repo-a",
+      "baseUrl": "http://127.0.0.1:8080",
+      "apiToken": "repo-a-token"
     },
     "github.com/acme/repo-b.git": {
-      "alias": "acme/repo-b",
-      "server_url": "https://hive.example.com",
-      "api_token": "repo-b-token"
+      "projectName": "acme/repo-b",
+      "baseUrl": "https://hive.example.com",
+      "apiToken": "repo-b-token"
     }
   }
 }
@@ -67,14 +67,14 @@ Hive 客户端脚本读取本地配置文件：
 ### 字段说明（推荐最简键名）
 
 - 服务端地址：
-  - 全局默认使用 `default_server_base_url`
-  - 项目级覆盖使用 `server_url`
+  - 全局默认使用 `defaultServerBaseUrl`
+  - 项目级覆盖使用 `baseUrl`（仅一级键，不使用嵌套 `server.baseUrl`）
 - API Token：
   - 项目级优先，其次全局
-  - 推荐统一使用 `api_token`
+  - 推荐统一使用 `apiToken`
   - 未配置 Token 时，`search` / `write` 会直接失败
 - 项目标识（写入 `project_name`）：
-  - 项目级使用 `alias`
+  - 项目级使用 `projectName`
   - 若未配置，优先使用 Git 远端仓库标识（如 `github.com/org/repo.git`），再回退到目录名
 
 ### `projects` 匹配规则

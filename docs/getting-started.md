@@ -7,26 +7,26 @@
 ```json
 {
   "server": {
-    "base_url": "http://127.0.0.1:8080",
-    "listen_addr": ":8080"
+    "baseUrl": "http://127.0.0.1:8080",
+    "listenAddr": ":8080"
   },
   "auth": {
-    "jwt_secret": "please-change-this-secret"
+    "jwtSecret": "please-change-this-secret"
   },
   "database": {
     "driver": "sqlite",
     "dsn": ""
   },
   "search": {
-    "low_confidence_error_hit_limit": 10,
-    "low_confidence_summary_hit_limit": 10,
+    "lowConfidenceErrorHitLimit": 10,
+    "lowConfidenceSummaryHitLimit": 10,
     "keyword": {
       "mode": "like",
       "backend": "auto",
-      "bm25_k1": 1.2,
-      "bm25_b": 0.75,
+      "bm25K1": 1.2,
+      "bm25B": 0.75,
       "fields": ["title", "summary", "tags", "content", "project_name"],
-      "field_weights": {
+      "fieldWeights": {
         "title": 2.0,
         "summary": 1.5,
         "tags": 1.5,
@@ -41,40 +41,40 @@
     "fusion": {
       "enabled": true,
       "formula": "weighted_sum",
-      "keyword_weight": 0.55,
-      "semantic_weight": 0.45,
-      "recency_weight": 0.1,
-      "min_semantic_score": 0.15
+      "keywordWeight": 0.55,
+      "semanticWeight": 0.45,
+      "recencyWeight": 0.1,
+      "minSemanticScore": 0.15
     },
     "cache": {
       "enabled": false,
-      "query_embedding_ttl_seconds": 600,
-      "semantic_hits_ttl_seconds": 120,
-      "max_entries": 5000
+      "queryEmbeddingTtlSeconds": 600,
+      "semanticHitsTtlSeconds": 120,
+      "maxEntries": 5000
     }
   },
   "embedding": {
-    "base_url": "",
-    "api_key": "",
+    "baseUrl": "",
+    "apiKey": "",
     "model": "",
-    "timeout_seconds": 30,
-    "semantic_similarity_threshold": 0.15,
-    "semantic_candidate_batch_size": 256,
-    "semantic_candidate_max_count": 1024,
-    "semantic_hit_fetch_limit": 64,
-    "semantic_window": {
+    "timeoutSeconds": 30,
+    "semanticSimilarityThreshold": 0.15,
+    "semanticCandidateBatchSize": 256,
+    "semanticCandidateMaxCount": 1024,
+    "semanticHitFetchLimit": 64,
+    "semanticWindow": {
       "mode": "static",
-      "base_max_count": 1024,
-      "dynamic_min_count": 256,
-      "dynamic_max_count": 20000,
-      "dynamic_ratio": 0.2,
-      "reference_corpus_size": 10000
+      "baseMaxCount": 1024,
+      "dynamicMinCount": 256,
+      "dynamicMaxCount": 20000,
+      "dynamicRatio": 0.2,
+      "referenceCorpusSize": 10000
     },
     "decay": {
       "enabled": true,
-      "age_weight": 0.5,
-      "semantic_weight": 0.5,
-      "half_life_days": {
+      "ageWeight": 0.5,
+      "semanticWeight": 0.5,
+      "halfLifeDays": {
         "summary": 30,
         "error": 90
       }

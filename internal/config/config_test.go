@@ -12,7 +12,7 @@ func TestResolveServerListenAddr(t *testing.T) {
 	t.Helper()
 	payload := map[string]any{
 		"server": map[string]any{
-			"listen_addr": ":19090",
+			"listenAddr": ":19090",
 		},
 	}
 	if got := resolveServerListenAddr(payload); got != ":19090" {
@@ -24,19 +24,19 @@ func TestResolveServerListenAddr(t *testing.T) {
 	}
 }
 
-// TestResolveEmbeddingConfigWithoutAPIKey 验证本地免鉴权嵌入服务不会因空 api_key 被误判为未配置。
+// TestResolveEmbeddingConfigWithoutAPIKey 验证本地免鉴权嵌入服务不会因空 apiKey 被误判为未配置。
 func TestResolveEmbeddingConfigWithoutAPIKey(t *testing.T) {
 	t.Helper()
 	payload := map[string]any{
 		"embedding": map[string]any{
-			"base_url":                      "http://127.0.0.1:11434/v1",
-			"api_key":                       "",
-			"model":                         "nomic-embed-text",
-			"timeout_seconds":               30,
-			"semantic_similarity_threshold": 0.2,
-			"semantic_candidate_batch_size": 128,
-			"semantic_candidate_max_count":  512,
-			"semantic_hit_fetch_limit":      32,
+			"baseUrl":                     "http://127.0.0.1:11434/v1",
+			"apiKey":                      "",
+			"model":                       "nomic-embed-text",
+			"timeoutSeconds":              30,
+			"semanticSimilarityThreshold": 0.2,
+			"semanticCandidateBatchSize":  128,
+			"semanticCandidateMaxCount":   512,
+			"semanticHitFetchLimit":       32,
 		},
 	}
 	got := resolveEmbeddingConfig(payload)
@@ -74,7 +74,7 @@ func TestResolveEmbeddingConfigRequiresModel(t *testing.T) {
 	t.Helper()
 	payload := map[string]any{
 		"embedding": map[string]any{
-			"base_url": "http://127.0.0.1:11434/v1",
+			"baseUrl": "http://127.0.0.1:11434/v1",
 		},
 	}
 	if got := resolveEmbeddingConfig(payload); got != nil {
@@ -87,8 +87,8 @@ func TestResolveEmbeddingConfigUsesSemanticDefaults(t *testing.T) {
 	t.Helper()
 	payload := map[string]any{
 		"embedding": map[string]any{
-			"base_url": "http://127.0.0.1:11434/v1",
-			"model":    "nomic-embed-text",
+			"baseUrl": "http://127.0.0.1:11434/v1",
+			"model":   "nomic-embed-text",
 		},
 	}
 	got := resolveEmbeddingConfig(payload)
@@ -129,21 +129,21 @@ func TestResolveEmbeddingConfigParsesSemanticWindowAndDecay(t *testing.T) {
 	t.Helper()
 	payload := map[string]any{
 		"embedding": map[string]any{
-			"base_url": "http://127.0.0.1:11434/v1",
-			"model":    "nomic-embed-text",
-			"semantic_window": map[string]any{
-				"mode":                  "dynamic",
-				"base_max_count":        2048,
-				"dynamic_min_count":     300,
-				"dynamic_max_count":     12000,
-				"dynamic_ratio":         0.35,
-				"reference_corpus_size": 20000,
+			"baseUrl": "http://127.0.0.1:11434/v1",
+			"model":   "nomic-embed-text",
+			"semanticWindow": map[string]any{
+				"mode":                "dynamic",
+				"baseMaxCount":        2048,
+				"dynamicMinCount":     300,
+				"dynamicMaxCount":     12000,
+				"dynamicRatio":        0.35,
+				"referenceCorpusSize": 20000,
 			},
 			"decay": map[string]any{
-				"enabled":         false,
-				"age_weight":      0.3,
-				"semantic_weight": 0.7,
-				"half_life_days": map[string]any{
+				"enabled":        false,
+				"ageWeight":      0.3,
+				"semanticWeight": 0.7,
+				"halfLifeDays": map[string]any{
 					"summary": 15,
 					"error":   120,
 				},
@@ -194,8 +194,8 @@ func TestResolveSearchConfig(t *testing.T) {
 	t.Helper()
 	payload := map[string]any{
 		"search": map[string]any{
-			"low_confidence_error_hit_limit":   3,
-			"low_confidence_summary_hit_limit": 5,
+			"lowConfidenceErrorHitLimit":   3,
+			"lowConfidenceSummaryHitLimit": 5,
 		},
 	}
 	got := resolveSearchConfig(payload)
@@ -252,7 +252,7 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 				"mode":    "bm25",
 				"backend": "postgres",
 				"fields":  []string{"title", "content"},
-				"field_weights": map[string]float64{
+				"fieldWeights": map[string]float64{
 					"title":   3,
 					"content": 1,
 				},
@@ -264,19 +264,19 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 				},
 			},
 			"fusion": map[string]any{
-				"enabled":            true,
-				"formula":            "weighted_sum",
-				"keyword_weight":     0.6,
-				"semantic_weight":    0.3,
-				"recency_weight":     0.1,
-				"min_semantic_score": 0.2,
+				"enabled":          true,
+				"formula":          "weighted_sum",
+				"keywordWeight":    0.6,
+				"semanticWeight":   0.3,
+				"recencyWeight":    0.1,
+				"minSemanticScore": 0.2,
 			},
 			"cache": map[string]any{
-				"enabled":                        true,
-				"query_embedding_ttl_seconds":    300,
-				"semantic_hits_ttl_seconds":      60,
-				"max_entries":                    2000,
-				"stats_refresh_interval_seconds": 5,
+				"enabled":                     true,
+				"queryEmbeddingTtlSeconds":    300,
+				"semanticHitsTtlSeconds":      60,
+				"maxEntries":                  2000,
+				"statsRefreshIntervalSeconds": 5,
 			},
 		},
 	}
@@ -348,7 +348,7 @@ func TestLoadPayloadSupportsJSONCAndAutoFillsMissingKeys(t *testing.T) {
 	raw := `{
   // 只保留基础 server 配置，其他字段让加载流程自动补齐
   "server": {
-    "base_url": "http://127.0.0.1:19090"
+    "baseUrl": "http://127.0.0.1:19090"
   }
 }`
 	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
@@ -365,14 +365,14 @@ func TestLoadPayloadSupportsJSONCAndAutoFillsMissingKeys(t *testing.T) {
 	if !ok {
 		t.Fatalf("应自动补齐 embedding 配置: %#v", payload)
 	}
-	if _, ok := embedding["semantic_window"]; !ok {
-		t.Fatalf("应自动补齐 semantic_window 配置: %#v", embedding)
+	if _, ok := embedding["semanticWindow"]; !ok {
+		t.Fatalf("应自动补齐 semanticWindow 配置: %#v", embedding)
 	}
 	updated, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("读取补齐后的配置失败: %v", err)
 	}
-	if !strings.Contains(string(updated), "\"base_url\": \"http://127.0.0.1:19090\", //") {
+	if !strings.Contains(string(updated), "\"baseUrl\": \"http://127.0.0.1:19090\", //") {
 		t.Fatalf("补齐后配置应把注释放在配置项后面: %s", string(updated))
 	}
 }
@@ -384,10 +384,10 @@ func TestLoadPayloadKeepsExistingValuesWhenFillingDefaults(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	raw := `{
   "search": {
-    "low_confidence_error_hit_limit": 3
+    "lowConfidenceErrorHitLimit": 3
   },
   "embedding": {
-    "base_url": "http://127.0.0.1:11434/v1",
+    "baseUrl": "http://127.0.0.1:11434/v1",
     "model": "nomic-embed-text"
   }
 }`
@@ -412,12 +412,12 @@ func TestLoadPayloadKeepsExistingValuesWhenFillingDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取补齐后的配置失败: %v", err)
 	}
-	if !strings.Contains(string(updated), "\"low_confidence_error_hit_limit\": 3") {
+	if !strings.Contains(string(updated), "\"lowConfidenceErrorHitLimit\": 3") {
 		t.Fatalf("补齐后应保留已有配置值: %s", string(updated))
 	}
 }
 
-// TestStripJSONCCommentsKeepsURLLiterals 验证注释清理不会破坏 URL 字符串，避免 base_url 中的 // 被误删。
+// TestStripJSONCCommentsKeepsURLLiterals 验证注释清理不会破坏 URL 字符串，避免 baseUrl 中的 // 被误删。
 func TestStripJSONCCommentsKeepsURLLiterals(t *testing.T) {
 	t.Helper()
 	raw := "{\n  \"url\": \"http://127.0.0.1:8080\", // 注释\n  /* 块注释 */\n  \"ok\": true\n}\n"
