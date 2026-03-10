@@ -55,7 +55,7 @@
 - `search.keyword.backend`：关键字后端类型（当前版本主要用于配置预留）
 - `search.keyword.bm25K1`：BM25 `k1` 参数，默认 `1.2`
 - `search.keyword.bm25B`：BM25 `b` 参数，默认 `0.75`
-- `search.keyword.fields`：BM25 参与字段，默认 `title/summary/tags/content/project_name`
+- `search.keyword.fields`：BM25 参与字段，默认 `title/summary/tags/content`
 - `search.keyword.fieldWeights`：BM25 字段权重映射
 - `search.keyword.synonyms.enabled`：是否启用同义词扩展
 - `search.keyword.synonyms.groups`：同义词分组，例如 `[ ["error", "故障", "失败"] ]`
@@ -102,13 +102,12 @@
       "backend": "auto",
       "bm25K1": 1.2,
       "bm25B": 0.75,
-      "fields": ["title", "summary", "tags", "content", "project_name"],
+      "fields": ["title", "summary", "tags", "content"],
       "fieldWeights": {
         "title": 2.0,
         "summary": 1.5,
         "tags": 1.5,
-        "content": 1.0,
-        "project_name": 0.8
+        "content": 1.0
       },
       "synonyms": {
         "enabled": true,

@@ -297,13 +297,12 @@ func buildDefaultPayload() (map[string]any, error) {
 				"backend": defaultKeywordBackend,
 				"bm25K1":  defaultKeywordBM25K1,
 				"bm25B":   defaultKeywordBM25B,
-				"fields":  []string{"title", "summary", "tags", "content", "project_name"},
+				"fields":  []string{"title", "summary", "tags", "content"},
 				"fieldWeights": map[string]any{
-					"title":        2.0,
-					"summary":      1.5,
-					"tags":         1.5,
-					"content":      1.0,
-					"project_name": 0.8,
+					"title":   2.0,
+					"summary": 1.5,
+					"tags":    1.5,
+					"content": 1.0,
 				},
 				"synonyms": map[string]any{
 					"enabled": defaultKeywordSynonymsEnabled,
@@ -851,11 +850,11 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 	}
 	keywordFields := pickStringSlice(keywordSection, searchKeywordFieldsKeys)
 	if len(keywordFields) == 0 {
-		keywordFields = []string{"title", "summary", "tags", "content", "project_name"}
+		keywordFields = []string{"title", "summary", "tags", "content"}
 	}
 	keywordFieldWeights := pickFloatMap(keywordSection, searchKeywordFieldWeightsKeys)
 	if len(keywordFieldWeights) == 0 {
-		keywordFieldWeights = map[string]float64{"title": 2.0, "summary": 1.5, "tags": 1.5, "content": 1.0, "project_name": 0.8}
+		keywordFieldWeights = map[string]float64{"title": 2.0, "summary": 1.5, "tags": 1.5, "content": 1.0}
 	}
 	keywordBM25K1 := pickFloat(keywordSection, searchKeywordBM25K1Keys, defaultKeywordBM25K1)
 	if keywordBM25K1 <= 0 {
