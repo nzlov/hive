@@ -236,6 +236,9 @@ func TestRouterMemoryListReturnsConfidence(t *testing.T) {
 	if len(listResponse.Items) != 1 {
 		t.Fatalf("记忆列表结果数量异常: %+v", listResponse)
 	}
+	if listResponse.Items[0].Type != "summary" {
+		t.Fatalf("记忆列表结果未返回类型字段: %+v", listResponse.Items[0])
+	}
 	if listResponse.Items[0].Confidence == nil || *listResponse.Items[0].Confidence <= 0 {
 		t.Fatalf("记忆列表搜索结果应返回置信度: %+v", listResponse.Items[0])
 	}
@@ -352,6 +355,9 @@ func TestRouterMemoryEndpointsReturnCreatorName(t *testing.T) {
 	}
 	if len(listResponse.Items) == 0 || listResponse.Items[0].CreatorName != admin.RealName {
 		t.Fatalf("记忆列表未返回创建人真实姓名: %+v", listResponse)
+	}
+	if listResponse.Items[0].Type != "summary" {
+		t.Fatalf("记忆列表未返回记忆类型: %+v", listResponse.Items[0])
 	}
 
 	detailRequest := httptest.NewRequest(http.MethodGet, "/api/v1/memories/"+strconv.FormatInt(memoryID, 10), nil)

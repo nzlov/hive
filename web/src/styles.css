@@ -42,10 +42,6 @@
     @apply text-coral hover:border-coral/30 hover:text-coral;
   }
 
-  .icon-btn-tooltip {
-    @apply pointer-events-none absolute left-1/2 top-full z-10 mt-2 -translate-x-1/2 rounded-xl bg-slate-950 px-2.5 py-1.5 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition duration-150 group-hover:opacity-100 group-focus-visible:opacity-100;
-  }
-
   .type-badge {
     @apply inline-flex min-w-[6.5rem] items-center justify-center rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.22em];
   }

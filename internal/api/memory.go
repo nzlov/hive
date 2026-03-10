@@ -132,6 +132,7 @@ type MemoryListRequest struct {
 type MemoryItem struct {
 	ID          int64    `json:"id"`
 	ProjectName string   `json:"project_name"`
+	Type        string   `json:"type"`
 	Title       string   `json:"title"`
 	Tags        []string `json:"tags"`
 	Summary     string   `json:"summary"`

@@ -559,6 +559,7 @@ func memoryToItem(item models.Memory, creatorName string, confidence *float64) a
 	return api.MemoryItem{
 		ID:          item.ID,
 		ProjectName: item.ProjectName,
+		Type:        item.Type,
 		Title:       item.Title,
 		Tags:        models.DecodeTags(item.Tags),
 		Summary:     item.Summary,
