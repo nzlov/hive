@@ -40,6 +40,7 @@
             <thead class="bg-slate-50/80 text-left text-slate-500">
               <tr>
                 <th class="px-5 py-4 font-medium">项目</th>
+                <th class="px-5 py-4 font-medium">类型</th>
                 <th class="px-5 py-4 font-medium">标题</th>
                 <th class="px-5 py-4 font-medium">Tags</th>
                 <th class="px-5 py-4 font-medium">总结</th>
@@ -51,14 +52,24 @@
             </thead>
             <tbody class="divide-y divide-slate-100 bg-white/90">
               <tr v-if="loading">
-                <td class="px-5 py-10 text-center text-slate-400" colspan="8">正在加载记忆列表...</td>
+                <td class="px-5 py-10 text-center text-slate-400" colspan="9">正在加载记忆列表...</td>
               </tr>
               <tr v-else-if="!memories.length">
-                <td class="px-5 py-10 text-center text-slate-400" colspan="8">暂无匹配的记忆</td>
+                <td class="px-5 py-10 text-center text-slate-400" colspan="9">暂无匹配的记忆</td>
               </tr>
               <tr v-for="item in memories" :key="item.id" class="align-top">
-                <td class="px-5 py-4 font-medium text-ink">{{ item.project_name || '-' }}</td>
-                <td class="px-5 py-4 text-ink">{{ item.title || '-' }}</td>
+                <td class="px-5 py-4 text-ink">
+                  <div class="max-w-[22rem] min-w-[16rem] space-y-1">
+                    <p class="text-xs uppercase tracking-[0.24em] text-slate-400">项目</p>
+                    <p class="whitespace-pre-wrap break-all font-semibold leading-6">{{ item.project_name || '-' }}</p>
+                  </div>
+                </td>
+                <td class="px-5 py-4 text-slate-500">
+                  <span class="type-badge" :class="getTypeBadgeClass(item.type)">{{ formatTypeLabel(item.type) }}</span>
+                </td>
+                <td class="px-5 py-4 text-ink">
+                  <p class="max-w-[12rem] break-words font-medium leading-6">{{ item.title || '-' }}</p>
+                </td>
                 <td class="px-5 py-4">
                   <div class="flex max-w-xs flex-wrap gap-2">
                     <span
@@ -74,16 +85,39 @@
                 <td class="px-5 py-4 text-slate-600">
                   <p class="max-w-md whitespace-pre-wrap break-words">{{ item.summary || '-' }}</p>
                 </td>
-                <td class="px-5 py-4 text-slate-500">{{ item.creator_name || item.userid || '-' }}</td>
+                <td class="px-5 py-4 text-slate-500">
+                  <p class="max-w-[7rem] break-words leading-6">{{ item.creator_name || item.userid || '-' }}</p>
+                </td>
                 <td class="px-5 py-4 text-slate-500">{{ formatConfidence(item.confidence) }}</td>
                 <td class="px-5 py-4 text-slate-500">{{ formatDate(item.created_at) }}</td>
-        <td class="px-5 py-4">
-          <div class="flex flex-wrap gap-3">
-            <button class="ghost-btn" type="button" @click="openDetail(item.id)">查看</button>
-            <button v-if="user.is_admin" class="ghost-btn" type="button" @click="openEdit(item.id)">编辑</button>
-            <button v-if="user.is_admin" class="danger-btn" type="button" @click="handleDelete(item)">删除</button>
-          </div>
-        </td>
+                <td class="px-5 py-4">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button class="icon-btn group" type="button" aria-label="查看详情" @click="openDetail(item.id)">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
+                        <path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                      <span class="icon-btn-tooltip">查看</span>
+                    </button>
+                    <button v-if="user.is_admin" class="icon-btn group" type="button" aria-label="编辑记忆" @click="openEdit(item.id)">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
+                        <path d="M12 20h9" />
+                        <path d="m16.5 3.5 4 4L8 20l-5 1 1-5 12.5-12.5Z" />
+                      </svg>
+                      <span class="icon-btn-tooltip">编辑</span>
+                    </button>
+                    <button v-if="user.is_admin" class="icon-btn icon-btn--danger group" type="button" aria-label="删除记忆" @click="handleDelete(item)">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
+                        <path d="M3 6h18" />
+                        <path d="M8 6V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V6" />
+                        <path d="M19 6l-1 13.5A1.5 1.5 0 0 1 16.5 21h-9A1.5 1.5 0 0 1 6 19.5L5 6" />
+                        <path d="M10 11v6" />
+                        <path d="M14 11v6" />
+                      </svg>
+                      <span class="icon-btn-tooltip">删除</span>
+                    </button>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -116,22 +150,24 @@
           <p v-if="detailLoading" class="text-sm text-slate-400">正在加载详情...</p>
           <p v-else-if="detailError" class="rounded-2xl bg-coral/10 px-4 py-3 text-sm text-coral">{{ detailError }}</p>
           <div v-else-if="detail" class="space-y-6">
-            <div class="grid gap-4 sm:grid-cols-2">
-              <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4">
+            <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4 sm:col-span-2 lg:col-span-3">
                 <p class="text-xs uppercase tracking-[0.3em] text-slate-400">项目</p>
-                <p class="mt-3 text-sm font-semibold text-ink">{{ detail.project_name || '-' }}</p>
+                <p class="mt-3 whitespace-pre-wrap break-all text-sm font-semibold leading-6 text-ink">{{ detail.project_name || '-' }}</p>
               </article>
               <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4">
                 <p class="text-xs uppercase tracking-[0.3em] text-slate-400">分支</p>
-                <p class="mt-3 text-sm font-semibold text-ink">{{ detail.git_branch || '-' }}</p>
+                <p class="mt-3 break-all text-sm font-semibold leading-6 text-ink">{{ detail.git_branch || '-' }}</p>
               </article>
               <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4">
                 <p class="text-xs uppercase tracking-[0.3em] text-slate-400">类型</p>
-                <p class="mt-3 text-sm font-semibold text-ink">{{ detail.type || '-' }}</p>
+                <div class="mt-3">
+                  <span class="type-badge" :class="getTypeBadgeClass(detail.type)">{{ formatTypeLabel(detail.type) }}</span>
+                </div>
               </article>
               <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4">
                 <p class="text-xs uppercase tracking-[0.3em] text-slate-400">创建人</p>
-                <p class="mt-3 break-all text-sm font-semibold text-ink">{{ detail.creator_name || detail.userid || '-' }}</p>
+                <p class="mt-3 break-all text-sm font-semibold leading-6 text-ink">{{ detail.creator_name || detail.userid || '-' }}</p>
               </article>
             </div>
 
@@ -184,22 +220,24 @@
         <p v-else-if="editError" class="mt-6 rounded-2xl bg-coral/10 px-4 py-3 text-sm text-coral">{{ editError }}</p>
 
         <form v-else class="mt-6 space-y-6" @submit.prevent="handleSaveEdit">
-          <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4">
+          <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4 sm:col-span-2 xl:col-span-3">
               <p class="text-xs uppercase tracking-[0.3em] text-slate-400">项目</p>
-              <p class="mt-3 text-sm font-semibold text-ink">{{ editReadonly.project_name || '-' }}</p>
+              <p class="mt-3 whitespace-pre-wrap break-all text-sm font-semibold leading-6 text-ink">{{ editReadonly.project_name || '-' }}</p>
             </article>
             <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4">
               <p class="text-xs uppercase tracking-[0.3em] text-slate-400">分支</p>
-              <p class="mt-3 text-sm font-semibold text-ink">{{ editReadonly.git_branch || '-' }}</p>
+              <p class="mt-3 break-all text-sm font-semibold leading-6 text-ink">{{ editReadonly.git_branch || '-' }}</p>
             </article>
             <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4">
               <p class="text-xs uppercase tracking-[0.3em] text-slate-400">类型</p>
-              <p class="mt-3 text-sm font-semibold text-ink">{{ editReadonly.type || '-' }}</p>
+              <div class="mt-3">
+                <span class="type-badge" :class="getTypeBadgeClass(editReadonly.type)">{{ formatTypeLabel(editReadonly.type) }}</span>
+              </div>
             </article>
             <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4">
               <p class="text-xs uppercase tracking-[0.3em] text-slate-400">创建人</p>
-              <p class="mt-3 break-all text-sm font-semibold text-ink">{{ editReadonly.creator_name || editReadonly.userid || '-' }}</p>
+              <p class="mt-3 break-all text-sm font-semibold leading-6 text-ink">{{ editReadonly.creator_name || editReadonly.userid || '-' }}</p>
             </article>
           </div>
 
@@ -222,7 +260,7 @@
             <span class="text-sm font-medium text-slate-700">总结</span>
             <textarea
               v-model="editForm.summary"
-              class="field min-h-28"
+              class="field min-h-28 whitespace-pre-wrap break-words leading-7"
               placeholder="请输入总结"
               :disabled="editSaving"
             />
@@ -468,6 +506,22 @@ function formatDate(value) {
     return value
   }
   return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+// formatTypeLabel 统一兜底记忆类型文案，避免空值直接露出无意义占位风格。
+function formatTypeLabel(value) {
+  return value || '-'
+}
+
+// getTypeBadgeClass 按类型返回徽标语义色，帮助列表中快速区分不同记忆来源。
+function getTypeBadgeClass(value) {
+  if (value === 'summary') {
+    return 'type-badge--summary'
+  }
+  if (value === 'error') {
+    return 'type-badge--error'
+  }
+  return 'type-badge--neutral'
 }
 
 onMounted(() => {
