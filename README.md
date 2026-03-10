@@ -42,7 +42,7 @@
 │   └── scripts/main.py       # Python 客户端入口
 ├── web/                      # Vue 管理后台
 ├── docs/                     # 详细文档
-├── Markfile
+├── Makefile
 └── README.md
 ```
 
