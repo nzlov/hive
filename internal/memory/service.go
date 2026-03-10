@@ -19,20 +19,29 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// embeddingModelMetaKey 保存当前向量模型元数据键名，避免多处硬编码同一个存储键。
 const embeddingModelMetaKey = "embedding_model"
 
 var (
+	// timestampRegexp 提取紧凑时间戳前缀，保证旧格式时间仍可参与统一解析。
 	timestampRegexp = regexp.MustCompile(`^(\d{14})`)
-	headingRegexp   = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*$`)
-	keywordTermRE   = regexp.MustCompile(`[\p{Han}\p{L}\p{N}_]+`)
+	// headingRegexp 识别 Markdown 标题结构，便于按章节提取命中上下文。
+	headingRegexp = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*$`)
+	// keywordTermRE 提取可用于 BM25 的词元，避免整句检索时统计粒度过粗。
+	keywordTermRE = regexp.MustCompile(`[\p{Han}\p{L}\p{N}_]+`)
 )
 
 // Service 封装记忆相关核心业务，避免 HTTP 层直接感知数据库与嵌入细节。
 type Service struct {
-	config     config.AppConfig
-	provider   EmbeddingProvider
-	cacheMu    sync.RWMutex
-	cache      *searchCache
+	// config 保存记忆服务所需配置，便于搜索、清理和缓存逻辑统一读取策略。
+	config config.AppConfig
+	// provider 挂载当前嵌入实现，便于关键字与语义流程共享同一能力入口。
+	provider EmbeddingProvider
+	// cacheMu 保护缓存读写，避免并发搜索时出现 map 竞争。
+	cacheMu sync.RWMutex
+	// cache 保存查询向量与语义命中缓存，降低重复请求成本。
+	cache *searchCache
+	// queryGroup 合并相同查询的并发嵌入请求，避免瞬时打爆外部嵌入服务。
 	queryGroup singleflight.Group
 }
 
@@ -1221,6 +1230,7 @@ func (s *Service) buildListItems(store *models.Store, hits []Hit) ([]MemoryListI
 	return ordered, nil
 }
 
+// lineMatcher 统一抽象行级匹配函数，便于关键字与标题匹配逻辑复用同一接口。
 type lineMatcher func(string) bool
 
 // buildQueryMatcher 同时支持正则和大小写不敏感子串匹配，降低查询书写负担。

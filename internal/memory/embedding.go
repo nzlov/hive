@@ -38,6 +38,7 @@ func (DisabledEmbeddingProvider) EmbedTexts(texts []string) ([][]float64, error)
 
 // OpenAIEmbeddingProvider 复用 OpenAI 兼容协议，降低接入自建服务和兼容服务商的成本。
 type OpenAIEmbeddingProvider struct {
+	// Config 保存嵌入服务配置，便于统一读取模型、地址和超时策略。
 	Config *config.EmbeddingConfig
 }
 

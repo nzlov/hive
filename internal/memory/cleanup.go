@@ -14,10 +14,15 @@ import (
 	"github.com/nzlov/hive/internal/models"
 )
 
+// cleanupCandidate 承接清理候选及其评分明细，避免筛选阶段频繁拆散关联信息。
 type cleanupCandidate struct {
-	Memory          models.Memory
-	Score           float64
-	Detail          CleanupScoreDetail
+	// Memory 保存候选记忆原始记录，便于后续生成审核快照。
+	Memory models.Memory
+	// Score 保存候选总分，便于统一排序和截断。
+	Score float64
+	// Detail 保存评分拆解结果，便于后台解释候选进入原因。
+	Detail CleanupScoreDetail
+	// ProtectedTagHit 标记是否命中过保护标签，便于保留跳过原因。
 	ProtectedTagHit bool
 }
 
@@ -103,6 +108,7 @@ func (s *Service) RejectCleanupReviews(ctx context.Context, ids []int64, reviewe
 	return s.updateCleanupReviewsStatus(ctx, ids, "rejected", reviewer)
 }
 
+// updateCleanupReviewsStatus 收敛审核状态更新逻辑，避免批准和拒绝路径重复拼接参数。
 func (s *Service) updateCleanupReviewsStatus(ctx context.Context, ids []int64, status, reviewer string) error {
 	store, err := models.StoreFromContext(ctx)
 	if err != nil {
@@ -216,6 +222,7 @@ func (s *Service) RunMemoryCleanupOnce(ctx context.Context) (CleanupRunResult, e
 	return result, nil
 }
 
+// buildCleanupReviews 生成指定类型的待审核记录，避免清理策略散落在调用层。
 func (s *Service) buildCleanupReviews(ctx context.Context, memType string, now time.Time) ([]models.MemoryCleanupReview, error) {
 	store, err := models.StoreFromContext(ctx)
 	if err != nil {
@@ -250,7 +257,7 @@ func (s *Service) buildCleanupReviews(ctx context.Context, memType string, now t
 		if detail.Total < policy.ScoreThreshold {
 			continue
 		}
-		ready = append(ready, cleanupCandidate{Memory: item, Score: detail.Total, Detail: detail})
+		ready = append(ready, cleanupCandidate{Memory: item, Score: detail.Total, Detail: detail, ProtectedTagHit: false})
 	}
 	sort.SliceStable(ready, func(i, j int) bool {
 		if ready[i].Score == ready[j].Score {
@@ -293,6 +300,7 @@ func (s *Service) buildCleanupReviews(ctx context.Context, memType string, now t
 	return reviews, nil
 }
 
+// executeReviewsDirect 在自动模式下直接删除候选，避免复用审核执行流程时引入额外状态依赖。
 func (s *Service) executeReviewsDirect(ctx context.Context, reviews []models.MemoryCleanupReview, operator string) (CleanupExecuteResult, error) {
 	store, err := models.StoreFromContext(ctx)
 	if err != nil {
@@ -318,6 +326,7 @@ func (s *Service) executeReviewsDirect(ctx context.Context, reviews []models.Mem
 	return CleanupExecuteResult{ExecutedReviewCount: len(reviews), ExecutedMemoryCount: len(uniqueMemoryIDs), Message: fmt.Sprintf("自动清理已删除 %d 条记忆。", len(uniqueMemoryIDs))}, nil
 }
 
+// buildCleanupSnapshotJSON 固化候选关键字段快照，避免审核期原始记忆变更造成解释漂移。
 func buildCleanupSnapshotJSON(item models.Memory) string {
 	payload, _ := json.Marshal(map[string]any{
 		"id":           item.ID,
@@ -335,6 +344,7 @@ func buildCleanupSnapshotJSON(item models.Memory) string {
 	return string(payload)
 }
 
+// buildCleanupScoreDetail 根据清理策略生成评分明细，便于后台解释候选入选原因。
 func buildCleanupScoreDetail(item models.Memory, policy config.MemoryCleanupPolicyConfig, projectCount int64, now time.Time) CleanupScoreDetail {
 	ageDays := maxInt(0, int(now.Sub(parseTimestamp(item.Timestamp)).Hours()/24))
 	lastUsedDays := maxInt(0, int(now.Sub(parseCleanupTime(item.LastUsedAt)).Hours()/24))
@@ -365,6 +375,7 @@ func buildCleanupScoreDetail(item models.Memory, policy config.MemoryCleanupPoli
 	}
 }
 
+// cleanupUseCountScore 把命中次数映射成可比较的清理分，避免策略层直接处理离散值。
 func cleanupUseCountScore(useCount int64) float64 {
 	switch {
 	case useCount <= 0:
@@ -380,6 +391,7 @@ func cleanupUseCountScore(useCount int64) float64 {
 	}
 }
 
+// parseCleanupTime 统一解析清理场景使用时间，兼容 RFC3339 与紧凑时间戳两种格式。
 func parseCleanupTime(value string) time.Time {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -391,6 +403,7 @@ func parseCleanupTime(value string) time.Time {
 	return parseTimestamp(trimmed)
 }
 
+// loadProjectCounts 预先加载候选涉及项目的同类型总量，避免评分阶段重复查询数据库。
 func (s *Service) loadProjectCounts(store *models.Store, memType string, candidates []models.Memory) (map[string]int64, error) {
 	counts := map[string]int64{}
 	for _, item := range candidates {
@@ -406,6 +419,7 @@ func (s *Service) loadProjectCounts(store *models.Store, memType string, candida
 	return counts, nil
 }
 
+// enabledProtectedTagSet 加载启用中的保护标签集合，便于候选筛选快速判断是否跳过。
 func (s *Service) enabledProtectedTagSet(ctx context.Context) (map[string]struct{}, error) {
 	store, err := models.StoreFromContext(ctx)
 	if err != nil {
@@ -422,6 +436,7 @@ func (s *Service) enabledProtectedTagSet(ctx context.Context) (map[string]struct
 	return result, nil
 }
 
+// hasProtectedTag 判断候选标签是否命中保护名单，避免高价值记忆被纳入删除流程。
 func hasProtectedTag(tags []string, protected map[string]struct{}) bool {
 	for _, tag := range tags {
 		if _, ok := protected[strings.TrimSpace(tag)]; ok {
@@ -431,6 +446,7 @@ func hasProtectedTag(tags []string, protected map[string]struct{}) bool {
 	return false
 }
 
+// cleanupScheduleConfig 返回清理调度配置并补齐默认值，避免调度逻辑散落默认常量。
 func (s *Service) cleanupScheduleConfig() config.MemoryCleanupScheduleConfig {
 	if s.config.ScheduleConfig == nil {
 		return config.MemoryCleanupScheduleConfig{Spec: "0 3 * * *", Mode: "review", ReviewTopN: 200, ProtectedTags: []string{"核心故障", "架构决策"}}
@@ -438,14 +454,17 @@ func (s *Service) cleanupScheduleConfig() config.MemoryCleanupScheduleConfig {
 	return s.config.ScheduleConfig.MemoryCleanup
 }
 
+// cleanupMode 返回当前清理运行模式，避免不同调用方重复读取嵌套配置。
 func (s *Service) cleanupMode() string {
 	return s.cleanupScheduleConfig().Mode
 }
 
+// cleanupDryRun 返回是否启用 dry run，便于执行前统一判断是否落库或删除。
 func (s *Service) cleanupDryRun() bool {
 	return s.cleanupScheduleConfig().DryRun
 }
 
+// cleanupReviewTopN 返回审核候选上限，避免列表规模失控影响后台处理效率。
 func (s *Service) cleanupReviewTopN() int {
 	if value := s.cleanupScheduleConfig().ReviewTopN; value > 0 {
 		return value
@@ -453,6 +472,7 @@ func (s *Service) cleanupReviewTopN() int {
 	return 200
 }
 
+// cleanupPolicy 返回指定记忆类型的清理策略，避免调用方直接感知配置层结构。
 func (s *Service) cleanupPolicy(memType string) config.MemoryCleanupPolicyConfig {
 	schedule := s.cleanupScheduleConfig()
 	if strings.TrimSpace(memType) == "error" {
@@ -481,6 +501,7 @@ func (s *Service) recordSearchUsage(ctx context.Context, result SearchResult) er
 	return store.IncrementMemoryUseCounts(ids, time.Now().UTC().Format(time.RFC3339Nano))
 }
 
+// uniqueInt64 去重并过滤无效 ID，避免批量数据库操作重复处理同一条记录。
 func uniqueInt64(values []int64) []int64 {
 	seen := map[int64]struct{}{}
 	result := make([]int64, 0, len(values))
@@ -497,6 +518,7 @@ func uniqueInt64(values []int64) []int64 {
 	return result
 }
 
+// cloneInt64Map 复制项目计数字典，避免筛选阶段原地修改原始统计结果。
 func cloneInt64Map(input map[string]int64) map[string]int64 {
 	result := make(map[string]int64, len(input))
 	for key, value := range input {

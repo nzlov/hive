@@ -16,21 +16,29 @@ import (
 
 // stubEmbeddingProvider 伪造稳定向量返回，避免测试依赖外部嵌入服务可用性。
 type stubEmbeddingProvider struct {
+	// enabled 控制 provider 是否开启，便于测试覆盖有无向量两种路径。
 	enabled bool
-	model   string
-	vector  []float64
-	calls   int64
+	// model 保存测试模型名，便于断言元数据是否按预期更新。
+	model string
+	// vector 保存固定返回向量，避免测试受随机结果干扰。
+	vector []float64
+	// calls 统计调用次数，便于断言缓存与重建逻辑是否生效。
+	calls int64
 }
 
 // queryEmbeddingProvider 只为查询阶段返回固定向量，便于测试候选筛选与分页逻辑。
 type queryEmbeddingProvider struct {
+	// vector 保存查询固定向量，便于构造稳定的语义命中结果。
 	vector []float64
-	calls  int64
+	// calls 统计嵌入调用次数，便于验证并发去重与缓存逻辑。
+	calls int64
 }
 
 // textAwareEmbeddingProvider 根据输入文本生成不同向量，便于验证编辑后向量是否同步刷新。
 type textAwareEmbeddingProvider struct {
+	// model 保存测试模型名，便于断言更新后元数据行为稳定。
 	model string
+	// calls 统计调用次数，便于验证编辑前后是否都触发重算。
 	calls int
 }
 

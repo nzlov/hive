@@ -9,23 +9,37 @@ import (
 
 // searchCache 保存查询向量和语义命中缓存，避免高频查询重复访问嵌入服务与向量检索。
 type searchCache struct {
-	queryEmbeddings    map[string]queryEmbeddingsCacheEntry
-	semanticHits       map[string]semanticHitsCacheEntry
-	queryHitCount      uint64
-	queryMissCount     uint64
-	semanticHitCount   uint64
-	semanticMissCount  uint64
-	queryEvictCount    uint64
+	// queryEmbeddings 保存查询向量缓存，避免重复请求嵌入服务。
+	queryEmbeddings map[string]queryEmbeddingsCacheEntry
+	// semanticHits 保存语义命中缓存，避免同类请求重复执行向量检索。
+	semanticHits map[string]semanticHitsCacheEntry
+	// queryHitCount 统计查询向量缓存命中次数，便于输出命中率。
+	queryHitCount uint64
+	// queryMissCount 统计查询向量缓存未命中次数，便于分析冷启动成本。
+	queryMissCount uint64
+	// semanticHitCount 统计语义结果缓存命中次数，便于评估缓存价值。
+	semanticHitCount uint64
+	// semanticMissCount 统计语义结果缓存未命中次数，便于观察查询抖动。
+	semanticMissCount uint64
+	// queryEvictCount 统计查询向量缓存淘汰次数，便于评估容量设置。
+	queryEvictCount uint64
+	// semanticEvictCount 统计语义结果缓存淘汰次数，便于评估容量压力。
 	semanticEvictCount uint64
 }
 
+// queryEmbeddingsCacheEntry 保存查询向量缓存项，避免缓存内容与过期时间分散管理。
 type queryEmbeddingsCacheEntry struct {
-	Vectors   [][]float64
+	// Vectors 保存查询对应的嵌入向量副本，避免共享底层数组被修改。
+	Vectors [][]float64
+	// ExpiresAt 保存缓存过期时间，便于读取时快速判断是否可复用。
 	ExpiresAt time.Time
 }
 
+// semanticHitsCacheEntry 保存语义命中缓存项，避免结果与 TTL 管理分散。
 type semanticHitsCacheEntry struct {
-	Hits      []Hit
+	// Hits 保存语义搜索结果副本，避免调用方修改缓存内容。
+	Hits []Hit
+	// ExpiresAt 保存缓存过期时间，便于命中判断统一处理。
 	ExpiresAt time.Time
 }
 
