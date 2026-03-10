@@ -39,37 +39,50 @@
           <table class="min-w-full table-auto divide-y divide-slate-200 text-sm">
             <thead class="bg-slate-50/80 text-center text-slate-500">
               <tr>
-                <th class="px-5 py-4 font-medium"><div class="min-w-[14rem]">项目</div></th>
-                <th class="px-5 py-4 font-medium"><div class="min-w-[17rem]">标题</div></th>
-                <th class="px-5 py-4 font-medium">总结</th>
-                <th class="whitespace-nowrap px-5 py-4 font-medium"><div class="min-w-[7rem]">创建人</div></th>
-                <th class="whitespace-nowrap px-5 py-4 font-medium"><div class="min-w-[5.5rem]">置信度</div></th>
-                <th class="whitespace-nowrap px-5 py-4 font-medium"><div class="min-w-[8.5rem]">创建时间</div></th>
-                <th class="whitespace-nowrap px-5 py-4 font-medium"><div class="min-w-[8rem]">操作</div></th>
+                <th class="py-4 font-medium"><div class="min-w-[18rem]">项目</div></th>
+                <th class="py-4 font-medium"><div class="min-w-[24rem]">标题</div></th>
+                <th class="py-4 font-medium">总结</th>
+                <th class="whitespace-nowrap py-4 font-medium"><div class="min-w-[7rem]">创建人</div></th>
+                <th class="whitespace-nowrap py-4 font-medium"><div class="min-w-[5.5rem]">置信度</div></th>
+                <th class="whitespace-nowrap py-4 font-medium"><div class="min-w-[6rem]">使用次数</div></th>
+                <th class="whitespace-nowrap py-4 font-medium"><div class="min-w-[8rem]">操作</div></th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100 bg-white/90">
               <tr v-if="loading">
-                <td class="px-5 py-10 text-center text-slate-400" colspan="7">正在加载记忆列表...</td>
+                <td class="py-10 text-center text-slate-400" colspan="7">正在加载记忆列表...</td>
               </tr>
               <tr v-else-if="!memories.length">
-                <td class="px-5 py-10 text-center text-slate-400" colspan="7">暂无匹配的记忆</td>
+                <td class="py-10 text-center text-slate-400" colspan="7">暂无匹配的记忆</td>
               </tr>
-              <tr v-for="item in memories" :key="item.id" class="align-top">
-                <td class="px-5 py-4 text-center text-ink align-top">
-                  <div class="min-w-[14rem]">
-                    <p class="mx-auto max-w-[14rem] whitespace-pre-wrap break-words font-semibold leading-6">{{ item.project_name || '-' }}</p>
+              <tr
+                v-for="item in memories"
+                :key="item.id"
+                class="cursor-pointer align-top transition-colors hover:bg-slate-50/70 focus-within:bg-slate-50/70"
+                tabindex="0"
+                role="button"
+                :aria-label="`查看 ${item.title || item.project_name || '记忆'} 详情`"
+                @click="openDetail(item.id)"
+                @keydown.enter.prevent="openDetail(item.id)"
+                @keydown.space.prevent="openDetail(item.id)"
+              >
+                <td class="py-4 text-center text-ink align-top">
+                  <div class="min-w-[18rem] px-3">
+                    <p class="mx-auto max-w-[18rem] whitespace-pre-wrap break-words font-semibold leading-6">
+                      {{ item.project_name || '-' }}
+                    </p>
                   </div>
                 </td>
-                <td class="px-5 py-4 text-center text-ink align-top">
-                  <div class="min-w-[17rem] space-y-3">
+                <td class="py-4 text-center text-ink align-top">
+                  <div class="min-w-[24rem] space-y-3 px-3">
                     <div class="flex flex-wrap items-center justify-center gap-2">
-                      <p class="max-w-[12rem] break-words font-medium leading-6">{{ item.title || '-' }}</p>
+                      <p class="max-w-[19rem] break-words font-medium leading-6">{{ item.title || '-' }}</p>
                       <span
                         v-if="item.type"
-                        class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold"
+                        class="inline-flex h-7 w-7 items-center justify-center rounded-full border"
                         :class="getTypeChipClass(item.type)"
                         :aria-label="`${formatTypeLabel(item.type)} 类型`"
+                        :title="formatTypeLabel(item.type)"
                       >
                         <svg v-if="item.type === 'error'" viewBox="0 0 24 24" aria-hidden="true" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
                           <circle cx="12" cy="12" r="9" />
@@ -80,7 +93,6 @@
                           <path d="M9 12.75 11.25 15 15 9.75" />
                           <circle cx="12" cy="12" r="9" />
                         </svg>
-                        <span>{{ formatTypeLabel(item.type) }}</span>
                       </span>
                     </div>
                     <div v-if="item.tags?.length" class="flex flex-wrap justify-center gap-2">
@@ -94,36 +106,25 @@
                     </div>
                   </div>
                 </td>
-                <td class="w-full px-5 py-4 text-center text-slate-600">
+                <td class="w-full py-4 text-center text-slate-600">
                   <p class="mx-auto max-w-md whitespace-pre-wrap break-words">{{ item.summary || '-' }}</p>
                 </td>
-                <td class="whitespace-nowrap px-5 py-4 text-center text-slate-500">
+                <td class="whitespace-nowrap py-4 text-center text-slate-500">
                   <div class="min-w-[7rem]">
                     <p class="mx-auto max-w-[7rem] break-words leading-6">{{ item.creator_name || item.userid || '-' }}</p>
                   </div>
                 </td>
-                <td class="whitespace-nowrap px-5 py-4 text-center text-slate-500"><div class="min-w-[5.5rem]">{{ formatConfidence(item.confidence) }}</div></td>
-                <td class="whitespace-nowrap px-5 py-4 text-center text-slate-500">
-                  <div class="min-w-[7.5rem] space-y-1 whitespace-nowrap text-center">
-                    <p>{{ formatDateParts(item.created_at).date }}</p>
-                    <p class="text-xs text-slate-400">{{ formatDateParts(item.created_at).time }}</p>
-                  </div>
-                </td>
-                <td class="whitespace-nowrap px-5 py-4 text-center">
+                <td class="whitespace-nowrap py-4 text-center text-slate-500"><div class="min-w-[5.5rem]">{{ formatConfidence(item.confidence) }}</div></td>
+                <td class="whitespace-nowrap py-4 text-center text-slate-500"><div class="min-w-[6rem]">{{ item.use_count ?? 0 }}</div></td>
+                <td class="whitespace-nowrap py-4 text-center">
                   <div class="flex min-w-[8rem] flex-nowrap items-center justify-center gap-2 whitespace-nowrap">
-                    <button class="icon-btn" type="button" aria-label="查看详情" @click="openDetail(item.id)">
-                      <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
-                        <path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z" />
-                        <circle cx="12" cy="12" r="3" />
-                      </svg>
-                    </button>
-                    <button v-if="user.is_admin" class="icon-btn" type="button" aria-label="编辑记忆" @click="openEdit(item.id)">
+                    <button v-if="user.is_admin" class="icon-btn" type="button" aria-label="编辑记忆" @click.stop="openEdit(item.id)">
                       <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
                         <path d="M12 20h9" />
                         <path d="m16.5 3.5 4 4L8 20l-5 1 1-5 12.5-12.5Z" />
                       </svg>
                     </button>
-                    <button v-if="user.is_admin" class="icon-btn icon-btn--danger" type="button" aria-label="删除记忆" @click="handleDelete(item)">
+                    <button v-if="user.is_admin" class="icon-btn icon-btn--danger" type="button" aria-label="删除记忆" @click.stop="handleDelete(item)">
                       <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
                         <path d="M3 6h18" />
                         <path d="M8 6V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V6" />
@@ -149,25 +150,26 @@
       </section>
     </section>
 
-    <div v-if="detailVisible" class="fixed inset-0 z-40 flex justify-end bg-slate-950/35">
+    <div v-if="detailVisible" class="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 px-4 py-8">
       <button class="absolute inset-0 cursor-default" type="button" aria-label="关闭详情" @click="closeDetail" />
-      <aside class="relative z-10 flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl">
+      <aside class="relative z-10 flex max-h-full w-full max-w-4xl flex-col overflow-y-auto rounded-[2rem] bg-white shadow-2xl">
         <div class="border-b border-slate-200 px-6 py-5">
           <div class="flex items-start justify-between gap-4">
             <div>
               <p class="text-xs uppercase tracking-[0.35em] text-slate-400">Memory Detail</p>
               <h3 class="mt-3 text-2xl font-semibold text-ink">{{ detail?.title || '记忆详情' }}</h3>
+              <p class="mt-2 text-sm text-slate-400">记忆时间：{{ formatDate(detail?.timestamp) }}</p>
             </div>
             <button class="ghost-btn" type="button" @click="closeDetail">关闭</button>
           </div>
         </div>
 
-        <div class="flex-1 overflow-y-auto px-6 py-6">
+        <div class="flex-1 overflow-y-auto px-6 py-6 sm:px-8 sm:py-8">
           <p v-if="detailLoading" class="text-sm text-slate-400">正在加载详情...</p>
           <p v-else-if="detailError" class="rounded-2xl bg-coral/10 px-4 py-3 text-sm text-coral">{{ detailError }}</p>
           <div v-else-if="detail" class="space-y-6">
-            <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4 sm:col-span-2 lg:col-span-3">
+            <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4 sm:col-span-2 xl:col-span-4">
                 <p class="text-xs uppercase tracking-[0.3em] text-slate-400">项目</p>
                 <p class="mt-3 whitespace-pre-wrap break-all text-sm font-semibold leading-6 text-ink">{{ detail.project_name || '-' }}</p>
               </article>
@@ -184,6 +186,10 @@
               <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4">
                 <p class="text-xs uppercase tracking-[0.3em] text-slate-400">创建人</p>
                 <p class="mt-3 break-all text-sm font-semibold leading-6 text-ink">{{ detail.creator_name || detail.userid || '-' }}</p>
+              </article>
+              <article class="rounded-3xl border border-slate-200 bg-mist/50 p-4">
+                <p class="text-xs uppercase tracking-[0.3em] text-slate-400">记忆使用次数</p>
+                <p class="mt-3 text-sm font-semibold leading-6 text-ink">{{ detail.use_count ?? 0 }}</p>
               </article>
             </div>
 
@@ -203,17 +209,6 @@
             <section class="rounded-3xl border border-slate-200 p-5">
               <p class="text-xs uppercase tracking-[0.3em] text-slate-400">正文</p>
               <pre class="mt-4 overflow-x-auto whitespace-pre-wrap break-words rounded-2xl bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100">{{ detail.content || '-' }}</pre>
-            </section>
-
-            <section class="grid gap-4 sm:grid-cols-2">
-              <article class="rounded-3xl border border-slate-200 p-4">
-                <p class="text-xs uppercase tracking-[0.3em] text-slate-400">添加时间</p>
-                <p class="mt-3 text-sm text-slate-700">{{ formatDate(detail.created_at) }}</p>
-              </article>
-              <article class="rounded-3xl border border-slate-200 p-4">
-                <p class="text-xs uppercase tracking-[0.3em] text-slate-400">记忆时间戳</p>
-                <p class="mt-3 text-sm text-slate-700">{{ detail.timestamp || '-' }}</p>
-              </article>
             </section>
           </div>
         </div>
@@ -512,16 +507,26 @@ async function handleDelete(item) {
   }
 }
 
-// formatDate 统一处理后台时间字符串，避免空值或非法值直接显示影响可读性。
+// formatDate 统一处理后台时间字符串，兼容紧凑时间戳并输出固定格式，避免不同来源时间展示不一致。
 function formatDate(value) {
   if (!value) {
     return '-'
   }
-  const date = new Date(value)
+  let normalizedValue = value
+  if (typeof value === 'string' && /^\d{14}$/.test(value)) {
+    normalizedValue = `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T${value.slice(8, 10)}:${value.slice(10, 12)}:${value.slice(12, 14)}`
+  }
+  const date = new Date(normalizedValue)
   if (Number.isNaN(date.getTime())) {
     return value
   }
-  return date.toLocaleString('zh-CN', { hour12: false })
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hour = String(date.getHours()).padStart(2, '0')
+  const minute = String(date.getMinutes()).padStart(2, '0')
+  const second = String(date.getSeconds()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`
 }
 
 // formatDateParts 将日期和时间拆成两行展示，避免列表列宽被完整时间字符串撑大。

@@ -689,7 +689,7 @@ func userToSummary(item user.User) api.UserSummary {
 	}
 }
 
-// memoryToItem 统一裁剪列表字段，并补齐创建人和置信度以减少前端额外请求与解释成本。
+// memoryToItem 统一裁剪列表字段，并补齐创建人、使用次数和置信度以减少前端额外请求与解释成本。
 func memoryToItem(item models.Memory, creatorName string, confidence *float64) api.MemoryItem {
 	return api.MemoryItem{
 		ID:          item.ID,
@@ -701,6 +701,7 @@ func memoryToItem(item models.Memory, creatorName string, confidence *float64) a
 		Confidence:  confidence,
 		UserID:      item.UserID,
 		CreatorName: strings.TrimSpace(creatorName),
+		UseCount:    item.UseCount,
 		CreatedAt:   item.CreatedAt,
 	}
 }

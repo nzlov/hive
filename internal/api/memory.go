@@ -139,6 +139,7 @@ type MemoryItem struct {
 	Confidence  *float64 `json:"confidence,omitempty"`
 	UserID      string   `json:"userid"`
 	CreatorName string   `json:"creator_name"`
+	UseCount    int64    `json:"use_count"`
 	CreatedAt   string   `json:"created_at"`
 }
 
