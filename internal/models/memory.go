@@ -65,6 +65,23 @@ func (s *Store) GetMemoryByID(id int64) (Memory, error) {
 	return item, err
 }
 
+// SaveMemoryEditableFields 仅更新允许后台编辑的记忆字段，避免不可编辑元数据被误覆盖。
+func (s *Store) SaveMemoryEditableFields(item Memory) (Memory, error) {
+	result := s.db.Model(&Memory{}).Where("id = ?", item.ID).Updates(map[string]any{
+		"title":   item.Title,
+		"tags":    item.Tags,
+		"summary": item.Summary,
+		"content": item.Content,
+	})
+	if result.Error != nil {
+		return Memory{}, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return Memory{}, ErrNotFound
+	}
+	return s.GetMemoryByID(item.ID)
+}
+
 // DeleteMemoryByID 删除单条记忆，供管理端和后续清理流程复用同一持久化入口。
 func (s *Store) DeleteMemoryByID(id int64) error {
 	return s.db.Delete(&Memory{}, id).Error
