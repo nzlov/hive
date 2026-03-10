@@ -173,6 +173,14 @@ type MemoryDetailResponse struct {
 	Error string       `json:"error,omitempty"`
 }
 
+// UpdateMemoryRequest 描述后台记忆编辑入参，仅开放可安全重算向量的正文相关字段。
+type UpdateMemoryRequest struct {
+	Title   string   `json:"title"`
+	Tags    []string `json:"tags"`
+	Summary string   `json:"summary"`
+	Content string   `json:"content"`
+}
+
 // ChangePasswordRequest 描述用户修改密码的请求参数，允许用户更新自己的登录密码。
 type ChangePasswordRequest struct {
 	NewPassword string `json:"new_password"`

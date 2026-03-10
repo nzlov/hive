@@ -20,6 +20,7 @@
   "search": {
     "lowConfidenceErrorHitLimit": 10,
     "lowConfidenceSummaryHitLimit": 10,
+    "searchStageConcurrency": 2,
     "keyword": {
       "mode": "like",
       "backend": "auto",
@@ -61,6 +62,7 @@
     "semanticCandidateBatchSize": 256,
     "semanticCandidateMaxCount": 1024,
     "semanticHitFetchLimit": 64,
+    "semanticSearchConcurrency": 4,
     "semanticWindow": {
       "mode": "static",
       "baseMaxCount": 1024,

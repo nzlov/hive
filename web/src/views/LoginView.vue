@@ -4,7 +4,17 @@
       <section class="panel hidden overflow-hidden lg:block">
         <div class="flex h-full flex-col justify-center bg-[linear-gradient(135deg,#132238_0%,#1d5f54_48%,#c37b2c_100%)] px-10 py-12 text-white">
           <p class="text-xs uppercase tracking-[0.45em] text-white/60">Memory Manager</p>
-          <h1 class="mt-4 max-w-xl text-5xl font-semibold leading-tight">让记忆权限、来源与管理界面回到同一条控制面。</h1>
+          <h1 class="mt-6 max-w-xl text-5xl font-semibold leading-tight">让记忆权限、来源与管理界面回到同一条控制面。</h1>
+          <div class="mt-10 grid gap-4 md:grid-cols-2">
+            <div class="rounded-3xl border border-white/20 bg-white/10 p-5">
+              <p class="text-sm font-semibold">JWT 管理端</p>
+              <p class="mt-2 text-sm text-white/70">登录态接口走 `/api/v1/users`，管理员写操作统一收敛到 `/api/v1/admin`。</p>
+            </div>
+            <div class="rounded-3xl border border-white/20 bg-white/10 p-5">
+              <p class="text-sm font-semibold">API Token 记忆接口</p>
+              <p class="mt-2 text-sm text-white/70">写入与查询统一走 `/tokenapi/v1/memories/*`，并记录创建用户 UUID。</p>
+            </div>
+          </div>
         </div>
       </section>
       <section class="panel p-6 sm:p-8 lg:p-10">

@@ -275,7 +275,7 @@ func TestRouterLoginAndUserList(t *testing.T) {
 	if strings.TrimSpace(loginResponse.Token) == "" {
 		t.Fatalf("登录响应未返回 JWT: %+v", loginResponse)
 	}
-	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/users?page=1&page_size=1&keyword=alice", nil)
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/admin/users?page=1&page_size=1&keyword=alice", nil)
 	listRequest.Header.Set("Authorization", "Bearer "+loginResponse.Token)
 	listRecorder := httptest.NewRecorder()
 	router.ServeHTTP(listRecorder, listRequest)
@@ -453,5 +453,167 @@ func TestRouterStatsEndpoints(t *testing.T) {
 	}
 	if !cacheResponse.Cache.Enabled {
 		t.Fatalf("缓存统计应标识为启用: %+v", cacheResponse.Cache)
+	}
+}
+
+// TestRouterNonAdminCannotUpdateMemory 验证非管理员无法编辑记忆，避免普通用户绕过前端入口修改数据。
+func TestRouterNonAdminCannotUpdateMemory(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	admin, _, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	member, err := userService.CreateUser(ctx, user.CreateInput{Username: "member", RealName: "普通成员", Password: "secret-3", IsAdmin: false})
+	if err != nil {
+		t.Fatalf("创建普通用户失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+
+	writeBody := bytes.NewReader([]byte(`{"project_name":"router-update","git_branch":"main","items":[{"type":"summary","title":"只读记忆","tags":["只读"],"summary":"不允许普通成员编辑","context":"原始正文"}]}`))
+	writeRequest := httptest.NewRequest(http.MethodPost, "/tokenapi/v1/memories/write", writeBody)
+	writeRequest.Header.Set("Content-Type", "application/json")
+	writeRequest.Header.Set("X-API-Token", admin.APIToken)
+	writeRecorder := httptest.NewRecorder()
+	router.ServeHTTP(writeRecorder, writeRequest)
+	if writeRecorder.Code != http.StatusOK {
+		t.Fatalf("写入记忆失败: status=%d body=%s", writeRecorder.Code, writeRecorder.Body.String())
+	}
+	items, err := store.ListAllMemories()
+	if err != nil || len(items) != 1 {
+		t.Fatalf("读取记忆失败: err=%v items=%+v", err, items)
+	}
+
+	memberLoginBody := bytes.NewReader([]byte(`{"username":"member","password":"secret-3"}`))
+	memberLoginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/users/auth/login", memberLoginBody)
+	memberLoginRequest.Header.Set("Content-Type", "application/json")
+	memberLoginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(memberLoginRecorder, memberLoginRequest)
+	if memberLoginRecorder.Code != http.StatusOK {
+		t.Fatalf("普通用户登录失败: status=%d body=%s", memberLoginRecorder.Code, memberLoginRecorder.Body.String())
+	}
+	var memberLoginResponse api.LoginResponse
+	if err := json.Unmarshal(memberLoginRecorder.Body.Bytes(), &memberLoginResponse); err != nil {
+		t.Fatalf("解析普通用户登录响应失败: %v", err)
+	}
+
+	updateBody := bytes.NewReader([]byte(`{"title":"越权编辑","tags":["越权"],"summary":"越权总结","content":"越权正文"}`))
+	updateRequest := httptest.NewRequest(http.MethodPut, "/api/v1/admin/memories/"+strconv.FormatInt(items[0].ID, 10), updateBody)
+	updateRequest.Header.Set("Content-Type", "application/json")
+	updateRequest.Header.Set("Authorization", "Bearer "+memberLoginResponse.Token)
+	updateRecorder := httptest.NewRecorder()
+	router.ServeHTTP(updateRecorder, updateRequest)
+	if updateRecorder.Code != http.StatusForbidden {
+		t.Fatalf("普通用户编辑应被拒绝: status=%d body=%s user=%+v", updateRecorder.Code, updateRecorder.Body.String(), member)
+	}
+
+	stored, err := store.GetMemoryByID(items[0].ID)
+	if err != nil {
+		t.Fatalf("回读原始记忆失败: %v", err)
+	}
+	if stored.Title != "只读记忆" || stored.Content != "原始正文" {
+		t.Fatalf("普通用户不应修改成功: %+v", stored)
+	}
+}
+
+// TestRouterUpdateMemoryReturnsNotFound 验证编辑不存在的记忆时返回 404，避免前端误判为保存成功。
+func TestRouterUpdateMemoryReturnsNotFound(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	_, password, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+
+	loginBody := bytes.NewReader([]byte(`{"username":"admin","password":"` + password + `"}`))
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/users/auth/login", loginBody)
+	loginRequest.Header.Set("Content-Type", "application/json")
+	loginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(loginRecorder, loginRequest)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("登录失败: status=%d body=%s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	var loginResponse api.LoginResponse
+	if err := json.Unmarshal(loginRecorder.Body.Bytes(), &loginResponse); err != nil {
+		t.Fatalf("解析登录响应失败: %v", err)
+	}
+
+	updateBody := bytes.NewReader([]byte(`{"title":"不存在","tags":[],"summary":"不存在","content":"不存在"}`))
+	updateRequest := httptest.NewRequest(http.MethodPut, "/api/v1/admin/memories/99999", updateBody)
+	updateRequest.Header.Set("Content-Type", "application/json")
+	updateRequest.Header.Set("Authorization", "Bearer "+loginResponse.Token)
+	updateRecorder := httptest.NewRecorder()
+	router.ServeHTTP(updateRecorder, updateRequest)
+	if updateRecorder.Code != http.StatusNotFound {
+		t.Fatalf("编辑不存在记忆应返回404: status=%d body=%s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+}
+
+// TestRouterAdminCanUpdateMemory 验证管理员可编辑记忆且返回最新详情，避免后台编辑后仍需额外刷新详情接口。
+func TestRouterAdminCanUpdateMemory(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	admin, password, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+
+	writeBody := bytes.NewReader([]byte(`{"project_name":"router-update","git_branch":"main","items":[{"type":"summary","title":"编辑前标题","tags":["旧标签"],"summary":"编辑前总结","context":"编辑前正文"}]}`))
+	writeRequest := httptest.NewRequest(http.MethodPost, "/tokenapi/v1/memories/write", writeBody)
+	writeRequest.Header.Set("Content-Type", "application/json")
+	writeRequest.Header.Set("X-API-Token", admin.APIToken)
+	writeRecorder := httptest.NewRecorder()
+	router.ServeHTTP(writeRecorder, writeRequest)
+	if writeRecorder.Code != http.StatusOK {
+		t.Fatalf("写入记忆失败: status=%d body=%s", writeRecorder.Code, writeRecorder.Body.String())
+	}
+	items, err := store.ListAllMemories()
+	if err != nil || len(items) != 1 {
+		t.Fatalf("读取记忆失败: err=%v items=%+v", err, items)
+	}
+	memoryID := items[0].ID
+
+	loginBody := bytes.NewReader([]byte(`{"username":"admin","password":"` + password + `"}`))
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/users/auth/login", loginBody)
+	loginRequest.Header.Set("Content-Type", "application/json")
+	loginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(loginRecorder, loginRequest)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("登录失败: status=%d body=%s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	var loginResponse api.LoginResponse
+	if err := json.Unmarshal(loginRecorder.Body.Bytes(), &loginResponse); err != nil {
+		t.Fatalf("解析登录响应失败: %v", err)
+	}
+
+	updateBody := bytes.NewReader([]byte(`{"title":"编辑后标题","tags":["新标签","向量同步"],"summary":"编辑后总结","content":"编辑后正文"}`))
+	updateRequest := httptest.NewRequest(http.MethodPut, "/api/v1/admin/memories/"+strconv.FormatInt(memoryID, 10), updateBody)
+	updateRequest.Header.Set("Content-Type", "application/json")
+	updateRequest.Header.Set("Authorization", "Bearer "+loginResponse.Token)
+	updateRecorder := httptest.NewRecorder()
+	router.ServeHTTP(updateRecorder, updateRequest)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("更新记忆失败: status=%d body=%s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+	var updateResponse api.MemoryDetailResponse
+	if err := json.Unmarshal(updateRecorder.Body.Bytes(), &updateResponse); err != nil {
+		t.Fatalf("解析更新响应失败: %v", err)
+	}
+	if updateResponse.Item.Title != "编辑后标题" || updateResponse.Item.Summary != "编辑后总结" || updateResponse.Item.Content != "编辑后正文" {
+		t.Fatalf("更新响应未返回最新详情: %+v", updateResponse)
+	}
+	if updateResponse.Item.ProjectName != "router-update" || updateResponse.Item.Type != "summary" {
+		t.Fatalf("更新响应不应改动只读字段: %+v", updateResponse)
 	}
 }

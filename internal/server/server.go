@@ -44,10 +44,10 @@ func NewRouter(memoryService *memory.Service, userService *user.Service, store *
 	return router
 }
 
-// registerUserRoutes 把管理端登录、用户管理和后台记忆接口集中注册，避免 JWT 路由散落在多个文件中。
+// registerUserRoutes 把登录态、统计接口、普通后台接口和管理员接口分组注册，避免权限边界散落在单个路由上。
 func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userService *user.Service, statsService *dashboardStatsService) {
-	publicGroup := router.Group("/api/v1/users")
-	publicGroup.POST("/auth/login", func(c *gin.Context) {
+	authGroup := router.Group("/api/v1/users")
+	authGroup.POST("/auth/login", func(c *gin.Context) {
 		var request api.LoginRequest
 		if err := c.ShouldBindJSON(&request); err != nil {
 			c.JSON(http.StatusBadRequest, api.LoginResponse{Error: err.Error()})
@@ -66,11 +66,16 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		c.JSON(http.StatusOK, api.LoginResponse{Token: token, User: userToSummary(currentUser)})
 	})
 
-	protectedGroup := router.Group("/api/v1/users")
+	protectedGroup := router.Group("/api/v1")
 	protectedGroup.Use(buildJWTMiddleware(userService))
-	adminUserGroup := protectedGroup.Group("")
-	adminUserGroup.Use(buildAdminOnlyMiddleware())
-	protectedGroup.POST("/auth/logout", func(c *gin.Context) {
+	sessionGroup := protectedGroup.Group("/users")
+	memoryGroup := protectedGroup.Group("/memories")
+	adminGroup := protectedGroup.Group("/admin")
+	adminGroup.Use(buildAdminOnlyMiddleware())
+	adminUserGroup := adminGroup.Group("/users")
+	adminMemoryGroup := adminGroup.Group("/memories")
+
+	sessionGroup.POST("/auth/logout", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
 	adminUserGroup.GET("", func(c *gin.Context) {
@@ -161,7 +166,7 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		statsService.OnUserDeleted()
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
-	protectedGroup.GET("/stats", func(c *gin.Context) {
+	sessionGroup.GET("/stats", func(c *gin.Context) {
 		cacheStats := memoryService.CacheStatsSnapshot()
 		response := api.DashboardStatsResponse{
 			Base: statsService.Snapshot(),
@@ -183,7 +188,7 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		}
 		c.JSON(http.StatusOK, response)
 	})
-	protectedGroup.GET("/stats/cache", func(c *gin.Context) {
+	sessionGroup.GET("/stats/cache", func(c *gin.Context) {
 		cacheStats := memoryService.CacheStatsSnapshot()
 		response := api.DashboardCacheStatsResponse{Cache: api.DashboardCacheStats{
 			Enabled:                  cacheStats.Enabled,
@@ -201,10 +206,10 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		}}
 		c.JSON(http.StatusOK, response)
 	})
-	protectedGroup.GET("/me", func(c *gin.Context) {
+	sessionGroup.GET("/me", func(c *gin.Context) {
 		c.JSON(http.StatusOK, api.UserMutationResponse{Item: userToSummary(mustCurrentUser(c))})
 	})
-	protectedGroup.PUT("/me/password", func(c *gin.Context) {
+	sessionGroup.PUT("/me/password", func(c *gin.Context) {
 		currentUser := mustCurrentUser(c)
 		var request api.ChangePasswordRequest
 		if err := c.ShouldBindJSON(&request); err != nil {
@@ -251,9 +256,7 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		c.JSON(http.StatusOK, api.UserMutationResponse{Item: userToSummary(toUser(updated))})
 	})
 
-	protectedAPIGroup := router.Group("/api/v1")
-	protectedAPIGroup.Use(buildJWTMiddleware(userService))
-	protectedAPIGroup.GET("/memories", func(c *gin.Context) {
+	memoryGroup.GET("", func(c *gin.Context) {
 		var request api.MemoryListRequest
 		if err := c.ShouldBindQuery(&request); err != nil {
 			c.JSON(http.StatusBadRequest, api.MemoryListResponse{Error: err.Error()})
@@ -291,7 +294,7 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		}
 		c.JSON(http.StatusOK, response)
 	})
-	protectedAPIGroup.GET("/memories/:id", func(c *gin.Context) {
+	memoryGroup.GET("/:id", func(c *gin.Context) {
 		id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, api.MemoryDetailResponse{Error: "无效的记忆ID"})
@@ -318,7 +321,39 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		}
 		c.JSON(http.StatusOK, api.MemoryDetailResponse{Item: memoryToDetail(item, creatorNameMap[item.UserID])})
 	})
-	protectedAPIGroup.DELETE("/memories/:id", buildAdminOnlyMiddleware(), func(c *gin.Context) {
+	adminMemoryGroup.PUT("/:id", func(c *gin.Context) {
+		id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, api.MemoryDetailResponse{Error: "无效的记忆ID"})
+			return
+		}
+		var request api.UpdateMemoryRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, api.MemoryDetailResponse{Error: err.Error()})
+			return
+		}
+		item, err := memoryService.Update(c.Request.Context(), id, request)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, models.ErrNotFound) {
+				status = http.StatusNotFound
+			}
+			c.JSON(status, api.MemoryDetailResponse{Error: err.Error()})
+			return
+		}
+		store, err := models.StoreFromContext(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.MemoryDetailResponse{Error: err.Error()})
+			return
+		}
+		creatorNameMap, err := buildCreatorNameMap(store, []string{item.UserID})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.MemoryDetailResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.MemoryDetailResponse{Item: memoryToDetail(item, creatorNameMap[item.UserID])})
+	})
+	adminMemoryGroup.DELETE("/:id", func(c *gin.Context) {
 		id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, api.UserMutationResponse{Error: "无效的记忆ID"})

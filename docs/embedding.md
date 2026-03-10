@@ -8,6 +8,7 @@
 - `embedding.semanticCandidateBatchSize` 默认 `256`
 - `embedding.semanticCandidateMaxCount` 默认 `1024`
 - `embedding.semanticHitFetchLimit` 默认 `64`
+- `embedding.semanticSearchConcurrency` 默认 `4`
 - `embedding.semanticWindow.mode` 默认 `static`，可切换到 `dynamic`
 - `embedding.semanticWindow.baseMaxCount` 默认 `1024`
 - `embedding.semanticWindow.dynamicMinCount` 默认 `256`
@@ -36,6 +37,7 @@
 - `search.cache.queryEmbeddingTtlSeconds`：查询向量缓存时间
 - `search.cache.semanticHitsTtlSeconds`：语义命中缓存时间
 - `search.cache.maxEntries`：缓存容量上限
+- `search.searchStageConcurrency`：搜索编排阶段并发数，控制 error/summary 关键字与语义任务并发度
 
 ## 启用后行为
 
