@@ -15,6 +15,8 @@ import (
 	"github.com/nzlov/hive/internal/api"
 	"github.com/nzlov/hive/internal/config"
 	"github.com/nzlov/hive/internal/models"
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
 )
 
 const embeddingModelMetaKey = "embedding_model"
@@ -27,10 +29,11 @@ var (
 
 // Service 封装记忆相关核心业务，避免 HTTP 层直接感知数据库与嵌入细节。
 type Service struct {
-	config   config.AppConfig
-	provider EmbeddingProvider
-	cacheMu  sync.RWMutex
-	cache    *searchCache
+	config     config.AppConfig
+	provider   EmbeddingProvider
+	cacheMu    sync.RWMutex
+	cache      *searchCache
+	queryGroup singleflight.Group
 }
 
 // NewService 构造记忆服务，确保搜索、写入和重建共享同一套配置和 provider。
@@ -100,29 +103,79 @@ func (s *Service) searchHits(ctx context.Context, projectName string, queries []
 	if err != nil {
 		return SearchResult{}, err
 	}
-	var debugCommands []string
-	var debugCommandsRef *[]string
-	if debug {
-		debugCommands = []string{}
-		debugCommandsRef = &debugCommands
-	}
 	effectiveQueries := s.keywordQueries(queries)
 	matcher := buildQueryMatcher(effectiveQueries)
-	errorKeywordHits, err := s.collectHits(store, "error", projectName, queries, matcher, debugCommandsRef)
-	if err != nil {
+	queryTexts := normalizeEmbeddingQueries(queries)
+	sharedQueryVectors := [][]float64(nil)
+	if s.provider.Enabled() && len(queryTexts) > 0 {
+		queryEmbeddingCacheKey := s.queryEmbeddingsCacheKey(queryTexts)
+		sharedVectors, innerErr := s.queryEmbeddings(queryTexts, queryEmbeddingCacheKey, time.Now().UTC())
+		if innerErr != nil {
+			return SearchResult{}, innerErr
+		}
+		sharedQueryVectors = sharedVectors
+	}
+	var debugCommands []string
+	var errorKeywordHits []Hit
+	var summaryKeywordHits []Hit
+	var errorSemanticHits []Hit
+	var summarySemanticHits []Hit
+	var errorKeywordDebug []string
+	var summaryKeywordDebug []string
+	g := errgroup.Group{}
+	g.SetLimit(s.searchStageConcurrency())
+	g.Go(func() error {
+		var localDebug []string
+		var debugCommandsRef *[]string
+		if debug {
+			localDebug = []string{}
+			debugCommandsRef = &localDebug
+		}
+		hits, innerErr := s.collectHits(store, "error", projectName, queries, matcher, debugCommandsRef)
+		if innerErr != nil {
+			return innerErr
+		}
+		errorKeywordHits = hits
+		errorKeywordDebug = localDebug
+		return nil
+	})
+	g.Go(func() error {
+		var localDebug []string
+		var debugCommandsRef *[]string
+		if debug {
+			localDebug = []string{}
+			debugCommandsRef = &localDebug
+		}
+		hits, innerErr := s.collectHits(store, "summary", projectName, queries, matcher, debugCommandsRef)
+		if innerErr != nil {
+			return innerErr
+		}
+		summaryKeywordHits = hits
+		summaryKeywordDebug = localDebug
+		return nil
+	})
+	g.Go(func() error {
+		hits, innerErr := s.collectSemanticHits(store, "error", projectName, queryTexts, sharedQueryVectors)
+		if innerErr != nil {
+			return innerErr
+		}
+		errorSemanticHits = hits
+		return nil
+	})
+	g.Go(func() error {
+		hits, innerErr := s.collectSemanticHits(store, "summary", projectName, queryTexts, sharedQueryVectors)
+		if innerErr != nil {
+			return innerErr
+		}
+		summarySemanticHits = hits
+		return nil
+	})
+	if err := g.Wait(); err != nil {
 		return SearchResult{}, err
 	}
-	summaryKeywordHits, err := s.collectHits(store, "summary", projectName, queries, matcher, debugCommandsRef)
-	if err != nil {
-		return SearchResult{}, err
-	}
-	errorSemanticHits, err := s.collectSemanticHits(store, "error", projectName, queries)
-	if err != nil {
-		return SearchResult{}, err
-	}
-	summarySemanticHits, err := s.collectSemanticHits(store, "summary", projectName, queries)
-	if err != nil {
-		return SearchResult{}, err
+	if debug {
+		debugCommands = append(debugCommands, errorKeywordDebug...)
+		debugCommands = append(debugCommands, summaryKeywordDebug...)
 	}
 	return SearchResult{
 		Query:         strings.Join(queries, ", "),
@@ -389,11 +442,10 @@ func (s *Service) collectHits(store *models.Store, source string, projectName st
 }
 
 // collectSemanticHits 在关键字检索之外补充语义召回，并继续按项目名隔离结果。
-func (s *Service) collectSemanticHits(store *models.Store, source string, projectName string, queries []string) ([]Hit, error) {
+func (s *Service) collectSemanticHits(store *models.Store, source string, projectName string, queryTexts []string, queryVectors [][]float64) ([]Hit, error) {
 	if !s.provider.Enabled() {
 		return nil, nil
 	}
-	queryTexts := normalizeEmbeddingQueries(queries)
 	if len(queryTexts) == 0 {
 		return nil, nil
 	}
@@ -402,18 +454,14 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 	if hits, ok := s.getCachedSemanticHits(semanticCacheKey, now); ok {
 		return hits, nil
 	}
-	queryEmbeddingCacheKey := s.queryEmbeddingsCacheKey(queryTexts)
-	vectors, ok := s.getCachedQueryEmbeddings(queryEmbeddingCacheKey, now)
-	var err error
-	if !ok {
-		vectors, err = s.provider.EmbedTexts(queryTexts)
-		if err != nil {
+	vectors := cloneEmbeddingVectors(queryVectors)
+	if len(vectors) == 0 {
+		queryEmbeddingCacheKey := s.queryEmbeddingsCacheKey(queryTexts)
+		var err error
+		vectors, err = s.queryEmbeddings(queryTexts, queryEmbeddingCacheKey, now)
+		if err != nil || len(vectors) == 0 {
 			return nil, err
 		}
-		s.setCachedQueryEmbeddings(queryEmbeddingCacheKey, vectors, now)
-	}
-	if err != nil || len(vectors) == 0 {
-		return nil, err
 	}
 	hits, err := s.buildSemanticHitsFromBackend(store, source, projectName, vectors)
 	if err != nil {
@@ -429,6 +477,30 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 	return hits, nil
 }
 
+// queryEmbeddings 优先复用缓存和并发去重结果，避免同一轮搜索重复请求嵌入服务。
+func (s *Service) queryEmbeddings(queryTexts []string, cacheKey string, now time.Time) ([][]float64, error) {
+	if vectors, ok := s.getCachedQueryEmbeddings(cacheKey, now); ok {
+		return vectors, nil
+	}
+	result, err, _ := s.queryGroup.Do(cacheKey, func() (any, error) {
+		if vectors, ok := s.getCachedQueryEmbeddings(cacheKey, time.Now().UTC()); ok {
+			return cloneEmbeddingVectors(vectors), nil
+		}
+		vectors, innerErr := s.provider.EmbedTexts(queryTexts)
+		if innerErr != nil {
+			return nil, innerErr
+		}
+		cacheNow := time.Now().UTC()
+		s.setCachedQueryEmbeddings(cacheKey, vectors, cacheNow)
+		return cloneEmbeddingVectors(vectors), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	vectors, _ := result.([][]float64)
+	return cloneEmbeddingVectors(vectors), nil
+}
+
 // buildSemanticHitsFromBackend 使用数据库向量能力完成检索，避免服务层再做全量候选扫描。
 func (s *Service) buildSemanticHitsFromBackend(store *models.Store, source string, projectName string, queryVectors [][]float64) ([]Hit, error) {
 	hitFetchLimit, err := s.semanticHitFetchLimitForQuery(store, source, projectName)
@@ -436,19 +508,31 @@ func (s *Service) buildSemanticHitsFromBackend(store *models.Store, source strin
 		return nil, err
 	}
 	bestByID := map[int64]float64{}
+	var bestByIDMu sync.Mutex
+	g := errgroup.Group{}
+	g.SetLimit(s.semanticSearchConcurrency())
 	for _, queryVector := range queryVectors {
-		items, err := store.SearchMemoryEmbeddingsByVector(projectName, source, queryVector, hitFetchLimit)
-		if err != nil {
-			return nil, err
-		}
-		for _, item := range items {
-			if item.Similarity <= s.semanticSimilarityThreshold() {
-				continue
+		queryVector := queryVector
+		g.Go(func() error {
+			items, innerErr := store.SearchMemoryEmbeddingsByVector(projectName, source, queryVector, hitFetchLimit)
+			if innerErr != nil {
+				return innerErr
 			}
-			if item.Similarity > bestByID[item.MemoryID] {
-				bestByID[item.MemoryID] = item.Similarity
+			bestByIDMu.Lock()
+			defer bestByIDMu.Unlock()
+			for _, item := range items {
+				if item.Similarity <= s.semanticSimilarityThreshold() {
+					continue
+				}
+				if item.Similarity > bestByID[item.MemoryID] {
+					bestByID[item.MemoryID] = item.Similarity
+				}
 			}
-		}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 	if len(bestByID) == 0 {
 		return nil, nil
@@ -484,97 +568,18 @@ func (s *Service) buildSemanticHitsFromBackend(store *models.Store, source strin
 	return hits, nil
 }
 
-type semanticCandidate struct {
-	MemoryID    int64
-	Timestamp   time.Time
-	Confidence  float64
-	SemanticRaw float64
-}
-
-// collectSemanticCandidates 先从向量表分页读取候选并打分，避免语义搜索阶段提前全量搬运正文。
-func (s *Service) collectSemanticCandidates(store *models.Store, source string, projectName string, vectors [][]float64, now time.Time) ([]semanticCandidate, error) {
-	offset := 0
-	processed := 0
-	hitFetchLimit, err := s.semanticHitFetchLimitForQuery(store, source, projectName)
-	if err != nil {
-		return nil, err
+// cloneEmbeddingVectors 复制二维向量切片，避免缓存与并发调用共享底层数组产生串改。
+func cloneEmbeddingVectors(vectors [][]float64) [][]float64 {
+	if len(vectors) == 0 {
+		return nil
 	}
-	best := make([]semanticCandidate, 0, hitFetchLimit)
-	maxCandidateCount, err := s.semanticCandidateMaxCountForQuery(store, source, projectName)
-	if err != nil {
-		return nil, err
+	cloned := make([][]float64, 0, len(vectors))
+	for _, vector := range vectors {
+		copied := make([]float64, len(vector))
+		copy(copied, vector)
+		cloned = append(cloned, copied)
 	}
-	for processed < maxCandidateCount {
-		remaining := maxCandidateCount - processed
-		batchSize := minInt(s.semanticCandidateBatchSize(), remaining)
-		items, err := store.ListSemanticEmbeddingCandidates(projectName, source, batchSize, offset)
-		if err != nil {
-			return nil, err
-		}
-		if len(items) == 0 {
-			break
-		}
-		for _, item := range items {
-			vector := models.DecodeVector(item.Vector)
-			if len(vector) == 0 {
-				continue
-			}
-			semanticScore := maxSemanticSimilarity(vectors, vector)
-			if semanticScore <= s.semanticSimilarityThreshold() {
-				continue
-			}
-			ts := parseTimestamp(item.Timestamp)
-			ageScore := s.confidenceByAgeForType(source, ts, now)
-			candidate := semanticCandidate{
-				MemoryID:    item.MemoryID,
-				Timestamp:   ts,
-				SemanticRaw: semanticScore,
-				Confidence:  s.blendSemanticConfidence(semanticScore, ageScore),
-			}
-			best = appendSemanticCandidate(best, candidate, hitFetchLimit)
-		}
-		processed += len(items)
-		offset += len(items)
-		if len(items) < batchSize {
-			break
-		}
-	}
-	return best, nil
-}
-
-// buildSemanticHits 仅对高分候选回表读取正文，减少非命中记录在语义搜索中的 IO 和内存占用。
-func (s *Service) buildSemanticHits(store *models.Store, source string, projectName string, candidates []semanticCandidate) ([]Hit, error) {
-	if len(candidates) == 0 {
-		return nil, nil
-	}
-	memoryIDs := make([]int64, 0, len(candidates))
-	candidateByID := make(map[int64]semanticCandidate, len(candidates))
-	for _, item := range candidates {
-		memoryIDs = append(memoryIDs, item.MemoryID)
-		candidateByID[item.MemoryID] = item
-	}
-	memoryItems, err := store.ListMemoryLitesByProjectTypeAndIDs(projectName, source, memoryIDs)
-	if err != nil {
-		return nil, err
-	}
-	hits := make([]Hit, 0, len(memoryItems))
-	for _, item := range memoryItems {
-		candidate, ok := candidateByID[item.ID]
-		if !ok {
-			continue
-		}
-		hits = append(hits, Hit{
-			ID:          item.ID,
-			Source:      source,
-			GitBranch:   item.GitBranch,
-			Title:       item.Title,
-			Tags:        models.DecodeTags(item.Tags),
-			Timestamp:   candidate.Timestamp,
-			Confidence:  candidate.Confidence,
-			FileContent: strings.TrimSpace(item.Content),
-		})
-	}
-	return hits, nil
+	return cloned
 }
 
 // normalizeEmbeddingQueries 统一裁剪查询词，确保嵌入请求只包含用户真实输入。
@@ -597,6 +602,22 @@ func (s *Service) keywordMode() string {
 		return "bm25"
 	}
 	return "like"
+}
+
+// searchStageConcurrency 返回搜索编排阶段的最大并发数，避免同时放大关键字与语义查询压力。
+func (s *Service) searchStageConcurrency() int {
+	if s.config.SearchConfig == nil || s.config.SearchConfig.SearchStageConcurrency < 1 {
+		return 2
+	}
+	return s.config.SearchConfig.SearchStageConcurrency
+}
+
+// semanticSearchConcurrency 返回单次语义检索内部的向量查询并发数，避免数据库连接池被短时打满。
+func (s *Service) semanticSearchConcurrency() int {
+	if s.config.EmbeddingConfig == nil || s.config.EmbeddingConfig.SemanticSearchConcurrency < 1 {
+		return 4
+	}
+	return s.config.EmbeddingConfig.SemanticSearchConcurrency
 }
 
 // keywordQueries 基于配置扩展同义词查询，避免调用方自己维护扩展规则。
@@ -828,32 +849,6 @@ func extractKeywordTerms(queries []string) []string {
 		}
 	}
 	return terms
-}
-
-// maxSemanticSimilarity 使用多查询向量中的最高分，避免任一查询词被拼接模板稀释。
-func maxSemanticSimilarity(queryVectors [][]float64, target []float64) float64 {
-	best := 0.0
-	for _, vector := range queryVectors {
-		if score := CosineSimilarity(vector, target); score > best {
-			best = score
-		}
-	}
-	return best
-}
-
-// appendSemanticCandidate 只保留最高分候选，避免候选数量持续增长挤占搜索时内存。
-func appendSemanticCandidate(items []semanticCandidate, candidate semanticCandidate, limit int) []semanticCandidate {
-	items = append(items, candidate)
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].Confidence == items[j].Confidence {
-			return items[i].Timestamp.After(items[j].Timestamp)
-		}
-		return items[i].Confidence > items[j].Confidence
-	})
-	if len(items) > limit {
-		return items[:limit]
-	}
-	return items
 }
 
 // limitSearchHits 对满分命中不做裁剪，其余命中按分类上限保留，避免强匹配结果被返回上限误伤。

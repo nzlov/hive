@@ -37,6 +37,7 @@ func TestResolveEmbeddingConfigWithoutAPIKey(t *testing.T) {
 			"semanticCandidateBatchSize":  128,
 			"semanticCandidateMaxCount":   512,
 			"semanticHitFetchLimit":       32,
+			"semanticSearchConcurrency":   6,
 		},
 	}
 	got := resolveEmbeddingConfig(payload)
@@ -66,6 +67,9 @@ func TestResolveEmbeddingConfigWithoutAPIKey(t *testing.T) {
 	}
 	if got.SemanticHitFetchLimit != 32 {
 		t.Fatalf("SemanticHitFetchLimit = %d, want 32", got.SemanticHitFetchLimit)
+	}
+	if got.SemanticSearchConcurrency != 6 {
+		t.Fatalf("SemanticSearchConcurrency = %d, want 6", got.SemanticSearchConcurrency)
 	}
 }
 
@@ -106,6 +110,9 @@ func TestResolveEmbeddingConfigUsesSemanticDefaults(t *testing.T) {
 	}
 	if got.SemanticHitFetchLimit != defaultSemanticHitFetchLimit {
 		t.Fatalf("SemanticHitFetchLimit = %d, want %d", got.SemanticHitFetchLimit, defaultSemanticHitFetchLimit)
+	}
+	if got.SemanticSearchConcurrency != defaultSemanticSearchConcurrency {
+		t.Fatalf("SemanticSearchConcurrency = %d, want %d", got.SemanticSearchConcurrency, defaultSemanticSearchConcurrency)
 	}
 	if got.SemanticWindowMode != defaultSemanticWindowMode {
 		t.Fatalf("SemanticWindowMode = %q, want %q", got.SemanticWindowMode, defaultSemanticWindowMode)
@@ -196,6 +203,7 @@ func TestResolveSearchConfig(t *testing.T) {
 		"search": map[string]any{
 			"lowConfidenceErrorHitLimit":   3,
 			"lowConfidenceSummaryHitLimit": 5,
+			"searchStageConcurrency":       3,
 		},
 	}
 	got := resolveSearchConfig(payload)
@@ -207,6 +215,9 @@ func TestResolveSearchConfig(t *testing.T) {
 	}
 	if got.LowConfidenceSummaryHitLimit != 5 {
 		t.Fatalf("LowConfidenceSummaryHitLimit = %d, want 5", got.LowConfidenceSummaryHitLimit)
+	}
+	if got.SearchStageConcurrency != 3 {
+		t.Fatalf("SearchStageConcurrency = %d, want 3", got.SearchStageConcurrency)
 	}
 }
 
@@ -222,6 +233,9 @@ func TestResolveSearchConfigUsesDefaults(t *testing.T) {
 	}
 	if got.LowConfidenceSummaryHitLimit != defaultSearchSummaryHitLimit {
 		t.Fatalf("LowConfidenceSummaryHitLimit = %d, want %d", got.LowConfidenceSummaryHitLimit, defaultSearchSummaryHitLimit)
+	}
+	if got.SearchStageConcurrency != defaultSearchStageConcurrency {
+		t.Fatalf("SearchStageConcurrency = %d, want %d", got.SearchStageConcurrency, defaultSearchStageConcurrency)
 	}
 	if got.KeywordMode != defaultKeywordMode {
 		t.Fatalf("KeywordMode = %q, want %q", got.KeywordMode, defaultKeywordMode)

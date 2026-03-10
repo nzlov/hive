@@ -16,6 +16,7 @@ const (
 	defaultJWTSecret                   = "hive-change-me"
 	defaultSearchErrorHitLimit         = 10
 	defaultSearchSummaryHitLimit       = 10
+	defaultSearchStageConcurrency      = 2
 	defaultSemanticWindowMode          = "static"
 	defaultSemanticWindowDynamicRatio  = 0.2
 	defaultSemanticWindowDynamicMin    = 256
@@ -45,6 +46,7 @@ const (
 	defaultSemanticCandidateBatchSize  = 256
 	defaultSemanticCandidateMaxCount   = 1024
 	defaultSemanticHitFetchLimit       = 64
+	defaultSemanticSearchConcurrency   = 4
 )
 
 // EmbeddingConfig 统一描述嵌入配置，避免不同模块各自解释字段语义。
@@ -57,6 +59,7 @@ type EmbeddingConfig struct {
 	SemanticCandidateBatchSize  int
 	SemanticCandidateMaxCount   int
 	SemanticHitFetchLimit       int
+	SemanticSearchConcurrency   int
 	SemanticWindowMode          string
 	SemanticWindowBaseMaxCount  int
 	SemanticWindowDynamicMin    int
@@ -80,6 +83,7 @@ type DatabaseConfig struct {
 type SearchConfig struct {
 	LowConfidenceErrorHitLimit   int
 	LowConfidenceSummaryHitLimit int
+	SearchStageConcurrency       int
 	KeywordMode                  string
 	KeywordBackend               string
 	KeywordFields                []string
@@ -126,6 +130,7 @@ var (
 	embeddingSemanticCandidateBatchSizeKeys  = "semanticCandidateBatchSize"
 	embeddingSemanticCandidateMaxCountKeys   = "semanticCandidateMaxCount"
 	embeddingSemanticHitFetchLimitKeys       = "semanticHitFetchLimit"
+	embeddingSemanticSearchConcurrencyKeys   = "semanticSearchConcurrency"
 	embeddingSemanticWindowSectionKeys       = "semanticWindow"
 	embeddingDecaySectionKeys                = "decay"
 	embeddingSemanticWindowModeKeys          = "mode"
@@ -148,6 +153,7 @@ var (
 	searchSectionKeys                        = "search"
 	searchLowConfidenceErrorHitLimitKeys     = "lowConfidenceErrorHitLimit"
 	searchLowConfidenceSummaryHitLimitKeys   = "lowConfidenceSummaryHitLimit"
+	searchStageConcurrencyKeys               = "searchStageConcurrency"
 	searchKeywordSectionKeys                 = "keyword"
 	searchKeywordModeKeys                    = "mode"
 	searchKeywordBackendKeys                 = "backend"
@@ -267,6 +273,7 @@ func buildDefaultPayload() (map[string]any, error) {
 			"semanticCandidateBatchSize":  defaultSemanticCandidateBatchSize,
 			"semanticCandidateMaxCount":   defaultSemanticCandidateMaxCount,
 			"semanticHitFetchLimit":       defaultSemanticHitFetchLimit,
+			"semanticSearchConcurrency":   defaultSemanticSearchConcurrency,
 			"semanticWindow": map[string]any{
 				"mode":                defaultSemanticWindowMode,
 				"baseMaxCount":        defaultSemanticCandidateMaxCount,
@@ -292,6 +299,7 @@ func buildDefaultPayload() (map[string]any, error) {
 		"search": map[string]any{
 			"lowConfidenceErrorHitLimit":   defaultSearchErrorHitLimit,
 			"lowConfidenceSummaryHitLimit": defaultSearchSummaryHitLimit,
+			"searchStageConcurrency":       defaultSearchStageConcurrency,
 			"keyword": map[string]any{
 				"mode":    defaultKeywordMode,
 				"backend": defaultKeywordBackend,
@@ -509,13 +517,13 @@ func orderedConfigKeys(parentPath string, obj map[string]any) []string {
 		"server":                       {"baseUrl", "listenAddr"},
 		"auth":                         {"jwtSecret"},
 		"database":                     {"driver", "dsn"},
-		"search":                       {"lowConfidenceErrorHitLimit", "lowConfidenceSummaryHitLimit", "keyword", "fusion", "cache"},
+		"search":                       {"lowConfidenceErrorHitLimit", "lowConfidenceSummaryHitLimit", "searchStageConcurrency", "keyword", "fusion", "cache"},
 		"search.keyword":               {"mode", "backend", "bm25K1", "bm25B", "fields", "fieldWeights", "synonyms"},
 		"search.keyword.fieldWeights":  {"title", "summary", "tags", "content", "project_name"},
 		"search.keyword.synonyms":      {"enabled", "groups"},
 		"search.fusion":                {"enabled", "formula", "keywordWeight", "semanticWeight", "recencyWeight", "minSemanticScore"},
 		"search.cache":                 {"enabled", "queryEmbeddingTtlSeconds", "semanticHitsTtlSeconds", "maxEntries", "statsRefreshIntervalSeconds"},
-		"embedding":                    {"baseUrl", "apiKey", "model", "timeoutSeconds", "semanticSimilarityThreshold", "semanticCandidateBatchSize", "semanticCandidateMaxCount", "semanticHitFetchLimit", "semanticWindow", "decay"},
+		"embedding":                    {"baseUrl", "apiKey", "model", "timeoutSeconds", "semanticSimilarityThreshold", "semanticCandidateBatchSize", "semanticCandidateMaxCount", "semanticHitFetchLimit", "semanticSearchConcurrency", "semanticWindow", "decay"},
 		"embedding.semanticWindow":     {"mode", "baseMaxCount", "dynamicMinCount", "dynamicMaxCount", "dynamicRatio", "referenceCorpusSize"},
 		"embedding.decay":              {"enabled", "ageWeight", "semanticWeight", "halfLifeDays"},
 		"embedding.decay.halfLifeDays": {"summary", "error"},
@@ -556,6 +564,7 @@ func configCommentForPath(path string) string {
 		"search":                                       "搜索层配置",
 		"search.lowConfidenceErrorHitLimit":            "错误记忆中低于 1 分置信度的最大返回条数",
 		"search.lowConfidenceSummaryHitLimit":          "总结记忆中低于 1 分置信度的最大返回条数",
+		"search.searchStageConcurrency":                "搜索编排阶段的最大并发数，控制 error/summary 关键字与语义任务并发度",
 		"search.keyword":                               "关键字检索配置",
 		"search.keyword.mode":                          "关键字模式，like 为子串匹配，bm25 为加权相关性排序",
 		"search.keyword.backend":                       "关键字后端类型预留项，默认 auto",
@@ -593,6 +602,7 @@ func configCommentForPath(path string) string {
 		"embedding.semanticCandidateBatchSize":         "每批扫描的语义候选数量",
 		"embedding.semanticCandidateMaxCount":          "语义扫描候选总上限",
 		"embedding.semanticHitFetchLimit":              "语义高分候选回表上限",
+		"embedding.semanticSearchConcurrency":          "单次语义搜索内多查询向量的数据库检索最大并发数",
 		"embedding.semanticWindow":                     "语义候选窗口策略",
 		"embedding.semanticWindow.mode":                "窗口模式，static 固定窗口，dynamic 按语料规模动态计算",
 		"embedding.semanticWindow.baseMaxCount":        "静态模式窗口上限，动态模式下作为兜底值",
@@ -728,6 +738,10 @@ func resolveEmbeddingConfig(payload map[string]any) *EmbeddingConfig {
 	if semanticHitFetchLimit > semanticCandidateMaxCount {
 		semanticHitFetchLimit = semanticCandidateMaxCount
 	}
+	semanticSearchConcurrency := pickInt(section, embeddingSemanticSearchConcurrencyKeys, defaultSemanticSearchConcurrency)
+	if semanticSearchConcurrency < 1 {
+		semanticSearchConcurrency = defaultSemanticSearchConcurrency
+	}
 	semanticWindow := findSection(section, embeddingSemanticWindowSectionKeys)
 	semanticWindowMode := strings.ToLower(strings.TrimSpace(pickStrings(semanticWindow, embeddingSemanticWindowModeKeys)))
 	if semanticWindowMode == "" {
@@ -790,6 +804,7 @@ func resolveEmbeddingConfig(payload map[string]any) *EmbeddingConfig {
 		SemanticCandidateBatchSize:  semanticCandidateBatchSize,
 		SemanticCandidateMaxCount:   semanticCandidateMaxCount,
 		SemanticHitFetchLimit:       semanticHitFetchLimit,
+		SemanticSearchConcurrency:   semanticSearchConcurrency,
 		SemanticWindowMode:          semanticWindowMode,
 		SemanticWindowBaseMaxCount:  semanticWindowBaseMaxCount,
 		SemanticWindowDynamicMin:    semanticWindowDynamicMin,
@@ -834,6 +849,10 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 	summaryLimit := pickInt(section, searchLowConfidenceSummaryHitLimitKeys, defaultSearchSummaryHitLimit)
 	if summaryLimit < 0 {
 		summaryLimit = 0
+	}
+	searchStageConcurrency := pickInt(section, searchStageConcurrencyKeys, defaultSearchStageConcurrency)
+	if searchStageConcurrency < 1 {
+		searchStageConcurrency = defaultSearchStageConcurrency
 	}
 
 	keywordSection := findSection(section, searchKeywordSectionKeys)
@@ -919,6 +938,7 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 	return &SearchConfig{
 		LowConfidenceErrorHitLimit:   errorLimit,
 		LowConfidenceSummaryHitLimit: summaryLimit,
+		SearchStageConcurrency:       searchStageConcurrency,
 		KeywordMode:                  keywordMode,
 		KeywordBackend:               keywordBackend,
 		KeywordFields:                keywordFields,
