@@ -10,8 +10,8 @@ import (
 
 // VectorSimilarity 描述一次向量查询返回的最小结果结构，避免业务层直接拼接方言 SQL。
 type VectorSimilarity struct {
-	MemoryID   int64   `gorm:"column:memory_id"`
-	Similarity float64 `gorm:"column:similarity"`
+	MemoryID   int64   `gorm:"column:memory_id;comment:命中记忆主键"`
+	Similarity float64 `gorm:"column:similarity;comment:相似度分数"`
 }
 
 // VectorBackend 抽象不同数据库的向量能力，确保业务层可用同一接口完成写入和查询。
@@ -33,6 +33,7 @@ func (noopVectorBackend) SearchSimilar(string, string, []float64, int) ([]Vector
 }
 
 type sqliteVecBackend struct {
+	// db 持有当前 SQLite 连接，便于直接执行 sqlite-vec 相关原生 SQL。
 	db *gorm.DB
 }
 
@@ -75,6 +76,7 @@ func (b sqliteVecBackend) SearchSimilar(projectName, memType string, queryVector
 }
 
 type pgVectorBackend struct {
+	// db 持有当前 PostgreSQL 连接，便于执行 pgvector 扩展查询与校验。
 	db *gorm.DB
 }
 

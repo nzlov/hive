@@ -4,9 +4,9 @@ import "gorm.io/gorm/clause"
 
 // MemoryMetadata 对应 memory_metadata 表，保存跨流程共享的数据库元信息。
 type MemoryMetadata struct {
-	Key       string `gorm:"column:key;primaryKey;type:text"`
-	Value     string `gorm:"column:value;type:text;not null"`
-	UpdatedAt string `gorm:"column:updated_at;type:text;not null"`
+	Key       string `gorm:"column:key;primaryKey;type:text;comment:元数据键名"`
+	Value     string `gorm:"column:value;type:text;not null;comment:元数据值"`
+	UpdatedAt string `gorm:"column:updated_at;type:text;not null;comment:元数据更新时间"`
 }
 
 // TableName 固定表名，避免自动命名破坏现有元数据读取路径。

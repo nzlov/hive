@@ -8,19 +8,19 @@ import (
 
 // MemoryCleanupReview 保存一次清理任务生成的候选快照，避免审核过程因数据变化导致口径漂移。
 type MemoryCleanupReview struct {
-	ID            int64   `gorm:"column:id;primaryKey;autoIncrement"`
-	MemoryID      int64   `gorm:"column:memory_id;not null;index:idx_cleanup_review_lookup,priority:1"`
-	ProjectName   string  `gorm:"column:project_name;type:text;not null;default:'';index:idx_cleanup_review_lookup,priority:4"`
-	Type          string  `gorm:"column:type;type:text;not null;default:'';index:idx_cleanup_review_lookup,priority:3"`
-	Status        string  `gorm:"column:status;type:text;not null;default:'pending';index:idx_cleanup_review_lookup,priority:2"`
-	Score         float64 `gorm:"column:score;not null;default:0"`
-	ReasonJSON    string  `gorm:"column:reason_json;type:text;not null;default:'{}'"`
-	SnapshotJSON  string  `gorm:"column:snapshot_json;type:text;not null;default:'{}'"`
-	RunAt         string  `gorm:"column:run_at;type:text;not null"`
-	ReviewedBy    string  `gorm:"column:reviewed_by;type:text;not null;default:''"`
-	ReviewedAt    string  `gorm:"column:reviewed_at;type:text;not null;default:''"`
-	ExecutionNote string  `gorm:"column:execution_note;type:text;not null;default:''"`
-	CreatedAt     string  `gorm:"column:created_at;type:text;not null"`
+	ID            int64   `gorm:"column:id;primaryKey;autoIncrement;comment:审核记录自增主键"`
+	MemoryID      int64   `gorm:"column:memory_id;not null;index:idx_cleanup_review_lookup,priority:1;comment:待清理记忆主键"`
+	ProjectName   string  `gorm:"column:project_name;type:text;not null;default:'';index:idx_cleanup_review_lookup,priority:4;comment:候选所属项目名"`
+	Type          string  `gorm:"column:type;type:text;not null;default:'';index:idx_cleanup_review_lookup,priority:3;comment:记忆类型"`
+	Status        string  `gorm:"column:status;type:text;not null;default:'pending';index:idx_cleanup_review_lookup,priority:2;comment:审核状态"`
+	Score         float64 `gorm:"column:score;not null;default:0;comment:清理评分"`
+	ReasonJSON    string  `gorm:"column:reason_json;type:text;not null;default:'{}';comment:评分原因快照 JSON"`
+	SnapshotJSON  string  `gorm:"column:snapshot_json;type:text;not null;default:'{}';comment:候选快照 JSON"`
+	RunAt         string  `gorm:"column:run_at;type:text;not null;comment:清理任务轮次时间"`
+	ReviewedBy    string  `gorm:"column:reviewed_by;type:text;not null;default:'';comment:审核人标识"`
+	ReviewedAt    string  `gorm:"column:reviewed_at;type:text;not null;default:'';comment:审核时间"`
+	ExecutionNote string  `gorm:"column:execution_note;type:text;not null;default:'';comment:执行备注"`
+	CreatedAt     string  `gorm:"column:created_at;type:text;not null;comment:审核记录创建时间"`
 }
 
 // TableName 固定表名，避免审核记录跨环境迁移时出现命名不一致。

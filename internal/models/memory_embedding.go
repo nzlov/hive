@@ -10,24 +10,26 @@ import (
 
 // MemoryEmbeddingCandidate 描述语义搜索阶段的最小候选集，避免打分前提前读取完整记忆正文。
 type MemoryEmbeddingCandidate struct {
-	MemoryID  int64  `gorm:"column:memory_id"`
-	Vector    string `gorm:"column:vector"`
-	Timestamp string `gorm:"column:timestamp"`
+	MemoryID  int64  `gorm:"column:memory_id;comment:记忆主键"`
+	Vector    string `gorm:"column:vector;comment:序列化向量内容"`
+	Timestamp string `gorm:"column:timestamp;comment:记忆业务时间戳"`
 }
 
 // MemoryEmbedding 对应 memory_embeddings 表，保存记忆向量和项目隔离维度。
 type MemoryEmbedding struct {
-	MemoryID    int64  `gorm:"column:memory_id;primaryKey"`
-	ProjectName string `gorm:"column:project_name;type:text;not null;default:'';index:idx_memory_embeddings_project_type_timestamp,priority:1"`
-	Type        string `gorm:"column:type;type:text;not null;default:'';check:type IN ('summary','error');index:idx_memory_embeddings_project_type_timestamp,priority:2"`
-	Vector      string `gorm:"column:vector;type:text;not null"`
-	Timestamp   string `gorm:"column:timestamp;type:text;not null;default:'';index:idx_memory_embeddings_project_type_timestamp,priority:3"`
-	UpdatedAt   string `gorm:"column:updated_at;type:text;not null"`
+	MemoryID    int64  `gorm:"column:memory_id;primaryKey;comment:记忆主键"`
+	ProjectName string `gorm:"column:project_name;type:text;not null;default:'';index:idx_memory_embeddings_project_type_timestamp,priority:1;comment:向量所属项目名"`
+	Type        string `gorm:"column:type;type:text;not null;default:'';check:type IN ('summary','error');index:idx_memory_embeddings_project_type_timestamp,priority:2;comment:记忆类型"`
+	Vector      string `gorm:"column:vector;type:text;not null;comment:序列化向量内容"`
+	Timestamp   string `gorm:"column:timestamp;type:text;not null;default:'';index:idx_memory_embeddings_project_type_timestamp,priority:3;comment:记忆业务时间戳"`
+	UpdatedAt   string `gorm:"column:updated_at;type:text;not null;comment:向量更新时间"`
 }
 
 // MemoryEmbeddingSimilarity 描述一次语义检索的最小命中结构，避免上层依赖具体数据库距离表达式。
 type MemoryEmbeddingSimilarity struct {
-	MemoryID   int64
+	// MemoryID 指向命中的记忆主键，便于统一回表读取完整内容。
+	MemoryID int64
+	// Similarity 保存归一化后的相似度分数，便于服务层统一排序和截断。
 	Similarity float64
 }
 

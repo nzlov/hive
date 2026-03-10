@@ -9,13 +9,13 @@ import (
 
 // MemoryProtectedTag 保存清理保护标签，避免仅依赖本地配置导致管理员调整无法在线生效。
 type MemoryProtectedTag struct {
-	ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	Tag         string `gorm:"column:tag;type:text;not null;uniqueIndex"`
-	Enabled     bool   `gorm:"column:enabled;not null;default:true"`
-	Description string `gorm:"column:description;type:text;not null;default:''"`
-	Source      string `gorm:"column:source;type:text;not null;default:'manual'"`
-	CreatedAt   string `gorm:"column:created_at;type:text;not null"`
-	UpdatedAt   string `gorm:"column:updated_at;type:text;not null"`
+	ID          int64  `gorm:"column:id;primaryKey;autoIncrement;comment:保护标签记录自增主键"`
+	Tag         string `gorm:"column:tag;type:text;not null;uniqueIndex;comment:受保护标签名"`
+	Enabled     bool   `gorm:"column:enabled;not null;default:true;comment:规则是否启用"`
+	Description string `gorm:"column:description;type:text;not null;default:'';comment:规则说明"`
+	Source      string `gorm:"column:source;type:text;not null;default:'manual';comment:规则来源"`
+	CreatedAt   string `gorm:"column:created_at;type:text;not null;comment:规则创建时间"`
+	UpdatedAt   string `gorm:"column:updated_at;type:text;not null;comment:规则更新时间"`
 }
 
 // TableName 固定表名，避免保护标签在不同数据库后端下出现命名漂移。

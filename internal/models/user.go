@@ -10,16 +10,16 @@ import (
 
 // User 对应 users 表，集中维护用户持久化字段与唯一索引约束。
 type User struct {
-	ID           int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	UserID       string `gorm:"column:userid;type:text;not null;uniqueIndex:idx_users_userid"`
-	Username     string `gorm:"column:username;type:text;not null;uniqueIndex:idx_users_username"`
-	RealName     string `gorm:"column:real_name;type:text;not null;default:''"`
-	PasswordHash string `gorm:"column:password_hash;type:text;not null"`
-	Salt         string `gorm:"column:salt;type:text;not null"`
-	APIToken     string `gorm:"column:apitoken;type:text;not null;uniqueIndex:idx_users_apitoken"`
-	IsAdmin      bool   `gorm:"column:is_admin;not null;default:false"`
-	CreatedAt    string `gorm:"column:created_at;type:text;not null"`
-	UpdatedAt    string `gorm:"column:updated_at;type:text;not null"`
+	ID           int64  `gorm:"column:id;primaryKey;autoIncrement;comment:用户记录自增主键"`
+	UserID       string `gorm:"column:userid;type:text;not null;uniqueIndex:idx_users_userid;comment:业务用户标识"`
+	Username     string `gorm:"column:username;type:text;not null;uniqueIndex:idx_users_username;comment:登录用户名"`
+	RealName     string `gorm:"column:real_name;type:text;not null;default:'';comment:用户真实姓名"`
+	PasswordHash string `gorm:"column:password_hash;type:text;not null;comment:密码哈希值"`
+	Salt         string `gorm:"column:salt;type:text;not null;comment:密码盐值"`
+	APIToken     string `gorm:"column:apitoken;type:text;not null;uniqueIndex:idx_users_apitoken;comment:接口鉴权令牌"`
+	IsAdmin      bool   `gorm:"column:is_admin;not null;default:false;comment:是否管理员"`
+	CreatedAt    string `gorm:"column:created_at;type:text;not null;comment:用户创建时间"`
+	UpdatedAt    string `gorm:"column:updated_at;type:text;not null;comment:用户更新时间"`
 }
 
 // TableName 固定表名，避免命名策略改变影响既有用户数据。

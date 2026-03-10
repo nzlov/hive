@@ -21,10 +21,14 @@ var ErrNotFound = errors.New("record not found")
 
 // Store 封装数据库连接与事务边界，避免业务层直接接触底层连接对象。
 type Store struct {
-	db          *gorm.DB
-	driver      string
+	// db 保存当前使用的 GORM 连接或事务句柄，统一承载模型层读写操作。
+	db *gorm.DB
+	// driver 记录当前数据库驱动名，便于运行时选择兼容的方言实现。
+	driver string
+	// sourceLabel 保存可读的数据源标识，便于日志和调试时定位来源。
 	sourceLabel string
-	vector      VectorBackend
+	// vector 挂载当前数据库对应的向量能力实现，避免服务层感知后端差异。
+	vector VectorBackend
 }
 
 type storeContextKey struct{}

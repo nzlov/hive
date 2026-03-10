@@ -11,30 +11,30 @@ import (
 
 // Memory 对应 memories 表，集中维护记忆记录的结构和索引声明。
 type Memory struct {
-	ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	UserID      string `gorm:"column:userid;type:text;not null;default:''"`
-	ProjectName string `gorm:"column:project_name;type:text;not null;default:'';index:idx_memories_project_type_timestamp,priority:1"`
-	GitBranch   string `gorm:"column:git_branch;type:text;not null;default:'';index:idx_memories_project_type_timestamp,priority:4"`
-	Type        string `gorm:"column:type;type:text;not null;check:type IN ('summary','error');index:idx_memories_type_timestamp,priority:1;index:idx_memories_project_type_timestamp,priority:2"`
-	Title       string `gorm:"column:title;type:text;not null"`
-	Tags        string `gorm:"column:tags;type:text;not null;default:'[]'"`
-	Summary     string `gorm:"column:summary;type:text;not null;default:''"`
-	Content     string `gorm:"column:content;type:text;not null"`
-	UseCount    int64  `gorm:"column:use_count;not null;default:0"`
-	LastUsedAt  string `gorm:"column:last_used_at;type:text;not null;default:''"`
-	Timestamp   string `gorm:"column:timestamp;type:text;not null;index:idx_memories_type_timestamp,priority:2;index:idx_memories_project_type_timestamp,priority:5"`
-	CreatedAt   string `gorm:"column:created_at;type:text;not null"`
+	ID          int64  `gorm:"column:id;primaryKey;autoIncrement;comment:记忆记录自增主键"`
+	UserID      string `gorm:"column:userid;type:text;not null;default:'';comment:创建记忆的业务用户标识"`
+	ProjectName string `gorm:"column:project_name;type:text;not null;default:'';index:idx_memories_project_type_timestamp,priority:1;comment:记忆所属项目名"`
+	GitBranch   string `gorm:"column:git_branch;type:text;not null;default:'';index:idx_memories_project_type_timestamp,priority:4;comment:记忆写入时所在分支"`
+	Type        string `gorm:"column:type;type:text;not null;check:type IN ('summary','error');index:idx_memories_type_timestamp,priority:1;index:idx_memories_project_type_timestamp,priority:2;comment:记忆类型"`
+	Title       string `gorm:"column:title;type:text;not null;comment:记忆标题"`
+	Tags        string `gorm:"column:tags;type:text;not null;default:'[]';comment:记忆标签 JSON"`
+	Summary     string `gorm:"column:summary;type:text;not null;default:'';comment:记忆摘要"`
+	Content     string `gorm:"column:content;type:text;not null;comment:记忆正文"`
+	UseCount    int64  `gorm:"column:use_count;not null;default:0;comment:记忆命中次数"`
+	LastUsedAt  string `gorm:"column:last_used_at;type:text;not null;default:'';comment:最近命中时间"`
+	Timestamp   string `gorm:"column:timestamp;type:text;not null;index:idx_memories_type_timestamp,priority:2;index:idx_memories_project_type_timestamp,priority:5;comment:记忆业务时间戳"`
+	CreatedAt   string `gorm:"column:created_at;type:text;not null;comment:记忆创建时间"`
 }
 
 // MemoryLite 只保留搜索回表阶段需要的字段，避免候选筛选前过早搬运大正文。
 type MemoryLite struct {
-	ID        int64  `gorm:"column:id"`
-	GitBranch string `gorm:"column:git_branch"`
-	Title     string `gorm:"column:title"`
-	Tags      string `gorm:"column:tags"`
-	Summary   string `gorm:"column:summary"`
-	Content   string `gorm:"column:content"`
-	Timestamp string `gorm:"column:timestamp"`
+	ID        int64  `gorm:"column:id;comment:记忆主键"`
+	GitBranch string `gorm:"column:git_branch;comment:记忆所在分支"`
+	Title     string `gorm:"column:title;comment:记忆标题"`
+	Tags      string `gorm:"column:tags;comment:记忆标签 JSON"`
+	Summary   string `gorm:"column:summary;comment:记忆摘要"`
+	Content   string `gorm:"column:content;comment:记忆正文"`
+	Timestamp string `gorm:"column:timestamp;comment:记忆业务时间戳"`
 }
 
 // TableName 固定表名，避免 GORM 复数化规则影响既有数据表兼容性。
