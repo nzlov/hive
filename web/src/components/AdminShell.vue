@@ -20,6 +20,7 @@
           <nav class="space-y-2">
             <RouterLink class="block rounded-2xl px-4 py-3 text-sm font-medium transition hover:bg-mist" to="/admin">总览</RouterLink>
             <RouterLink class="block rounded-2xl px-4 py-3 text-sm font-medium transition hover:bg-mist" to="/admin/memories">记忆管理</RouterLink>
+            <RouterLink v-if="user.is_admin" class="block rounded-2xl px-4 py-3 text-sm font-medium transition hover:bg-mist" to="/admin/memory-cleanup">清理治理</RouterLink>
             <RouterLink v-if="user.is_admin" class="block rounded-2xl px-4 py-3 text-sm font-medium transition hover:bg-mist" to="/admin/users">用户管理</RouterLink>
           </nav>
           <button class="ghost-btn w-full" type="button" @click="handleLogout">退出登录</button>

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nzlov/hive/internal/api"
@@ -616,4 +617,188 @@ func TestRouterAdminCanUpdateMemory(t *testing.T) {
 	if updateResponse.Item.ProjectName != "router-update" || updateResponse.Item.Type != "summary" {
 		t.Fatalf("更新响应不应改动只读字段: %+v", updateResponse)
 	}
+}
+
+// TestRouterProtectedTagCRUD 验证管理员可通过接口维护保护标签，避免白名单只能通过改配置文件管理。
+func TestRouterProtectedTagCRUD(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	_, password, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+	token := loginAsAdmin(t, router, password)
+
+	createBody := bytes.NewReader([]byte(`{"tag":"核心故障","description":"长期保留","enabled":true}`))
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/memories/protected-tags", createBody)
+	createRequest.Header.Set("Content-Type", "application/json")
+	createRequest.Header.Set("Authorization", "Bearer "+token)
+	createRecorder := httptest.NewRecorder()
+	router.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusOK {
+		t.Fatalf("创建保护标签失败: status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var createResponse api.ProtectedTagMutationResponse
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &createResponse); err != nil {
+		t.Fatalf("解析创建保护标签响应失败: %v", err)
+	}
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/admin/memories/protected-tags", nil)
+	listRequest.Header.Set("Authorization", "Bearer "+token)
+	listRecorder := httptest.NewRecorder()
+	router.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("读取保护标签失败: status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var listResponse api.ProtectedTagListResponse
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &listResponse); err != nil {
+		t.Fatalf("解析保护标签列表失败: %v", err)
+	}
+	if len(listResponse.Items) != 1 || listResponse.Items[0].Tag != "核心故障" {
+		t.Fatalf("保护标签列表异常: %+v", listResponse)
+	}
+
+	updateBody := bytes.NewReader([]byte(`{"tag":"架构决策","description":"改名后仍启用","enabled":true}`))
+	updateRequest := httptest.NewRequest(http.MethodPut, "/api/v1/admin/memories/protected-tags/"+strconv.FormatInt(createResponse.Item.ID, 10), updateBody)
+	updateRequest.Header.Set("Content-Type", "application/json")
+	updateRequest.Header.Set("Authorization", "Bearer "+token)
+	updateRecorder := httptest.NewRecorder()
+	router.ServeHTTP(updateRecorder, updateRequest)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("更新保护标签失败: status=%d body=%s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/memories/protected-tags/"+strconv.FormatInt(createResponse.Item.ID, 10), nil)
+	deleteRequest.Header.Set("Authorization", "Bearer "+token)
+	deleteRecorder := httptest.NewRecorder()
+	router.ServeHTTP(deleteRecorder, deleteRequest)
+	if deleteRecorder.Code != http.StatusOK {
+		t.Fatalf("删除保护标签失败: status=%d body=%s", deleteRecorder.Code, deleteRecorder.Body.String())
+	}
+}
+
+// TestRouterCleanupReviewsRunAndList 验证管理员可触发候选生成并查看审核列表，避免治理页缺少真实数据入口。
+func TestRouterCleanupReviewsRunAndList(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret", ScheduleConfig: &config.ScheduleConfig{MemoryCleanup: config.MemoryCleanupScheduleConfig{
+		Mode:       "review",
+		ReviewTopN: 20,
+		Summary:    config.MemoryCleanupPolicyConfig{BeforeDays: 1, BatchSize: 10, MinRemaining: 0, MinRemainingPerProject: 0, ScoreThreshold: 0, Weights: config.MemoryCleanupWeightsConfig{Age: 0.3, UseCount: 0.35, LastUsed: 0.25, ProjectPressure: 0.1}},
+		Error:      config.MemoryCleanupPolicyConfig{BeforeDays: 1, BatchSize: 10, MinRemaining: 0, MinRemainingPerProject: 0, ScoreThreshold: 0, Weights: config.MemoryCleanupWeightsConfig{Age: 0.2, UseCount: 0.25, LastUsed: 0.35, ProjectPressure: 0.2}},
+	}}})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	_, password, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	now := time.Now().UTC().AddDate(0, 0, -7)
+	if _, err := store.CreateMemories([]models.Memory{{UserID: "admin", ProjectName: "cleanup-route", GitBranch: "main", Type: "summary", Title: "清理候选", Tags: models.EncodeTags([]string{"普通"}), Summary: "待清理", Content: "内容", Timestamp: now.Format("20060102150405"), CreatedAt: now.Format(time.RFC3339Nano)}}); err != nil {
+		t.Fatalf("写入测试候选失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+	token := loginAsAdmin(t, router, password)
+
+	runRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/memories/cleanup-reviews/run", nil)
+	runRequest.Header.Set("Authorization", "Bearer "+token)
+	runRecorder := httptest.NewRecorder()
+	router.ServeHTTP(runRecorder, runRequest)
+	if runRecorder.Code != http.StatusOK {
+		t.Fatalf("生成审核候选失败: status=%d body=%s", runRecorder.Code, runRecorder.Body.String())
+	}
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/admin/memories/cleanup-reviews?page=1&page_size=10&type=summary", nil)
+	listRequest.Header.Set("Authorization", "Bearer "+token)
+	listRecorder := httptest.NewRecorder()
+	router.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("读取审核列表失败: status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var listResponse api.CleanupReviewListResponse
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &listResponse); err != nil {
+		t.Fatalf("解析审核列表失败: %v", err)
+	}
+	if len(listResponse.Items) != 1 || listResponse.Items[0].Snapshot["title"] != "清理候选" {
+		t.Fatalf("审核列表内容异常: %+v", listResponse)
+	}
+}
+
+// TestRouterCleanupExecuteOnlySelected 验证执行接口只会处理管理员勾选且已批准的审核记录。
+func TestRouterCleanupExecuteOnlySelected(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	_, password, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	now := time.Now().UTC().AddDate(0, 0, -7)
+	items, err := store.CreateMemories([]models.Memory{
+		{UserID: "admin", ProjectName: "cleanup-route", GitBranch: "main", Type: "summary", Title: "执行删除", Tags: models.EncodeTags([]string{"普通"}), Summary: "删除", Content: "内容", Timestamp: now.Format("20060102150405"), CreatedAt: now.Format(time.RFC3339Nano)},
+		{UserID: "admin", ProjectName: "cleanup-route", GitBranch: "main", Type: "summary", Title: "保留记录", Tags: models.EncodeTags([]string{"普通"}), Summary: "保留", Content: "内容", Timestamp: now.Add(-time.Hour).Format("20060102150405"), CreatedAt: now.Add(-time.Hour).Format(time.RFC3339Nano)},
+	})
+	if err != nil {
+		t.Fatalf("写入测试记忆失败: %v", err)
+	}
+	runAt := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := store.ReplacePendingCleanupReviews(runAt, "summary", []models.MemoryCleanupReview{{MemoryID: items[0].ID, ProjectName: items[0].ProjectName, Type: "summary", Status: "pending", Score: 0.9, RunAt: runAt, CreatedAt: runAt}}); err != nil {
+		t.Fatalf("写入审核记录A失败: %v", err)
+	}
+	if err := store.ReplacePendingCleanupReviews(runAt+"-b", "summary", []models.MemoryCleanupReview{{MemoryID: items[1].ID, ProjectName: items[1].ProjectName, Type: "summary", Status: "pending", Score: 0.8, RunAt: runAt + "-b", CreatedAt: runAt}}); err != nil {
+		t.Fatalf("写入审核记录B失败: %v", err)
+	}
+	reviews, total, err := store.ListCleanupReviews("pending", "summary", "", 1, 10)
+	if err != nil || total != 2 {
+		t.Fatalf("读取审核记录失败: err=%v total=%d items=%+v", err, total, reviews)
+	}
+	selectedID := reviews[0].ID
+	if reviews[0].MemoryID != items[0].ID {
+		selectedID = reviews[1].ID
+	}
+	if err := service.ApproveCleanupReviews(ctx, []int64{selectedID}, "admin"); err != nil {
+		t.Fatalf("批准审核记录失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+	token := loginAsAdmin(t, router, password)
+
+	executeBody := bytes.NewReader([]byte(`{"ids":[` + strconv.FormatInt(selectedID, 10) + `]}`))
+	executeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/memories/cleanup-reviews/execute", executeBody)
+	executeRequest.Header.Set("Content-Type", "application/json")
+	executeRequest.Header.Set("Authorization", "Bearer "+token)
+	executeRecorder := httptest.NewRecorder()
+	router.ServeHTTP(executeRecorder, executeRequest)
+	if executeRecorder.Code != http.StatusOK {
+		t.Fatalf("执行审核记录失败: status=%d body=%s", executeRecorder.Code, executeRecorder.Body.String())
+	}
+	remaining, err := store.ListAllMemories()
+	if err != nil {
+		t.Fatalf("读取剩余记忆失败: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].Title != "保留记录" {
+		t.Fatalf("执行接口不应删除未勾选记录: %+v", remaining)
+	}
+}
+
+func loginAsAdmin(t *testing.T, router *gin.Engine, password string) string {
+	t.Helper()
+	loginBody := bytes.NewReader([]byte(`{"username":"admin","password":"` + password + `"}`))
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/users/auth/login", loginBody)
+	loginRequest.Header.Set("Content-Type", "application/json")
+	loginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(loginRecorder, loginRequest)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("管理员登录失败: status=%d body=%s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	var loginResponse api.LoginResponse
+	if err := json.Unmarshal(loginRecorder.Body.Bytes(), &loginResponse); err != nil {
+		t.Fatalf("解析管理员登录响应失败: %v", err)
+	}
+	return loginResponse.Token
 }

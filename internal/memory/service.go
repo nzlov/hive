@@ -49,6 +49,9 @@ func (s *Service) Search(ctx context.Context, projectName string, queries []stri
 	}
 	rawResult.ErrorHits = s.limitSearchHits(rawResult.ErrorHits, s.lowConfidenceErrorHitLimit())
 	rawResult.SummaryHits = s.limitSearchHits(rawResult.SummaryHits, s.lowConfidenceSummaryHitLimit())
+	if err := s.recordSearchUsage(ctx, rawResult); err != nil {
+		return SearchResult{}, err
+	}
 	return rawResult, nil
 }
 

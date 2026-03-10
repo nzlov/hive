@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/nzlov/hive/internal/models"
@@ -89,4 +90,38 @@ type CacheStatsSnapshot struct {
 	SemanticHitsEvictCount   uint64
 	EstimatedMemoryBytes     int64
 	HitRate                  float64
+}
+
+// CleanupRunResult 描述一次清理候选生成结果，便于 cron 日志和管理端提示复用同一摘要。
+type CleanupRunResult struct {
+	RunAt                 string
+	Mode                  string
+	SummaryCandidateCount int
+	ErrorCandidateCount   int
+	Message               string
+}
+
+// CleanupExecuteResult 描述一次审核执行结果，避免管理端只能从字符串里反推执行数量。
+type CleanupExecuteResult struct {
+	ExecutedReviewCount int
+	ExecutedMemoryCount int
+	Message             string
+}
+
+// CleanupScoreDetail 保存清理评分拆解明细，便于后台解释候选为何进入待审核队列。
+type CleanupScoreDetail struct {
+	AgeDays          int                `json:"age_days"`
+	UseCount         int64              `json:"use_count"`
+	LastUsedDays     int                `json:"last_used_days"`
+	ProjectName      string             `json:"project_name"`
+	ProjectTypeCount int64              `json:"project_type_count"`
+	ProtectedTagHit  bool               `json:"protected_tag_hit"`
+	Total            float64            `json:"total"`
+	SubScores        map[string]float64 `json:"sub_scores"`
+}
+
+// ToJSON 把评分详情序列化为稳定 JSON，避免审核表直接依赖 map 的默认字符串格式。
+func (d CleanupScoreDetail) ToJSON() string {
+	data, _ := json.Marshal(d)
+	return string(data)
 }

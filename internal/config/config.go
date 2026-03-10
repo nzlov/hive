@@ -11,43 +11,66 @@ import (
 )
 
 const (
-	defaultServerBaseURL               = "http://127.0.0.1:8080"
-	defaultServerListenAddr            = ":8080"
-	defaultJWTSecret                   = "hive-change-me"
-	defaultSearchErrorHitLimit         = 10
-	defaultSearchSummaryHitLimit       = 10
-	defaultSearchStageConcurrency      = 2
-	defaultSemanticWindowMode          = "static"
-	defaultSemanticWindowDynamicRatio  = 0.2
-	defaultSemanticWindowDynamicMin    = 256
-	defaultSemanticWindowDynamicMax    = 20000
-	defaultSemanticWindowReferenceSize = 10000
-	defaultDecayEnabled                = true
-	defaultDecayAgeWeight              = 0.5
-	defaultDecaySemanticWeight         = 0.5
-	defaultDecaySummaryHalfLifeDays    = 30
-	defaultDecayErrorHalfLifeDays      = 90
-	defaultKeywordMode                 = "like"
-	defaultKeywordBackend              = "auto"
-	defaultKeywordSynonymsEnabled      = true
-	defaultKeywordBM25K1               = 1.2
-	defaultKeywordBM25B                = 0.75
-	defaultFusionEnabled               = true
-	defaultFusionFormula               = "coverage_discount"
-	defaultFusionKeywordWeight         = 0.55
-	defaultFusionSemanticWeight        = 0.45
-	defaultFusionRecencyWeight         = 0.10
-	defaultFusionCoverageDiscountBase  = 0.85
-	defaultCacheEnabled                = false
-	defaultCacheQueryEmbeddingTTL      = 600
-	defaultCacheSemanticHitsTTL        = 120
-	defaultCacheMaxEntries             = 5000
-	defaultCacheStatsRefreshInterval   = 10
-	defaultSemanticSimilarityThreshold = 0.15
-	defaultSemanticCandidateBatchSize  = 256
-	defaultSemanticCandidateMaxCount   = 1024
-	defaultSemanticHitFetchLimit       = 64
-	defaultSemanticSearchConcurrency   = 4
+	defaultServerBaseURL                = "http://127.0.0.1:8080"
+	defaultServerListenAddr             = ":8080"
+	defaultJWTSecret                    = "hive-change-me"
+	defaultSearchErrorHitLimit          = 10
+	defaultSearchSummaryHitLimit        = 10
+	defaultSearchStageConcurrency       = 2
+	defaultSemanticWindowMode           = "static"
+	defaultSemanticWindowDynamicRatio   = 0.2
+	defaultSemanticWindowDynamicMin     = 256
+	defaultSemanticWindowDynamicMax     = 20000
+	defaultSemanticWindowReferenceSize  = 10000
+	defaultDecayEnabled                 = true
+	defaultDecayAgeWeight               = 0.5
+	defaultDecaySemanticWeight          = 0.5
+	defaultDecaySummaryHalfLifeDays     = 30
+	defaultDecayErrorHalfLifeDays       = 90
+	defaultKeywordMode                  = "like"
+	defaultKeywordBackend               = "auto"
+	defaultKeywordSynonymsEnabled       = true
+	defaultKeywordBM25K1                = 1.2
+	defaultKeywordBM25B                 = 0.75
+	defaultFusionEnabled                = true
+	defaultFusionFormula                = "coverage_discount"
+	defaultFusionKeywordWeight          = 0.55
+	defaultFusionSemanticWeight         = 0.45
+	defaultFusionRecencyWeight          = 0.10
+	defaultFusionCoverageDiscountBase   = 0.85
+	defaultCacheEnabled                 = false
+	defaultCacheQueryEmbeddingTTL       = 600
+	defaultCacheSemanticHitsTTL         = 120
+	defaultCacheMaxEntries              = 5000
+	defaultCacheStatsRefreshInterval    = 10
+	defaultCleanupEnabled               = false
+	defaultCleanupSpec                  = "0 3 * * *"
+	defaultCleanupMode                  = "review"
+	defaultCleanupDryRun                = false
+	defaultCleanupReviewTopN            = 200
+	defaultCleanupSummaryBeforeDays     = 30
+	defaultCleanupSummaryBatchSize      = 100
+	defaultCleanupSummaryMinRemaining   = 500
+	defaultCleanupSummaryProjectKeep    = 20
+	defaultCleanupSummaryScoreThreshold = 0.65
+	defaultCleanupErrorBeforeDays       = 120
+	defaultCleanupErrorBatchSize        = 30
+	defaultCleanupErrorMinRemaining     = 1000
+	defaultCleanupErrorProjectKeep      = 50
+	defaultCleanupErrorScoreThreshold   = 0.80
+	defaultSemanticSimilarityThreshold  = 0.15
+	defaultSemanticCandidateBatchSize   = 256
+	defaultSemanticCandidateMaxCount    = 1024
+	defaultSemanticHitFetchLimit        = 64
+	defaultSemanticSearchConcurrency    = 4
+	defaultCleanupAgeWeight             = 0.3
+	defaultCleanupUseCountWeight        = 0.35
+	defaultCleanupLastUsedWeight        = 0.25
+	defaultCleanupProjectPressureWeight = 0.1
+	defaultCleanupErrorAgeWeight        = 0.2
+	defaultCleanupErrorUseCountWeight   = 0.25
+	defaultCleanupErrorLastUsedWeight   = 0.35
+	defaultCleanupErrorProjectWeight    = 0.2
 )
 
 // EmbeddingConfig 统一描述嵌入配置，避免不同模块各自解释字段语义。
@@ -107,6 +130,41 @@ type SearchConfig struct {
 	CacheStatsRefreshInterval    int
 }
 
+// MemoryCleanupWeightsConfig 统一描述记忆清理评分权重，避免不同类型在服务层写死计算比例。
+type MemoryCleanupWeightsConfig struct {
+	Age             float64
+	UseCount        float64
+	LastUsed        float64
+	ProjectPressure float64
+}
+
+// MemoryCleanupPolicyConfig 描述单类记忆的候选年龄、分数阈值和保底约束。
+type MemoryCleanupPolicyConfig struct {
+	BeforeDays             int
+	BatchSize              int
+	MinRemaining           int
+	MinRemainingPerProject int
+	ScoreThreshold         float64
+	Weights                MemoryCleanupWeightsConfig
+}
+
+// MemoryCleanupScheduleConfig 描述定时清理作业配置，便于服务启动后统一注册 cron 任务。
+type MemoryCleanupScheduleConfig struct {
+	Enabled       bool
+	Spec          string
+	Mode          string
+	DryRun        bool
+	ReviewTopN    int
+	ProtectedTags []string
+	Summary       MemoryCleanupPolicyConfig
+	Error         MemoryCleanupPolicyConfig
+}
+
+// ScheduleConfig 描述服务端定时任务配置，避免各个后台任务自行读取零散配置项。
+type ScheduleConfig struct {
+	MemoryCleanup MemoryCleanupScheduleConfig
+}
+
 // AppConfig 统一描述脚本与服务端共用配置，降低多入口行为漂移风险。
 type AppConfig struct {
 	ConfigPath       string
@@ -117,6 +175,7 @@ type AppConfig struct {
 	DatabaseConfig   *DatabaseConfig
 	EmbeddingConfig  *EmbeddingConfig
 	SearchConfig     *SearchConfig
+	ScheduleConfig   *ScheduleConfig
 }
 
 var (
@@ -152,6 +211,26 @@ var (
 	databaseSectionKeys                      = "database"
 	databaseDriverKeys                       = "driver"
 	databaseDSNKeys                          = "dsn"
+	scheduleSectionKeys                      = "schedule"
+	scheduleMemoryCleanupSectionKeys         = "memoryCleanup"
+	scheduleCleanupEnabledKeys               = "enabled"
+	scheduleCleanupSpecKeys                  = "spec"
+	scheduleCleanupModeKeys                  = "mode"
+	scheduleCleanupDryRunKeys                = "dryRun"
+	scheduleCleanupReviewTopNKeys            = "reviewTopN"
+	scheduleCleanupProtectedTagsKeys         = "protectedTags"
+	scheduleCleanupSummaryKeys               = "summary"
+	scheduleCleanupErrorKeys                 = "error"
+	scheduleCleanupBeforeDaysKeys            = "beforeDays"
+	scheduleCleanupBatchSizeKeys             = "batchSize"
+	scheduleCleanupMinRemainingKeys          = "minRemaining"
+	scheduleCleanupMinRemainingProjectKeys   = "minRemainingPerProject"
+	scheduleCleanupScoreThresholdKeys        = "scoreThreshold"
+	scheduleCleanupWeightsKeys               = "weights"
+	scheduleCleanupWeightAgeKeys             = "age"
+	scheduleCleanupWeightUseCountKeys        = "useCount"
+	scheduleCleanupWeightLastUsedKeys        = "lastUsed"
+	scheduleCleanupWeightProjectPressureKeys = "projectPressure"
 	searchSectionKeys                        = "search"
 	searchLowConfidenceErrorHitLimitKeys     = "lowConfidenceErrorHitLimit"
 	searchLowConfidenceSummaryHitLimitKeys   = "lowConfidenceSummaryHitLimit"
@@ -206,6 +285,7 @@ func Load() (AppConfig, error) {
 	}
 	config.EmbeddingConfig = resolveEmbeddingConfig(payload)
 	config.SearchConfig = resolveSearchConfig(payload)
+	config.ScheduleConfig = resolveScheduleConfig(payload)
 	return config, nil
 }
 
@@ -298,6 +378,45 @@ func buildDefaultPayload() (map[string]any, error) {
 		"database": map[string]any{
 			"driver": "sqlite",
 			"dsn":    "",
+		},
+		"schedule": map[string]any{
+			"memoryCleanup": map[string]any{
+				"enabled":    defaultCleanupEnabled,
+				"spec":       defaultCleanupSpec,
+				"mode":       defaultCleanupMode,
+				"dryRun":     defaultCleanupDryRun,
+				"reviewTopN": defaultCleanupReviewTopN,
+				"protectedTags": []string{
+					"核心故障",
+					"架构决策",
+				},
+				"summary": map[string]any{
+					"beforeDays":             defaultCleanupSummaryBeforeDays,
+					"batchSize":              defaultCleanupSummaryBatchSize,
+					"minRemaining":           defaultCleanupSummaryMinRemaining,
+					"minRemainingPerProject": defaultCleanupSummaryProjectKeep,
+					"scoreThreshold":         defaultCleanupSummaryScoreThreshold,
+					"weights": map[string]any{
+						"age":             defaultCleanupAgeWeight,
+						"useCount":        defaultCleanupUseCountWeight,
+						"lastUsed":        defaultCleanupLastUsedWeight,
+						"projectPressure": defaultCleanupProjectPressureWeight,
+					},
+				},
+				"error": map[string]any{
+					"beforeDays":             defaultCleanupErrorBeforeDays,
+					"batchSize":              defaultCleanupErrorBatchSize,
+					"minRemaining":           defaultCleanupErrorMinRemaining,
+					"minRemainingPerProject": defaultCleanupErrorProjectKeep,
+					"scoreThreshold":         defaultCleanupErrorScoreThreshold,
+					"weights": map[string]any{
+						"age":             defaultCleanupErrorAgeWeight,
+						"useCount":        defaultCleanupErrorUseCountWeight,
+						"lastUsed":        defaultCleanupErrorLastUsedWeight,
+						"projectPressure": defaultCleanupErrorProjectWeight,
+					},
+				},
+			},
 		},
 		"search": map[string]any{
 			"lowConfidenceErrorHitLimit":   defaultSearchErrorHitLimit,
@@ -517,20 +636,26 @@ func renderConfigJSONCObject(obj map[string]any, parentPath string, indentLevel 
 // orderedConfigKeys 按固定顺序输出键，避免配置文件每次自动补齐后顺序漂移影响可读性。
 func orderedConfigKeys(parentPath string, obj map[string]any) []string {
 	preferred := map[string][]string{
-		"":                             {"server", "auth", "database", "search", "embedding"},
-		"server":                       {"baseUrl", "listenAddr"},
-		"auth":                         {"jwtSecret"},
-		"database":                     {"driver", "dsn"},
-		"search":                       {"lowConfidenceErrorHitLimit", "lowConfidenceSummaryHitLimit", "searchStageConcurrency", "keyword", "fusion", "cache"},
-		"search.keyword":               {"mode", "backend", "bm25K1", "bm25B", "fields", "fieldWeights", "synonyms"},
-		"search.keyword.fieldWeights":  {"title", "summary", "tags", "content", "project_name"},
-		"search.keyword.synonyms":      {"enabled", "groups"},
-		"search.fusion":                {"enabled", "formula", "keywordWeight", "semanticWeight", "recencyWeight", "minSemanticScore"},
-		"search.cache":                 {"enabled", "queryEmbeddingTtlSeconds", "semanticHitsTtlSeconds", "maxEntries", "statsRefreshIntervalSeconds"},
-		"embedding":                    {"baseUrl", "apiKey", "model", "timeoutSeconds", "semanticSimilarityThreshold", "semanticCandidateBatchSize", "semanticCandidateMaxCount", "semanticHitFetchLimit", "semanticSearchConcurrency", "semanticWindow", "decay"},
-		"embedding.semanticWindow":     {"mode", "baseMaxCount", "dynamicMinCount", "dynamicMaxCount", "dynamicRatio", "referenceCorpusSize"},
-		"embedding.decay":              {"enabled", "ageWeight", "semanticWeight", "halfLifeDays"},
-		"embedding.decay.halfLifeDays": {"summary", "error"},
+		"":                                       {"server", "auth", "database", "schedule", "search", "embedding"},
+		"server":                                 {"baseUrl", "listenAddr"},
+		"auth":                                   {"jwtSecret"},
+		"database":                               {"driver", "dsn"},
+		"schedule":                               {"memoryCleanup"},
+		"schedule.memoryCleanup":                 {"enabled", "spec", "mode", "dryRun", "reviewTopN", "protectedTags", "summary", "error"},
+		"schedule.memoryCleanup.summary":         {"beforeDays", "batchSize", "minRemaining", "minRemainingPerProject", "scoreThreshold", "weights"},
+		"schedule.memoryCleanup.error":           {"beforeDays", "batchSize", "minRemaining", "minRemainingPerProject", "scoreThreshold", "weights"},
+		"schedule.memoryCleanup.summary.weights": {"age", "useCount", "lastUsed", "projectPressure"},
+		"schedule.memoryCleanup.error.weights":   {"age", "useCount", "lastUsed", "projectPressure"},
+		"search":                                 {"lowConfidenceErrorHitLimit", "lowConfidenceSummaryHitLimit", "searchStageConcurrency", "keyword", "fusion", "cache"},
+		"search.keyword":                         {"mode", "backend", "bm25K1", "bm25B", "fields", "fieldWeights", "synonyms"},
+		"search.keyword.fieldWeights":            {"title", "summary", "tags", "content", "project_name"},
+		"search.keyword.synonyms":                {"enabled", "groups"},
+		"search.fusion":                          {"enabled", "formula", "keywordWeight", "semanticWeight", "recencyWeight", "minSemanticScore"},
+		"search.cache":                           {"enabled", "queryEmbeddingTtlSeconds", "semanticHitsTtlSeconds", "maxEntries", "statsRefreshIntervalSeconds"},
+		"embedding":                              {"baseUrl", "apiKey", "model", "timeoutSeconds", "semanticSimilarityThreshold", "semanticCandidateBatchSize", "semanticCandidateMaxCount", "semanticHitFetchLimit", "semanticSearchConcurrency", "semanticWindow", "decay"},
+		"embedding.semanticWindow":               {"mode", "baseMaxCount", "dynamicMinCount", "dynamicMaxCount", "dynamicRatio", "referenceCorpusSize"},
+		"embedding.decay":                        {"enabled", "ageWeight", "semanticWeight", "halfLifeDays"},
+		"embedding.decay.halfLifeDays":           {"summary", "error"},
 	}
 	ordered := make([]string, 0, len(obj))
 	used := map[string]struct{}{}
@@ -557,14 +682,44 @@ func orderedConfigKeys(parentPath string, obj map[string]any) []string {
 // configCommentForPath 返回配置项说明，确保注释跟随每一项输出而不是集中在文件顶部。
 func configCommentForPath(path string) string {
 	comments := map[string]string{
-		"server":                                       "服务端监听与对外访问配置",
-		"server.baseUrl":                               "服务端对外访问地址，客户端会以此作为 API 入口",
-		"server.listenAddr":                            "服务端本地监听地址",
-		"auth":                                         "鉴权相关配置",
-		"auth.jwtSecret":                               "管理后台 JWT 签名密钥，生产环境应替换",
-		"database":                                     "数据库连接配置",
-		"database.driver":                              "数据库驱动，支持 sqlite/postgres/postgresql",
-		"database.dsn":                                 "数据库连接串，sqlite 为空时使用默认本地文件",
+		"server":                                      "服务端监听与对外访问配置",
+		"server.baseUrl":                              "服务端对外访问地址，客户端会以此作为 API 入口",
+		"server.listenAddr":                           "服务端本地监听地址",
+		"auth":                                        "鉴权相关配置",
+		"auth.jwtSecret":                              "管理后台 JWT 签名密钥，生产环境应替换",
+		"database":                                    "数据库连接配置",
+		"database.driver":                             "数据库驱动，支持 sqlite/postgres/postgresql",
+		"database.dsn":                                "数据库连接串，sqlite 为空时使用默认本地文件",
+		"schedule":                                    "服务端定时任务配置",
+		"schedule.memoryCleanup":                      "记忆定时清理配置",
+		"schedule.memoryCleanup.enabled":              "是否启用记忆清理任务",
+		"schedule.memoryCleanup.spec":                 "cron 表达式，使用 5 段格式按天调度",
+		"schedule.memoryCleanup.mode":                 "清理模式，review 为生成待审核清单，auto 为自动执行",
+		"schedule.memoryCleanup.dryRun":               "是否只演练候选生成而不真正写入或删除",
+		"schedule.memoryCleanup.reviewTopN":           "每轮最多生成多少条待审核候选",
+		"schedule.memoryCleanup.protectedTags":        "启动时写入数据库的默认保护标签种子",
+		"schedule.memoryCleanup.summary":              "总结记忆清理策略",
+		"schedule.memoryCleanup.error":                "错误记忆清理策略",
+		"schedule.memoryCleanup.summary.beforeDays":   "总结记忆进入清理候选前至少保留的天数",
+		"schedule.memoryCleanup.summary.batchSize":    "总结记忆单轮最多删除或入审条数",
+		"schedule.memoryCleanup.summary.minRemaining": "总结记忆全局最少保留数量",
+		"schedule.memoryCleanup.summary.minRemainingPerProject":  "每个项目的总结记忆最少保留数量",
+		"schedule.memoryCleanup.summary.scoreThreshold":          "总结记忆进入候选的最低清理分数",
+		"schedule.memoryCleanup.error.beforeDays":                "错误记忆进入清理候选前至少保留的天数",
+		"schedule.memoryCleanup.error.batchSize":                 "错误记忆单轮最多删除或入审条数",
+		"schedule.memoryCleanup.error.minRemaining":              "错误记忆全局最少保留数量",
+		"schedule.memoryCleanup.error.minRemainingPerProject":    "每个项目的错误记忆最少保留数量",
+		"schedule.memoryCleanup.error.scoreThreshold":            "错误记忆进入候选的最低清理分数",
+		"schedule.memoryCleanup.summary.weights":                 "总结记忆清理评分权重",
+		"schedule.memoryCleanup.error.weights":                   "错误记忆清理评分权重",
+		"schedule.memoryCleanup.summary.weights.age":             "年龄因子权重",
+		"schedule.memoryCleanup.summary.weights.useCount":        "使用次数因子权重",
+		"schedule.memoryCleanup.summary.weights.lastUsed":        "最近使用因子权重",
+		"schedule.memoryCleanup.summary.weights.projectPressure": "项目保底压力因子权重",
+		"schedule.memoryCleanup.error.weights.age":               "年龄因子权重",
+		"schedule.memoryCleanup.error.weights.useCount":          "使用次数因子权重",
+		"schedule.memoryCleanup.error.weights.lastUsed":          "最近使用因子权重",
+		"schedule.memoryCleanup.error.weights.projectPressure":   "项目保底压力因子权重",
 		"search":                                       "搜索层配置",
 		"search.lowConfidenceErrorHitLimit":            "错误记忆中低于 1 分置信度的最大返回条数",
 		"search.lowConfidenceSummaryHitLimit":          "总结记忆中低于 1 分置信度的最大返回条数",
@@ -842,6 +997,87 @@ func resolveDatabaseConfig(payload map[string]any) *DatabaseConfig {
 		return nil
 	}
 	return &DatabaseConfig{Driver: driver, DSN: dsn}
+}
+
+// resolveScheduleConfig 统一解析定时任务配置，避免定时清理的 cron、保护标签和评分策略散落在多个调用方。
+func resolveScheduleConfig(payload map[string]any) *ScheduleConfig {
+	section := findSection(findSection(payload, scheduleSectionKeys), scheduleMemoryCleanupSectionKeys)
+	config := MemoryCleanupScheduleConfig{
+		Enabled:       pickBool(section, scheduleCleanupEnabledKeys, defaultCleanupEnabled),
+		Spec:          pickStrings(section, scheduleCleanupSpecKeys),
+		Mode:          strings.ToLower(strings.TrimSpace(pickStrings(section, scheduleCleanupModeKeys))),
+		DryRun:        pickBool(section, scheduleCleanupDryRunKeys, defaultCleanupDryRun),
+		ReviewTopN:    pickInt(section, scheduleCleanupReviewTopNKeys, defaultCleanupReviewTopN),
+		ProtectedTags: pickStringSlice(section, scheduleCleanupProtectedTagsKeys),
+		Summary: resolveMemoryCleanupPolicy(
+			findSection(section, scheduleCleanupSummaryKeys),
+			defaultCleanupSummaryBeforeDays,
+			defaultCleanupSummaryBatchSize,
+			defaultCleanupSummaryMinRemaining,
+			defaultCleanupSummaryProjectKeep,
+			defaultCleanupSummaryScoreThreshold,
+			MemoryCleanupWeightsConfig{Age: defaultCleanupAgeWeight, UseCount: defaultCleanupUseCountWeight, LastUsed: defaultCleanupLastUsedWeight, ProjectPressure: defaultCleanupProjectPressureWeight},
+		),
+		Error: resolveMemoryCleanupPolicy(
+			findSection(section, scheduleCleanupErrorKeys),
+			defaultCleanupErrorBeforeDays,
+			defaultCleanupErrorBatchSize,
+			defaultCleanupErrorMinRemaining,
+			defaultCleanupErrorProjectKeep,
+			defaultCleanupErrorScoreThreshold,
+			MemoryCleanupWeightsConfig{Age: defaultCleanupErrorAgeWeight, UseCount: defaultCleanupErrorUseCountWeight, LastUsed: defaultCleanupErrorLastUsedWeight, ProjectPressure: defaultCleanupErrorProjectWeight},
+		),
+	}
+	if strings.TrimSpace(config.Spec) == "" {
+		config.Spec = defaultCleanupSpec
+	}
+	if config.Mode != "review" && config.Mode != "auto" {
+		config.Mode = defaultCleanupMode
+	}
+	if config.ReviewTopN < 1 {
+		config.ReviewTopN = defaultCleanupReviewTopN
+	}
+	if len(config.ProtectedTags) == 0 {
+		config.ProtectedTags = []string{"核心故障", "架构决策"}
+	}
+	return &ScheduleConfig{MemoryCleanup: config}
+}
+
+// resolveMemoryCleanupPolicy 统一规整单类记忆清理参数，避免 summary 和 error 的默认值与边界校验分叉。
+func resolveMemoryCleanupPolicy(section map[string]any, defaultBeforeDays, defaultBatchSize, defaultMinRemaining, defaultMinRemainingProject int, defaultScore float64, defaultWeights MemoryCleanupWeightsConfig) MemoryCleanupPolicyConfig {
+	weightsSection := findSection(section, scheduleCleanupWeightsKeys)
+	policy := MemoryCleanupPolicyConfig{
+		BeforeDays:             pickInt(section, scheduleCleanupBeforeDaysKeys, defaultBeforeDays),
+		BatchSize:              pickInt(section, scheduleCleanupBatchSizeKeys, defaultBatchSize),
+		MinRemaining:           pickInt(section, scheduleCleanupMinRemainingKeys, defaultMinRemaining),
+		MinRemainingPerProject: pickInt(section, scheduleCleanupMinRemainingProjectKeys, defaultMinRemainingProject),
+		ScoreThreshold:         pickFloat(section, scheduleCleanupScoreThresholdKeys, defaultScore),
+		Weights: MemoryCleanupWeightsConfig{
+			Age:             pickFloat(weightsSection, scheduleCleanupWeightAgeKeys, defaultWeights.Age),
+			UseCount:        pickFloat(weightsSection, scheduleCleanupWeightUseCountKeys, defaultWeights.UseCount),
+			LastUsed:        pickFloat(weightsSection, scheduleCleanupWeightLastUsedKeys, defaultWeights.LastUsed),
+			ProjectPressure: pickFloat(weightsSection, scheduleCleanupWeightProjectPressureKeys, defaultWeights.ProjectPressure),
+		},
+	}
+	if policy.BeforeDays < 1 {
+		policy.BeforeDays = defaultBeforeDays
+	}
+	if policy.BatchSize < 1 {
+		policy.BatchSize = defaultBatchSize
+	}
+	if policy.MinRemaining < 0 {
+		policy.MinRemaining = 0
+	}
+	if policy.MinRemainingPerProject < 0 {
+		policy.MinRemainingPerProject = 0
+	}
+	if policy.ScoreThreshold < 0 {
+		policy.ScoreThreshold = 0
+	}
+	if policy.ScoreThreshold > 1 {
+		policy.ScoreThreshold = 1
+	}
+	return policy
 }
 
 // resolveSearchConfig 统一解析搜索返回上限，确保所有入口都遵循同一结果裁剪策略。

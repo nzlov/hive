@@ -26,6 +26,86 @@
 
 返回用户列表。
 
+## 管理端记忆治理接口
+
+- 路由前缀：`/api/v1/admin/memories`
+- 请求头：`Authorization: Bearer <jwt>`
+- 权限：仅管理员
+
+### `GET /api/v1/admin/memories/protected-tags`
+
+返回当前数据库中的保护标签列表。
+
+### `POST /api/v1/admin/memories/protected-tags`
+
+```json
+{
+  "tag": "核心故障",
+  "description": "命中后永不进入清理候选",
+  "enabled": true
+}
+```
+
+### `PUT /api/v1/admin/memories/protected-tags/:id`
+
+```json
+{
+  "tag": "架构决策",
+  "description": "长期保留的设计决策",
+  "enabled": true
+}
+```
+
+### `DELETE /api/v1/admin/memories/protected-tags/:id`
+
+删除指定保护标签。
+
+### `GET /api/v1/admin/memories/cleanup-reviews`
+
+支持查询参数：
+
+- `page`
+- `page_size`
+- `status`
+- `type`
+- `project_name`
+
+返回待审核、已批准、已拒绝或已执行的清理记录。
+
+### `POST /api/v1/admin/memories/cleanup-reviews/run`
+
+手动生成一轮待审核候选。
+
+### `POST /api/v1/admin/memories/cleanup-reviews/approve`
+
+```json
+{
+  "ids": [1, 2, 3]
+}
+```
+
+批量批准候选。
+
+### `POST /api/v1/admin/memories/cleanup-reviews/reject`
+
+```json
+{
+  "ids": [4, 5]
+}
+```
+
+批量拒绝候选。
+
+### `POST /api/v1/admin/memories/cleanup-reviews/execute`
+
+```json
+{
+  "ids": [1, 2]
+}
+```
+
+只执行当前请求里勾选且已经处于 `approved` 状态的审核记录。
+
 ### `POST /api/v1/users`
 
 ```json
@@ -76,6 +156,8 @@
 - `error_hits`
 - `summary_hits`
 - `markdown`
+
+搜索结果真正返回命中时，服务端会同步更新对应记忆的 `use_count` 和 `last_used_at`。
 
 ### `POST /tokenapi/v1/memories/write`
 

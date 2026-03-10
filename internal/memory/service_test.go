@@ -1108,3 +1108,160 @@ func TestServiceWriteInvalidatesSearchCache(t *testing.T) {
 		t.Fatalf("写入后应失效缓存并返回新结果: %+v", second.SummaryHits)
 	}
 }
+
+// TestServiceSearchIncrementsUseCount 验证搜索最终返回结果后会累计使用次数并刷新最近使用时间。
+func TestServiceSearchIncrementsUseCount(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
+	ctx := testContextWithStore(t, service.config)
+	if _, err := service.Write(ctx, "usage-project", "feature/usage", "tester", []api.MemoryWriteItem{{
+		Type:    "summary",
+		Title:   "使用计数测试",
+		Tags:    []string{"统计"},
+		Summary: "验证搜索会累计使用次数。",
+		Context: "## Summary\n\n- 详情: 使用计数测试。",
+	}}); err != nil {
+		t.Fatalf("写入测试记忆失败: %v", err)
+	}
+	if _, err := service.Search(ctx, "usage-project", []string{"使用计数测试"}, false); err != nil {
+		t.Fatalf("首次搜索失败: %v", err)
+	}
+	if _, err := service.Search(ctx, "usage-project", []string{"使用计数测试"}, false); err != nil {
+		t.Fatalf("第二次搜索失败: %v", err)
+	}
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		t.Fatalf("读取模型存储失败: %v", err)
+	}
+	items, err := store.ListAllMemories()
+	if err != nil || len(items) != 1 {
+		t.Fatalf("读取记忆失败: err=%v items=%+v", err, items)
+	}
+	if items[0].UseCount != 2 {
+		t.Fatalf("UseCount = %d, want 2", items[0].UseCount)
+	}
+	if strings.TrimSpace(items[0].LastUsedAt) == "" {
+		t.Fatalf("LastUsedAt 不应为空: %+v", items[0])
+	}
+}
+
+// TestServiceEnsureProtectedTagsSeeded 验证配置中的保护标签种子会自动补齐到数据库，避免后台列表首次启动为空。
+func TestServiceEnsureProtectedTagsSeeded(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{MemoryRoot: t.TempDir(), ScheduleConfig: &config.ScheduleConfig{MemoryCleanup: config.MemoryCleanupScheduleConfig{ProtectedTags: []string{"核心故障", "架构决策"}}}})
+	ctx := testContextWithStore(t, service.config)
+	if err := service.EnsureProtectedTagsSeeded(ctx); err != nil {
+		t.Fatalf("补种保护标签失败: %v", err)
+	}
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		t.Fatalf("读取模型存储失败: %v", err)
+	}
+	items, err := store.ListEnabledProtectedTags()
+	if err != nil {
+		t.Fatalf("读取保护标签失败: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("保护标签数量异常: %+v", items)
+	}
+}
+
+// TestServiceRunMemoryCleanupOnceBuildsReviews 验证清理任务会跳过保护标签，并只把高分候选写入待审核队列。
+func TestServiceRunMemoryCleanupOnceBuildsReviews(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{MemoryRoot: t.TempDir(), ScheduleConfig: &config.ScheduleConfig{MemoryCleanup: config.MemoryCleanupScheduleConfig{
+		Mode:       "review",
+		ReviewTopN: 20,
+		Summary:    config.MemoryCleanupPolicyConfig{BeforeDays: 1, BatchSize: 10, MinRemaining: 0, MinRemainingPerProject: 0, ScoreThreshold: 0, Weights: config.MemoryCleanupWeightsConfig{Age: 0.3, UseCount: 0.35, LastUsed: 0.25, ProjectPressure: 0.1}},
+		Error:      config.MemoryCleanupPolicyConfig{BeforeDays: 1, BatchSize: 10, MinRemaining: 0, MinRemainingPerProject: 0, ScoreThreshold: 0, Weights: config.MemoryCleanupWeightsConfig{Age: 0.2, UseCount: 0.25, LastUsed: 0.35, ProjectPressure: 0.2}},
+	}}})
+	ctx := testContextWithStore(t, service.config)
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		t.Fatalf("读取模型存储失败: %v", err)
+	}
+	now := time.Now().UTC()
+	protected, err := store.CreateProtectedTag(models.MemoryProtectedTag{Tag: "核心故障", Enabled: true, Source: "manual", CreatedAt: now.Format(time.RFC3339Nano), UpdatedAt: now.Format(time.RFC3339Nano)})
+	if err != nil {
+		t.Fatalf("创建保护标签失败: %v", err)
+	}
+	_ = protected
+	items, err := store.CreateMemories([]models.Memory{
+		{UserID: "u1", ProjectName: "cleanup-project", GitBranch: "main", Type: "summary", Title: "应进入候选", Tags: models.EncodeTags([]string{"普通"}), Summary: "普通候选", Content: "内容", UseCount: 0, LastUsedAt: now.AddDate(0, 0, -10).Format(time.RFC3339Nano), Timestamp: now.AddDate(0, 0, -10).Format("20060102150405"), CreatedAt: now.AddDate(0, 0, -10).Format(time.RFC3339Nano)},
+		{UserID: "u2", ProjectName: "cleanup-project", GitBranch: "main", Type: "summary", Title: "受保护候选", Tags: models.EncodeTags([]string{"核心故障"}), Summary: "受保护候选", Content: "内容", UseCount: 0, LastUsedAt: now.AddDate(0, 0, -10).Format(time.RFC3339Nano), Timestamp: now.AddDate(0, 0, -10).Format("20060102150405"), CreatedAt: now.AddDate(0, 0, -10).Format(time.RFC3339Nano)},
+	})
+	if err != nil {
+		t.Fatalf("写入候选记忆失败: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("候选记忆数量异常: %+v", items)
+	}
+	result, err := service.RunMemoryCleanupOnce(ctx)
+	if err != nil {
+		t.Fatalf("执行清理任务失败: %v", err)
+	}
+	if result.SummaryCandidateCount != 1 {
+		t.Fatalf("summary 候选数量异常: %+v", result)
+	}
+	reviews, total, err := store.ListCleanupReviews("pending", "summary", "", 1, 10)
+	if err != nil {
+		t.Fatalf("读取审核列表失败: %v", err)
+	}
+	if total != 1 || len(reviews) != 1 {
+		t.Fatalf("审核记录数量异常: total=%d items=%+v", total, reviews)
+	}
+	if reviews[0].MemoryID != items[0].ID {
+		t.Fatalf("保护标签命中的记忆不应进入候选: %+v", reviews)
+	}
+}
+
+// TestExecuteApprovedCleanupReviewsOnlySelected 验证执行清理时只会删除前端勾选且已批准的审核记录。
+func TestExecuteApprovedCleanupReviewsOnlySelected(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
+	ctx := testContextWithStore(t, service.config)
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		t.Fatalf("读取模型存储失败: %v", err)
+	}
+	now := time.Now().UTC()
+	items, err := store.CreateMemories([]models.Memory{
+		{UserID: "u1", ProjectName: "cleanup-project", GitBranch: "main", Type: "summary", Title: "选中删除", Tags: models.EncodeTags([]string{"普通"}), Summary: "待删", Content: "内容", Timestamp: now.AddDate(0, 0, -10).Format("20060102150405"), CreatedAt: now.AddDate(0, 0, -10).Format(time.RFC3339Nano)},
+		{UserID: "u2", ProjectName: "cleanup-project", GitBranch: "main", Type: "summary", Title: "未选中保留", Tags: models.EncodeTags([]string{"普通"}), Summary: "保留", Content: "内容", Timestamp: now.AddDate(0, 0, -11).Format("20060102150405"), CreatedAt: now.AddDate(0, 0, -11).Format(time.RFC3339Nano)},
+	})
+	if err != nil {
+		t.Fatalf("写入测试记忆失败: %v", err)
+	}
+	createdAt := now.Format(time.RFC3339Nano)
+	if err := store.ReplacePendingCleanupReviews(createdAt, "summary", []models.MemoryCleanupReview{{MemoryID: items[0].ID, ProjectName: items[0].ProjectName, Type: "summary", Status: "pending", Score: 0.9, RunAt: createdAt, CreatedAt: createdAt}}); err != nil {
+		t.Fatalf("写入审核记录A失败: %v", err)
+	}
+	if err := store.ReplacePendingCleanupReviews(createdAt+"-b", "summary", []models.MemoryCleanupReview{{MemoryID: items[1].ID, ProjectName: items[1].ProjectName, Type: "summary", Status: "pending", Score: 0.8, RunAt: createdAt + "-b", CreatedAt: createdAt}}); err != nil {
+		t.Fatalf("写入审核记录B失败: %v", err)
+	}
+	reviews, total, err := store.ListCleanupReviews("pending", "summary", "", 1, 10)
+	if err != nil || total != 2 {
+		t.Fatalf("读取审核记录失败: err=%v total=%d items=%+v", err, total, reviews)
+	}
+	selectedReviewID := reviews[0].ID
+	if reviews[0].MemoryID != items[0].ID {
+		selectedReviewID = reviews[1].ID
+	}
+	if err := service.ApproveCleanupReviews(ctx, []int64{selectedReviewID}, "tester"); err != nil {
+		t.Fatalf("批准审核记录失败: %v", err)
+	}
+	result, err := service.ExecuteApprovedCleanupReviews(ctx, []int64{selectedReviewID}, 1, "tester")
+	if err != nil {
+		t.Fatalf("执行选中审核记录失败: %v", err)
+	}
+	if result.ExecutedReviewCount != 1 || result.ExecutedMemoryCount != 1 {
+		t.Fatalf("执行结果异常: %+v", result)
+	}
+	remaining, err := store.ListAllMemories()
+	if err != nil {
+		t.Fatalf("读取剩余记忆失败: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].Title != "未选中保留" {
+		t.Fatalf("未选中的审核记录不应被删除: %+v", remaining)
+	}
+}

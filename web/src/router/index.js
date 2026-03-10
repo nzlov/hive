@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import DashboardView from '../views/DashboardView.vue'
 import LoginView from '../views/LoginView.vue'
+import MemoryCleanupView from '../views/MemoryCleanupView.vue'
 import MemoriesView from '../views/MemoriesView.vue'
 import UsersView from '../views/UsersView.vue'
 import { getToken, getStoredUser } from '../lib/auth'
@@ -10,6 +11,7 @@ const routes = [
   { path: '/', redirect: '/admin' },
   { path: '/admin', name: 'dashboard', component: DashboardView, meta: { requiresAuth: true } },
   { path: '/admin/memories', name: 'memories', component: MemoriesView, meta: { requiresAuth: true } },
+  { path: '/admin/memory-cleanup', name: 'memory-cleanup', component: MemoryCleanupView, meta: { requiresAuth: true, requiresAdmin: true } },
   { path: '/admin/users', name: 'users', component: UsersView, meta: { requiresAuth: true, requiresAdmin: true } },
 ]
 
