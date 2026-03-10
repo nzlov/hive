@@ -60,11 +60,12 @@
 - `search.keyword.synonyms.enabled`：是否启用同义词扩展
 - `search.keyword.synonyms.groups`：同义词分组，例如 `[ ["error", "故障", "失败"] ]`
 - `search.fusion.enabled`：是否启用关键字/语义融合排序
-- `search.fusion.formula`：融合公式，当前支持 `weighted_sum`
+- `search.fusion.formula`：融合公式，支持 `weighted_sum` / `coverage_discount`，默认 `coverage_discount`
 - `search.fusion.keywordWeight`：关键字权重
 - `search.fusion.semanticWeight`：语义权重
 - `search.fusion.recencyWeight`：时效权重
 - `search.fusion.minSemanticScore`：语义分最低有效阈值
+- `search.fusion.coverageDiscountBase`：`coverage_discount` 公式的覆盖率折扣基线，默认 `0.85`
 - `search.cache.enabled`：是否启用查询缓存
 - `search.cache.queryEmbeddingTtlSeconds`：查询向量缓存 TTL（秒）
 - `search.cache.semanticHitsTtlSeconds`：语义命中缓存 TTL（秒）
@@ -119,11 +120,12 @@
     },
     "fusion": {
       "enabled": true,
-      "formula": "weighted_sum",
+      "formula": "coverage_discount",
       "keywordWeight": 0.55,
       "semanticWeight": 0.45,
       "recencyWeight": 0.1,
-      "minSemanticScore": 0.15
+      "minSemanticScore": 0.15,
+      "coverageDiscountBase": 0.85
     },
     "cache": {
       "enabled": false,

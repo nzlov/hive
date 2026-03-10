@@ -33,10 +33,11 @@ const (
 	defaultKeywordBM25K1               = 1.2
 	defaultKeywordBM25B                = 0.75
 	defaultFusionEnabled               = true
-	defaultFusionFormula               = "weighted_sum"
+	defaultFusionFormula               = "coverage_discount"
 	defaultFusionKeywordWeight         = 0.55
 	defaultFusionSemanticWeight        = 0.45
 	defaultFusionRecencyWeight         = 0.10
+	defaultFusionCoverageDiscountBase  = 0.85
 	defaultCacheEnabled                = false
 	defaultCacheQueryEmbeddingTTL      = 600
 	defaultCacheSemanticHitsTTL        = 120
@@ -98,6 +99,7 @@ type SearchConfig struct {
 	FusionSemanticWeight         float64
 	FusionRecencyWeight          float64
 	FusionMinSemanticScore       float64
+	FusionCoverageDiscountBase   float64
 	CacheEnabled                 bool
 	CacheQueryEmbeddingTTL       int
 	CacheSemanticHitsTTL         int
@@ -171,6 +173,7 @@ var (
 	searchFusionSemanticWeightKeys           = "semanticWeight"
 	searchFusionRecencyWeightKeys            = "recencyWeight"
 	searchFusionMinSemanticScoreKeys         = "minSemanticScore"
+	searchFusionCoverageDiscountBaseKeys     = "coverageDiscountBase"
 	searchCacheSectionKeys                   = "cache"
 	searchCacheEnabledKeys                   = "enabled"
 	searchCacheQueryEmbeddingTTLKeys         = "queryEmbeddingTtlSeconds"
@@ -318,12 +321,13 @@ func buildDefaultPayload() (map[string]any, error) {
 				},
 			},
 			"fusion": map[string]any{
-				"enabled":          defaultFusionEnabled,
-				"formula":          defaultFusionFormula,
-				"keywordWeight":    defaultFusionKeywordWeight,
-				"semanticWeight":   defaultFusionSemanticWeight,
-				"recencyWeight":    defaultFusionRecencyWeight,
-				"minSemanticScore": defaultSemanticSimilarityThreshold,
+				"enabled":              defaultFusionEnabled,
+				"formula":              defaultFusionFormula,
+				"keywordWeight":        defaultFusionKeywordWeight,
+				"semanticWeight":       defaultFusionSemanticWeight,
+				"recencyWeight":        defaultFusionRecencyWeight,
+				"minSemanticScore":     defaultSemanticSimilarityThreshold,
+				"coverageDiscountBase": defaultFusionCoverageDiscountBase,
 			},
 			"cache": map[string]any{
 				"enabled":                     defaultCacheEnabled,
@@ -582,11 +586,12 @@ func configCommentForPath(path string) string {
 		"search.keyword.synonyms.groups":               "同义词分组，每组内词会互相扩展",
 		"search.fusion":                                "多路打分融合配置",
 		"search.fusion.enabled":                        "是否启用关键字/语义/时效融合评分",
-		"search.fusion.formula":                        "融合公式，当前支持 weighted_sum",
+		"search.fusion.formula":                        "融合公式，当前支持 weighted_sum 和 coverage_discount",
 		"search.fusion.keywordWeight":                  "关键字分在融合中的权重",
 		"search.fusion.semanticWeight":                 "语义分在融合中的权重",
 		"search.fusion.recencyWeight":                  "时效分在融合中的权重",
 		"search.fusion.minSemanticScore":               "语义分最低有效阈值，低于该值会被视为弱语义",
+		"search.fusion.coverageDiscountBase":           "coverage_discount 公式的覆盖率折扣基线，取值范围 0 到 1",
 		"search.cache":                                 "搜索缓存配置",
 		"search.cache.enabled":                         "是否启用查询向量与语义结果缓存",
 		"search.cache.queryEmbeddingTtlSeconds":        "查询向量缓存 TTL（秒）",
@@ -896,8 +901,8 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 	if fusionFormula == "" {
 		fusionFormula = defaultFusionFormula
 	}
-	if fusionFormula != "weighted_sum" {
-		fusionFormula = "weighted_sum"
+	if fusionFormula != "weighted_sum" && fusionFormula != "coverage_discount" {
+		fusionFormula = defaultFusionFormula
 	}
 	fusionKeywordWeight := pickFloat(fusionSection, searchFusionKeywordWeightKeys, defaultFusionKeywordWeight)
 	if fusionKeywordWeight < 0 {
@@ -914,6 +919,13 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 	fusionMinSemanticScore := pickFloat(fusionSection, searchFusionMinSemanticScoreKeys, defaultSemanticSimilarityThreshold)
 	if fusionMinSemanticScore < 0 {
 		fusionMinSemanticScore = 0
+	}
+	fusionCoverageDiscountBase := pickFloat(fusionSection, searchFusionCoverageDiscountBaseKeys, defaultFusionCoverageDiscountBase)
+	if fusionCoverageDiscountBase < 0 {
+		fusionCoverageDiscountBase = 0
+	}
+	if fusionCoverageDiscountBase > 1 {
+		fusionCoverageDiscountBase = 1
 	}
 
 	cacheSection := findSection(section, searchCacheSectionKeys)
@@ -953,6 +965,7 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 		FusionSemanticWeight:         fusionSemanticWeight,
 		FusionRecencyWeight:          fusionRecencyWeight,
 		FusionMinSemanticScore:       fusionMinSemanticScore,
+		FusionCoverageDiscountBase:   fusionCoverageDiscountBase,
 		CacheEnabled:                 cacheEnabled,
 		CacheQueryEmbeddingTTL:       cacheQueryEmbeddingTTL,
 		CacheSemanticHitsTTL:         cacheSemanticHitsTTL,

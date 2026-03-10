@@ -890,12 +890,12 @@ func TestServiceFusedConfidenceRespectsWeights(t *testing.T) {
 	keywordHit := Hit{ID: 1, Source: "summary", Confidence: 0.2, Timestamp: now}
 	semanticHit := Hit{ID: 1, Source: "summary", Confidence: 0.9, Timestamp: now}
 
-	keywordFirst := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{FusionEnabled: true, FusionKeywordWeight: 1, FusionSemanticWeight: 0, FusionRecencyWeight: 0}})
+	keywordFirst := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{FusionEnabled: true, FusionFormula: "coverage_discount", FusionCoverageDiscountBase: 0.85, FusionKeywordWeight: 1, FusionSemanticWeight: 0, FusionRecencyWeight: 0}})
 	if got := keywordFirst.fusedConfidence("summary", true, keywordHit, true, semanticHit, now); math.Abs(got-0.2) > 1e-9 {
 		t.Fatalf("关键字优先融合结果异常: got=%v want=0.2", got)
 	}
 
-	semanticFirst := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{FusionEnabled: true, FusionKeywordWeight: 0, FusionSemanticWeight: 1, FusionRecencyWeight: 0}})
+	semanticFirst := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{FusionEnabled: true, FusionFormula: "coverage_discount", FusionCoverageDiscountBase: 0.85, FusionKeywordWeight: 0, FusionSemanticWeight: 1, FusionRecencyWeight: 0}})
 	if got := semanticFirst.fusedConfidence("summary", true, keywordHit, true, semanticHit, now); math.Abs(got-0.9) > 1e-9 {
 		t.Fatalf("语义优先融合结果异常: got=%v want=0.9", got)
 	}
@@ -904,7 +904,7 @@ func TestServiceFusedConfidenceRespectsWeights(t *testing.T) {
 // TestServiceMergeHitsPreservesKeywordSnippetAndAppliesFusion 验证融合后仍优先保留关键字片段，并按配置权重重算置信度。
 func TestServiceMergeHitsPreservesKeywordSnippetAndAppliesFusion(t *testing.T) {
 	t.Helper()
-	service := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{FusionEnabled: true, FusionKeywordWeight: 0.8, FusionSemanticWeight: 0.2, FusionRecencyWeight: 0}})
+	service := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{FusionEnabled: true, FusionFormula: "coverage_discount", FusionCoverageDiscountBase: 0.85, FusionKeywordWeight: 0.8, FusionSemanticWeight: 0.2, FusionRecencyWeight: 0}})
 	now := time.Now().UTC()
 	keywordHits := []Hit{{
 		ID:         1,
@@ -936,6 +936,53 @@ func TestServiceMergeHitsPreservesKeywordSnippetAndAppliesFusion(t *testing.T) {
 	want := 0.2*0.8 + 0.9*0.2
 	if math.Abs(merged[0].Confidence-want) > 1e-9 {
 		t.Fatalf("融合置信度异常: got=%v want=%v", merged[0].Confidence, want)
+	}
+}
+
+// TestServiceFusedConfidenceCoverageDiscount 提示单路命中会做轻微覆盖率折扣，避免缺失信号被直接当成 0 分拉低过多。
+func TestServiceFusedConfidenceCoverageDiscount(t *testing.T) {
+	t.Helper()
+	now := time.Now().UTC()
+	service := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{
+		FusionEnabled:              true,
+		FusionFormula:              "coverage_discount",
+		FusionCoverageDiscountBase: 0.85,
+		FusionKeywordWeight:        0.55,
+		FusionSemanticWeight:       0.45,
+		FusionRecencyWeight:        0.1,
+		FusionMinSemanticScore:     0.15,
+	}})
+
+	keywordOnly := Hit{ID: 1, Source: "summary", Confidence: 1, Timestamp: now}
+	if got := service.fusedConfidence("summary", true, keywordOnly, false, Hit{}, now); math.Abs(got-0.9386363636363636) > 1e-9 {
+		t.Fatalf("仅关键字命中折扣异常: got=%v want=%v", got, 0.9386363636363636)
+	}
+
+	semanticOnly := Hit{ID: 2, Source: "summary", Confidence: 0.8, Timestamp: now}
+	if got := service.fusedConfidence("summary", false, Hit{}, true, semanticOnly, now); math.Abs(got-0.7736363636363637) > 1e-9 {
+		t.Fatalf("仅语义命中折扣异常: got=%v want=%v", got, 0.7736363636363637)
+	}
+}
+
+// TestServiceFusedConfidenceCoverageDiscountIgnoresWeakSemantic 验证弱语义命中不会参与覆盖率折扣分母，避免噪声信号稀释主命中。
+func TestServiceFusedConfidenceCoverageDiscountIgnoresWeakSemantic(t *testing.T) {
+	t.Helper()
+	now := time.Now().UTC()
+	service := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{
+		FusionEnabled:              true,
+		FusionFormula:              "coverage_discount",
+		FusionCoverageDiscountBase: 0.85,
+		FusionKeywordWeight:        0.55,
+		FusionSemanticWeight:       0.45,
+		FusionRecencyWeight:        0.1,
+		FusionMinSemanticScore:     0.15,
+	}})
+	keywordHit := Hit{ID: 1, Source: "summary", Confidence: 1, Timestamp: now}
+	weakSemantic := Hit{ID: 1, Source: "summary", Confidence: 0.1, Timestamp: now}
+	got := service.fusedConfidence("summary", true, keywordHit, true, weakSemantic, now)
+	want := 0.9386363636363636
+	if math.Abs(got-want) > 1e-9 {
+		t.Fatalf("弱语义不应参与覆盖率折扣: got=%v want=%v", got, want)
 	}
 }
 

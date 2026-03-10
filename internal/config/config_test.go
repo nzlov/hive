@@ -249,6 +249,9 @@ func TestResolveSearchConfigUsesDefaults(t *testing.T) {
 	if got.FusionFormula != defaultFusionFormula {
 		t.Fatalf("FusionFormula = %q, want %q", got.FusionFormula, defaultFusionFormula)
 	}
+	if got.FusionCoverageDiscountBase != defaultFusionCoverageDiscountBase {
+		t.Fatalf("FusionCoverageDiscountBase = %v, want %v", got.FusionCoverageDiscountBase, defaultFusionCoverageDiscountBase)
+	}
 	if got.CacheMaxEntries != defaultCacheMaxEntries {
 		t.Fatalf("CacheMaxEntries = %d, want %d", got.CacheMaxEntries, defaultCacheMaxEntries)
 	}
@@ -278,12 +281,13 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 				},
 			},
 			"fusion": map[string]any{
-				"enabled":          true,
-				"formula":          "weighted_sum",
-				"keywordWeight":    0.6,
-				"semanticWeight":   0.3,
-				"recencyWeight":    0.1,
-				"minSemanticScore": 0.2,
+				"enabled":              true,
+				"formula":              "coverage_discount",
+				"keywordWeight":        0.6,
+				"semanticWeight":       0.3,
+				"recencyWeight":        0.1,
+				"minSemanticScore":     0.2,
+				"coverageDiscountBase": 0.85,
 			},
 			"cache": map[string]any{
 				"enabled":                     true,
@@ -325,6 +329,9 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 	if !got.FusionEnabled {
 		t.Fatalf("FusionEnabled = %v, want true", got.FusionEnabled)
 	}
+	if got.FusionFormula != "coverage_discount" {
+		t.Fatalf("FusionFormula = %q, want coverage_discount", got.FusionFormula)
+	}
 	if got.FusionKeywordWeight != 0.6 {
 		t.Fatalf("FusionKeywordWeight = %v, want 0.6", got.FusionKeywordWeight)
 	}
@@ -336,6 +343,9 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 	}
 	if got.FusionMinSemanticScore != 0.2 {
 		t.Fatalf("FusionMinSemanticScore = %v, want 0.2", got.FusionMinSemanticScore)
+	}
+	if got.FusionCoverageDiscountBase != 0.85 {
+		t.Fatalf("FusionCoverageDiscountBase = %v, want 0.85", got.FusionCoverageDiscountBase)
 	}
 	if !got.CacheEnabled {
 		t.Fatalf("CacheEnabled = %v, want true", got.CacheEnabled)

@@ -1064,6 +1064,7 @@ func (s *Service) fusedConfidence(source string, hasKeyword bool, keywordHit Hit
 	if hasSemantic && semanticScore < s.fusionMinSemanticScore() {
 		semanticScore = 0
 	}
+	hasEffectiveSemantic := hasSemantic && semanticScore > 0
 	refTS := keywordHit.Timestamp
 	if !hasKeyword {
 		refTS = semanticHit.Timestamp
@@ -1080,7 +1081,33 @@ func (s *Service) fusedConfidence(source string, hasKeyword bool, keywordHit Hit
 		}
 		return keywordScore
 	}
-	return (keywordScore*keywordWeight + semanticScore*semanticWeight + recencyScore*recencyWeight) / totalWeight
+	if s.fusionFormula() == "weighted_sum" {
+		return (keywordScore*keywordWeight + semanticScore*semanticWeight + recencyScore*recencyWeight) / totalWeight
+	}
+	activeWeight := 0.0
+	weightedScore := 0.0
+	if hasKeyword {
+		activeWeight += keywordWeight
+		weightedScore += keywordScore * keywordWeight
+	}
+	if hasEffectiveSemantic {
+		activeWeight += semanticWeight
+		weightedScore += semanticScore * semanticWeight
+	}
+	if hasKeyword || hasEffectiveSemantic {
+		activeWeight += recencyWeight
+		weightedScore += recencyScore * recencyWeight
+	}
+	if activeWeight <= 0 {
+		if semanticScore > keywordScore {
+			return semanticScore
+		}
+		return keywordScore
+	}
+	base := weightedScore / activeWeight
+	coverage := activeWeight / totalWeight
+	discount := s.fusionCoverageDiscountBase() + (1-s.fusionCoverageDiscountBase())*coverage
+	return base * discount
 }
 
 // fusionEnabled 返回是否启用融合评分，便于渐进式灰度上线新排序策略。
@@ -1089,6 +1116,14 @@ func (s *Service) fusionEnabled() bool {
 		return true
 	}
 	return s.config.SearchConfig.FusionEnabled
+}
+
+// fusionFormula 返回当前融合公式，便于在保持兼容的同时逐步切换更可解释的评分策略。
+func (s *Service) fusionFormula() string {
+	if s.config.SearchConfig == nil || strings.TrimSpace(s.config.SearchConfig.FusionFormula) == "" {
+		return "coverage_discount"
+	}
+	return strings.ToLower(strings.TrimSpace(s.config.SearchConfig.FusionFormula))
 }
 
 // fusionWeights 返回融合权重，确保关键字、语义和时效占比可由配置统一控制。
@@ -1105,6 +1140,14 @@ func (s *Service) fusionMinSemanticScore() float64 {
 		return 0
 	}
 	return s.config.SearchConfig.FusionMinSemanticScore
+}
+
+// fusionCoverageDiscountBase 返回覆盖率折扣基线，避免单路高质量命中被压得过低，同时保留多路命中的区分度。
+func (s *Service) fusionCoverageDiscountBase() float64 {
+	if s.config.SearchConfig == nil {
+		return 0.85
+	}
+	return minFloat(1, maxFloat(0, s.config.SearchConfig.FusionCoverageDiscountBase))
 }
 
 // mergeListHits 把不同类型命中合并为管理列表结果，并按相关度优先、时间次之稳定排序。
@@ -1616,6 +1659,14 @@ func maxInt(left, right int) int {
 // maxFloat 返回较大浮点值，避免融合权重规范化时重复编写边界判断。
 func maxFloat(left, right float64) float64 {
 	if left > right {
+		return left
+	}
+	return right
+}
+
+// minFloat 返回较小浮点值，避免覆盖率折扣参数越界时散落多处裁剪逻辑。
+func minFloat(left, right float64) float64 {
+	if left < right {
 		return left
 	}
 	return right

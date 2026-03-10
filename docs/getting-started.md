@@ -40,11 +40,12 @@
     },
     "fusion": {
       "enabled": true,
-      "formula": "weighted_sum",
+      "formula": "coverage_discount",
       "keywordWeight": 0.55,
       "semanticWeight": 0.45,
       "recencyWeight": 0.1,
-      "minSemanticScore": 0.15
+      "minSemanticScore": 0.15,
+      "coverageDiscountBase": 0.85
     },
     "cache": {
       "enabled": false,

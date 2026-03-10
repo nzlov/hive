@@ -13,7 +13,7 @@
 
 - 支持两类记忆：`summary` 与 `error`
 - 支持关键字检索（`like` / `bm25`）与可选语义检索
-- 支持关键字、语义、时效三路融合排序（可配置权重）
+- 支持关键字、语义、时效三路融合排序（可配置权重与融合公式）
 - 支持语义查询缓存与结果缓存（可配置开关和 TTL）
 - 支持批量写入多条记忆
 - 支持通过 `project_name` 做单库项目隔离
@@ -63,6 +63,29 @@
 ## 快速开始
 
 详见 [docs/getting-started.md](./docs/getting-started.md)
+
+## 搜索评分
+
+- 默认融合公式为 `coverage_discount`，用于避免单路高质量命中被缺失信号按 `0` 分拉低过多
+- 仍支持旧公式 `weighted_sum`，可通过 `config.json` 的 `search.fusion.formula` 切换
+- `coverage_discount` 默认折扣基线为 `0.85`，可通过 `search.fusion.coverageDiscountBase` 调整
+- 弱语义命中会先受 `search.fusion.minSemanticScore` 约束，低于阈值时不参与融合
+
+```json
+{
+  "search": {
+    "fusion": {
+      "enabled": true,
+      "formula": "coverage_discount",
+      "keywordWeight": 0.55,
+      "semanticWeight": 0.45,
+      "recencyWeight": 0.1,
+      "minSemanticScore": 0.15,
+      "coverageDiscountBase": 0.85
+    }
+  }
+}
+```
 
 ## 文档索引
 
