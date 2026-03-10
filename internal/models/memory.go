@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"gorm.io/gorm"
@@ -175,6 +176,80 @@ func (s *Store) ListMemoriesByIDs(memoryIDs []int64) ([]Memory, error) {
 	var items []Memory
 	err := s.db.Where("id IN ?", memoryIDs).Find(&items).Error
 	return items, err
+}
+
+// ListMemoryIDsByProjectAfterID 按主键游标分页返回项目下的记忆 ID，避免大批量迁移时把完整正文全部装入内存。
+func (s *Store) ListMemoryIDsByProjectAfterID(projectName string, afterID int64, limit int) ([]int64, error) {
+	if limit <= 0 {
+		return []int64{}, nil
+	}
+	type memoryIDRow struct {
+		ID int64 `gorm:"column:id"`
+	}
+	var rows []memoryIDRow
+	err := s.db.Model(&Memory{}).
+		Select("id").
+		Where("project_name = ? AND id > ?", strings.TrimSpace(projectName), afterID).
+		Order("id ASC").
+		Limit(limit).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	return ids, nil
+}
+
+// UpdateMemoriesProjectNameByIDs 批量改写项目名，便于项目合并时按批迁移记忆而不触碰其他字段。
+func (s *Store) UpdateMemoriesProjectNameByIDs(ids []int64, projectName string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return s.db.Model(&Memory{}).
+		Where("id IN ?", ids).
+		Update("project_name", strings.TrimSpace(projectName)).Error
+}
+
+// ListMemoryRowsByIDs 按主键集合读取重建向量所需字段，避免项目迁移时回表拉取无关列。
+func (s *Store) ListMemoryRowsByIDs(memoryIDs []int64) ([]Memory, error) {
+	items, err := s.ListMemoriesByIDs(memoryIDs)
+	if err != nil {
+		return nil, err
+	}
+	indexByID := make(map[int64]int, len(memoryIDs))
+	for idx, id := range memoryIDs {
+		indexByID[id] = idx
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return indexByID[items[i].ID] < indexByID[items[j].ID]
+	})
+	return items, nil
+}
+
+// ListDistinctProjectNames 返回记忆表中的去重项目名列表，便于管理端通过下拉框选择主副项目。
+func (s *Store) ListDistinctProjectNames() ([]string, error) {
+	type projectNameRow struct {
+		ProjectName string `gorm:"column:project_name"`
+	}
+	var rows []projectNameRow
+	err := s.db.Model(&Memory{}).
+		Distinct("project_name").
+		Where("project_name <> ?", "").
+		Order("project_name ASC").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	items := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if value := strings.TrimSpace(row.ProjectName); value != "" {
+			items = append(items, value)
+		}
+	}
+	return items, nil
 }
 
 // ListMemoryLitesByProjectTypeAndIDs 在候选打分后再回表取正文，允许按项目隔离或跨项目查询同一类型候选。

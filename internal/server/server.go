@@ -387,6 +387,40 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 		statsService.OnMemoryDeleted(deletedMemory)
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
+	adminMemoryGroup.GET("/projects", func(c *gin.Context) {
+		items, err := memoryService.ListProjectNames(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, api.ProjectNameListResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.ProjectNameListResponse{Items: items})
+	})
+	adminMemoryGroup.POST("/merge-project", func(c *gin.Context) {
+		var request api.MergeProjectRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, api.MergeProjectResponse{Error: err.Error()})
+			return
+		}
+		result, err := memoryService.MergeProjectMemories(c.Request.Context(), request.SourceProjectName, request.TargetProjectName)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if memory.IsInvalidProjectMergeInput(err) {
+				status = http.StatusBadRequest
+			}
+			c.JSON(status, api.MergeProjectResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, api.MergeProjectResponse{
+			SourceProjectName:              result.SourceProjectName,
+			TargetProjectName:              result.TargetProjectName,
+			BatchCount:                     result.BatchCount,
+			MergedMemoryCount:              result.MergedMemoryCount,
+			RebuiltEmbeddingCount:          result.RebuiltEmbeddingCount,
+			ClearedReviewCount:             result.ClearedReviewCount,
+			InvalidatedApprovedReviewCount: result.InvalidatedApprovedReviewCount,
+			Message:                        result.Message,
+		})
+	})
 	adminMemoryGroup.GET("/protected-tags", func(c *gin.Context) {
 		items, err := memoryService.ListProtectedTags(c.Request.Context())
 		if err != nil {

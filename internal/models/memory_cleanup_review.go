@@ -111,6 +111,31 @@ func (s *Store) DeleteCleanupReviewsByStatus(status string) error {
 	return s.db.Where("status = ?", strings.TrimSpace(status)).Delete(&MemoryCleanupReview{}).Error
 }
 
+// DeleteCleanupReviewsByProjectName 删除指定项目的全部审核记录，避免项目合并后旧项目快照继续干扰治理页。
+func (s *Store) DeleteCleanupReviewsByProjectName(projectName string) (int64, error) {
+	result := s.db.Where("project_name = ?", strings.TrimSpace(projectName)).Delete(&MemoryCleanupReview{})
+	return result.RowsAffected, result.Error
+}
+
+// DeleteCleanupReviewsByProjectNameAndStatus 删除指定项目下的指定状态审核记录，避免项目合并误删已审核历史。
+func (s *Store) DeleteCleanupReviewsByProjectNameAndStatus(projectName, status string) (int64, error) {
+	result := s.db.Where("project_name = ? AND status = ?", strings.TrimSpace(projectName), strings.TrimSpace(status)).Delete(&MemoryCleanupReview{})
+	return result.RowsAffected, result.Error
+}
+
+// UpdateCleanupReviewsStatusByProjectNameAndStatus 批量改写指定项目下的审核状态，避免项目合并后旧批准记录继续可执行。
+func (s *Store) UpdateCleanupReviewsStatusByProjectNameAndStatus(projectName, fromStatus, toStatus, reviewedBy, reviewedAt, note string) (int64, error) {
+	result := s.db.Model(&MemoryCleanupReview{}).
+		Where("project_name = ? AND status = ?", strings.TrimSpace(projectName), strings.TrimSpace(fromStatus)).
+		Updates(map[string]any{
+			"status":         strings.TrimSpace(toStatus),
+			"reviewed_by":    strings.TrimSpace(reviewedBy),
+			"reviewed_at":    strings.TrimSpace(reviewedAt),
+			"execution_note": strings.TrimSpace(note),
+		})
+	return result.RowsAffected, result.Error
+}
+
 // LockMemoryCleanupReviewsForUpdate 在事务里锁定审核记录，避免并发执行清理任务时重复删除同一批记忆。
 func (s *Store) LockMemoryCleanupReviewsForUpdate(ids []int64) ([]MemoryCleanupReview, error) {
 	if len(ids) == 0 {

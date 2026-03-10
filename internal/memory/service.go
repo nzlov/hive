@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -18,6 +19,8 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
+
+var errInvalidProjectMergeInput = errors.New("无效的项目合并请求")
 
 // embeddingModelMetaKey 保存当前向量模型元数据键名，避免多处硬编码同一个存储键。
 const embeddingModelMetaKey = "embedding_model"
@@ -318,6 +321,123 @@ func (s *Service) Update(ctx context.Context, id int64, request api.UpdateMemory
 	}
 	s.invalidateSearchCache()
 	return updated, nil
+}
+
+// ListProjectNames 返回已写入记忆的项目名列表，便于管理端以下拉框方式选择主副项目。
+func (s *Service) ListProjectNames(ctx context.Context) ([]string, error) {
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return store.ListDistinctProjectNames()
+}
+
+// MergeProjectMemories 把副项目记忆并入主项目，并同步重建向量与清理旧审核快照。
+func (s *Service) MergeProjectMemories(ctx context.Context, sourceProjectName, targetProjectName string) (ProjectMergeResult, error) {
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		return ProjectMergeResult{}, err
+	}
+	if strings.Trim(strings.TrimSpace(sourceProjectName), "./") == "" || strings.Trim(strings.TrimSpace(targetProjectName), "./") == "" {
+		return ProjectMergeResult{}, fmt.Errorf("%w: 主项目名和副项目名不能为空", errInvalidProjectMergeInput)
+	}
+	sourceProjectName = normalizeProjectName(sourceProjectName)
+	targetProjectName = normalizeProjectName(targetProjectName)
+	if sourceProjectName == targetProjectName {
+		return ProjectMergeResult{}, fmt.Errorf("%w: 主项目名和副项目名不能相同", errInvalidProjectMergeInput)
+	}
+	projectNames, err := store.ListDistinctProjectNames()
+	if err != nil {
+		return ProjectMergeResult{}, err
+	}
+	projectSet := make(map[string]struct{}, len(projectNames))
+	for _, item := range projectNames {
+		projectSet[item] = struct{}{}
+	}
+	if _, ok := projectSet[targetProjectName]; !ok {
+		return ProjectMergeResult{}, fmt.Errorf("%w: 主项目不存在", errInvalidProjectMergeInput)
+	}
+	if _, ok := projectSet[sourceProjectName]; !ok {
+		return ProjectMergeResult{}, fmt.Errorf("%w: 副项目不存在", errInvalidProjectMergeInput)
+	}
+	const batchSize = 200
+	result := ProjectMergeResult{SourceProjectName: sourceProjectName, TargetProjectName: targetProjectName}
+	err = store.WithTx(func(txStore *models.Store) error {
+		var lastID int64
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		clearedReviewCount, err := txStore.DeleteCleanupReviewsByProjectNameAndStatus(sourceProjectName, "pending")
+		if err != nil {
+			return err
+		}
+		result.ClearedReviewCount = clearedReviewCount
+		invalidatedApprovedReviewCount, err := txStore.UpdateCleanupReviewsStatusByProjectNameAndStatus(sourceProjectName, "approved", "rejected", "system:project-merge", now, fmt.Sprintf("项目 %s 已合并到 %s，原批准清理记录已失效。", sourceProjectName, targetProjectName))
+		if err != nil {
+			return err
+		}
+		result.InvalidatedApprovedReviewCount = invalidatedApprovedReviewCount
+		for {
+			memoryIDs, err := txStore.ListMemoryIDsByProjectAfterID(sourceProjectName, lastID, batchSize)
+			if err != nil {
+				return err
+			}
+			if len(memoryIDs) == 0 {
+				break
+			}
+			if err := txStore.UpdateMemoriesProjectNameByIDs(memoryIDs, targetProjectName); err != nil {
+				return err
+			}
+			if err := txStore.DeleteMemoryEmbeddingsByMemoryIDs(memoryIDs); err != nil {
+				return err
+			}
+			result.BatchCount++
+			result.MergedMemoryCount += len(memoryIDs)
+			if s.provider.Enabled() {
+				rows, err := txStore.ListMemoryRowsByIDs(memoryIDs)
+				if err != nil {
+					return err
+				}
+				texts := make([]string, 0, len(rows))
+				for _, item := range rows {
+					texts = append(texts, BuildMemoryEmbeddingText(memoryRowFromModel(item)))
+				}
+				vectors, err := s.provider.EmbedTexts(texts)
+				if err != nil {
+					return err
+				}
+				updatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+				embeddings := make([]models.MemoryEmbedding, 0, minInt(len(rows), len(vectors)))
+				for idx, item := range rows {
+					if idx >= len(vectors) {
+						break
+					}
+					embeddings = append(embeddings, models.MemoryEmbedding{MemoryID: item.ID, ProjectName: item.ProjectName, Type: item.Type, Vector: models.EncodeVector(vectors[idx]), Timestamp: item.Timestamp, UpdatedAt: updatedAt})
+				}
+				if err := txStore.UpsertMemoryEmbeddings(embeddings); err != nil {
+					return err
+				}
+				result.RebuiltEmbeddingCount += len(embeddings)
+			}
+			lastID = memoryIDs[len(memoryIDs)-1]
+		}
+		if result.MergedMemoryCount == 0 {
+			return fmt.Errorf("%w: 副项目下没有可合并的记忆", errInvalidProjectMergeInput)
+		}
+		if s.provider.Enabled() {
+			return txStore.SetMemoryMetadata(embeddingModelMetaKey, s.provider.ModelName(), time.Now().UTC().Format(time.RFC3339Nano))
+		}
+		return nil
+	})
+	if err != nil {
+		return ProjectMergeResult{}, err
+	}
+	s.invalidateSearchCache()
+	result.Message = fmt.Sprintf("已将 %d 条记忆从 %s 合并到 %s，重建 %d 条向量，清除 %d 条待审核记录，并使 %d 条已批准记录失效。", result.MergedMemoryCount, sourceProjectName, targetProjectName, result.RebuiltEmbeddingCount, result.ClearedReviewCount, result.InvalidatedApprovedReviewCount)
+	return result, nil
+}
+
+// IsInvalidProjectMergeInput 用于区分项目合并的参数错误和服务端故障，避免路由层误报状态码。
+func IsInvalidProjectMergeInput(err error) bool {
+	return errors.Is(err, errInvalidProjectMergeInput)
 }
 
 // EnsureEmbeddingsReady 在服务启动阶段校验模型一致性，避免请求到来后才暴露旧向量问题。

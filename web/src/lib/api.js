@@ -105,6 +105,19 @@ export function deleteMemory(id) {
   return request(`/api/v1/admin/memories/${id}`, { method: 'DELETE' })
 }
 
+// fetchMemoryProjects 拉取已有项目名列表，便于管理员通过下拉选择主副项目。
+export function fetchMemoryProjects() {
+  return request('/api/v1/admin/memories/projects')
+}
+
+// mergeMemoryProject 把副项目记忆并入主项目，并由后端同步重建相关向量。
+export function mergeMemoryProject(payload) {
+  return request('/api/v1/admin/memories/merge-project', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 // fetchProtectedTags 拉取保护标签列表，便于管理员维护清理白名单。
 export function fetchProtectedTags() {
   return request('/api/v1/admin/memories/protected-tags')

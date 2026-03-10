@@ -165,6 +165,26 @@ type CleanupExecuteResult struct {
 	Message string
 }
 
+// ProjectMergeResult 描述一次项目记忆合并结果，便于管理端展示迁移规模与清理结果。
+type ProjectMergeResult struct {
+	// SourceProjectName 保存被并入的副项目名，便于成功提示回显原始来源。
+	SourceProjectName string
+	// TargetProjectName 保存承接记忆的主项目名，便于调用方确认最终归属。
+	TargetProjectName string
+	// BatchCount 统计本次分页处理批次数，便于观察大项目是否分批完成。
+	BatchCount int
+	// MergedMemoryCount 统计成功迁移的记忆数量，便于确认合并范围。
+	MergedMemoryCount int
+	// RebuiltEmbeddingCount 统计重建的向量数量，便于确认索引已同步刷新。
+	RebuiltEmbeddingCount int
+	// ClearedReviewCount 统计被清除的副项目审核记录数，便于解释治理页状态变化。
+	ClearedReviewCount int64
+	// InvalidatedApprovedReviewCount 统计被失效化的已批准记录数，避免旧批准快照继续删除已迁移记忆。
+	InvalidatedApprovedReviewCount int64
+	// Message 保存可读摘要，便于接口响应直接复用。
+	Message string
+}
+
 // CleanupScoreDetail 保存清理评分拆解明细，便于后台解释候选为何进入待审核队列。
 type CleanupScoreDetail struct {
 	// AgeDays 记录记忆已存在天数，便于解释时间衰减部分得分。

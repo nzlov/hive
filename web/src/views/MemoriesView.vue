@@ -8,7 +8,10 @@
             <h2 class="mt-3 text-3xl font-semibold text-ink">记忆浏览</h2>
             <p class="mt-2 text-sm text-slate-500">支持按标题、项目、标签、总结与正文复用记忆搜索逻辑进行筛选。</p>
           </div>
-          <button class="ghost-btn" type="button" @click="loadMemories">刷新列表</button>
+          <div class="flex flex-col items-stretch gap-3 sm:items-end">
+            <button class="ghost-btn" type="button" @click="loadMemories">刷新列表</button>
+            <button v-if="user.is_admin" class="primary-btn" type="button" @click="openMergeModal">合并项目</button>
+          </div>
         </div>
 
         <form class="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_180px_120px]" @submit.prevent="handleSearch">
@@ -31,6 +34,7 @@
           </div>
         </form>
 
+        <p v-if="actionMessage" class="mt-4 rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{{ actionMessage }}</p>
         <p v-if="errorMessage" class="mt-4 rounded-2xl bg-coral/10 px-4 py-3 text-sm text-coral">{{ errorMessage }}</p>
       </div>
 
@@ -294,18 +298,62 @@
         </form>
       </section>
     </div>
+
+    <div v-if="mergeVisible" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8">
+      <button class="absolute inset-0 cursor-default" type="button" aria-label="关闭项目合并弹窗" @click="closeMergeModal" />
+      <section class="relative z-10 max-h-full w-full max-w-2xl overflow-y-auto rounded-[2rem] bg-white p-6 shadow-2xl sm:p-8">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <p class="text-xs uppercase tracking-[0.35em] text-slate-400">Project Merge</p>
+            <h3 class="mt-3 text-2xl font-semibold text-ink">合并项目记忆</h3>
+            <p class="mt-2 text-sm text-slate-500">把副项目名替换为主项目名，并清除副项目相关审核记录后重建涉及向量。</p>
+          </div>
+          <button class="ghost-btn" type="button" :disabled="mergeSubmitting" @click="closeMergeModal">关闭</button>
+        </div>
+
+        <p class="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+          合并后会把副项目下全部记忆迁移到主项目，并删除这些记忆的旧向量后重新生成；副项目相关清理审核记录会被清空。
+        </p>
+        <p v-if="mergeLoading" class="mt-6 text-sm text-slate-400">正在加载项目列表...</p>
+        <p v-else-if="mergeError" class="mt-6 rounded-2xl bg-coral/10 px-4 py-3 text-sm text-coral">{{ mergeError }}</p>
+
+        <form v-else class="mt-6 space-y-6" @submit.prevent="handleMergeProject">
+          <label class="block space-y-2">
+            <span class="text-sm font-medium text-slate-700">主项目名</span>
+            <select v-model="mergeForm.targetProjectName" class="field" :disabled="mergeSubmitting">
+              <option value="">请选择主项目</option>
+              <option v-for="item in projectOptions" :key="`target-${item}`" :value="item">{{ item }}</option>
+            </select>
+          </label>
+
+          <label class="block space-y-2">
+            <span class="text-sm font-medium text-slate-700">副项目名</span>
+            <select v-model="mergeForm.sourceProjectName" class="field" :disabled="mergeSubmitting">
+              <option value="">请选择副项目</option>
+              <option v-for="item in sourceProjectOptions" :key="`source-${item}`" :value="item">{{ item }}</option>
+            </select>
+          </label>
+
+          <div class="flex flex-wrap justify-end gap-3">
+            <button class="ghost-btn" type="button" :disabled="mergeSubmitting" @click="closeMergeModal">取消</button>
+            <button class="primary-btn" type="submit" :disabled="mergeSubmitting">{{ mergeSubmitting ? '合并中...' : '确认合并' }}</button>
+          </div>
+        </form>
+      </section>
+    </div>
   </AdminShell>
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import AdminShell from '../components/AdminShell.vue'
-import { deleteMemory, fetchMemories, fetchMemoryDetail, updateMemory } from '../lib/api'
+import { deleteMemory, fetchMemories, fetchMemoryDetail, fetchMemoryProjects, mergeMemoryProject, updateMemory } from '../lib/api'
 import { getStoredUser } from '../lib/auth'
 
 const user = getStoredUser()
 const memories = ref([])
 const loading = ref(false)
+const actionMessage = ref('')
 const errorMessage = ref('')
 const keywordInput = ref('')
 const page = ref(1)
@@ -324,7 +372,15 @@ const editMemoryID = ref(null)
 const editTagsInput = ref('')
 const editForm = ref({ title: '', summary: '', content: '' })
 const editReadonly = ref({})
+const mergeVisible = ref(false)
+const mergeLoading = ref(false)
+const mergeSubmitting = ref(false)
+const mergeError = ref('')
+const projectOptions = ref([])
+const mergeForm = reactive({ sourceProjectName: '', targetProjectName: '' })
 const pageSizeOptions = [10, 15, 20, 30, 50]
+
+const sourceProjectOptions = computed(() => projectOptions.value.filter((item) => item !== mergeForm.targetProjectName))
 
 // buildQueries 统一按空白拆分关键字，确保后台列表与记忆搜索接口共享同样的多词匹配输入形式。
 function buildQueries() {
@@ -352,14 +408,84 @@ async function loadMemories() {
   }
 }
 
+// loadProjectOptions 拉取项目下拉选项，确保管理员弹窗里选择的是当前数据库中的真实项目名。
+async function loadProjectOptions() {
+  mergeLoading.value = true
+  mergeError.value = ''
+  try {
+    const response = await fetchMemoryProjects()
+    projectOptions.value = response.items || []
+  } catch (error) {
+    mergeError.value = error.message
+  } finally {
+    mergeLoading.value = false
+  }
+}
+
+// openMergeModal 打开项目合并弹窗前先加载项目列表，避免用户在空下拉里盲填项目名。
+async function openMergeModal() {
+  mergeVisible.value = true
+  mergeSubmitting.value = false
+  mergeForm.sourceProjectName = ''
+  mergeForm.targetProjectName = ''
+  projectOptions.value = []
+  await loadProjectOptions()
+}
+
+// closeMergeModal 统一回收项目合并弹窗状态，避免上一次选择残留到下一次操作。
+function closeMergeModal() {
+  if (mergeSubmitting.value) {
+    return
+  }
+  mergeVisible.value = false
+  mergeLoading.value = false
+  mergeError.value = ''
+  mergeForm.sourceProjectName = ''
+  mergeForm.targetProjectName = ''
+}
+
+// handleMergeProject 提交项目合并请求，并在成功后刷新列表和项目选项避免页面继续展示旧项目状态。
+async function handleMergeProject() {
+  mergeError.value = ''
+  if (!mergeForm.targetProjectName || !mergeForm.sourceProjectName) {
+    mergeError.value = '请选择主项目和副项目'
+    return
+  }
+  if (mergeForm.targetProjectName === mergeForm.sourceProjectName) {
+    mergeError.value = '主项目和副项目不能相同'
+    return
+  }
+  if (!window.confirm(`确认将副项目“${mergeForm.sourceProjectName}”合并到主项目“${mergeForm.targetProjectName}”吗？`)) {
+    return
+  }
+  mergeSubmitting.value = true
+  try {
+    const response = await mergeMemoryProject({
+      source_project_name: mergeForm.sourceProjectName,
+      target_project_name: mergeForm.targetProjectName,
+    })
+    actionMessage.value = response.message || '项目合并成功。'
+    errorMessage.value = ''
+    await loadMemories()
+    mergeSubmitting.value = false
+    closeMergeModal()
+  } catch (error) {
+    mergeError.value = error.message
+  } finally {
+    mergeSubmitting.value = false
+  }
+}
+
 // handleSearch 在用户显式提交后重置到第一页，避免旧页码导致新结果看起来为空。
 async function handleSearch() {
+  actionMessage.value = ''
   page.value = 1
   await loadMemories()
 }
 
 // handlePageSizeChange 修改分页大小后回到第一页，避免页码超界影响体验。
 async function handlePageSizeChange() {
+  actionMessage.value = ''
   page.value = 1
   await loadMemories()
 }
@@ -369,6 +495,7 @@ async function changePage(nextPage) {
   if (nextPage < 1 || (totalPage.value > 0 && nextPage > totalPage.value)) {
     return
   }
+  actionMessage.value = ''
   page.value = nextPage
   await loadMemories()
 }
@@ -492,6 +619,7 @@ async function handleDelete(item) {
   if (!window.confirm(`确认删除记忆《${item.title || item.id}》吗？删除后会同步清理向量。`)) {
     return
   }
+  actionMessage.value = ''
   errorMessage.value = ''
   try {
     await deleteMemory(item.id)

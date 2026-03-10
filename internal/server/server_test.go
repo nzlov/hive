@@ -625,6 +625,174 @@ func TestRouterAdminCanUpdateMemory(t *testing.T) {
 	}
 }
 
+// TestRouterNonAdminCannotMergeProjectMemories 验证非管理员无法执行项目合并，避免普通成员批量改写项目隔离维度。
+func TestRouterNonAdminCannotMergeProjectMemories(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	admin, _, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	if _, err := userService.CreateUser(ctx, user.CreateInput{Username: "member", RealName: "普通成员", Password: "secret-3", IsAdmin: false}); err != nil {
+		t.Fatalf("创建普通用户失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+	if _, err := service.Write(ctx, "main-project", "main", admin.UserID, []api.MemoryWriteItem{{Type: "summary", Title: "主项目", Tags: []string{"主"}, Summary: "主", Context: "主"}}); err != nil {
+		t.Fatalf("写入主项目记忆失败: %v", err)
+	}
+	if _, err := service.Write(ctx, "alias-project", "main", admin.UserID, []api.MemoryWriteItem{{Type: "summary", Title: "副项目", Tags: []string{"副"}, Summary: "副", Context: "副"}}); err != nil {
+		t.Fatalf("写入副项目记忆失败: %v", err)
+	}
+
+	memberLoginBody := bytes.NewReader([]byte(`{"username":"member","password":"secret-3"}`))
+	memberLoginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/users/auth/login", memberLoginBody)
+	memberLoginRequest.Header.Set("Content-Type", "application/json")
+	memberLoginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(memberLoginRecorder, memberLoginRequest)
+	if memberLoginRecorder.Code != http.StatusOK {
+		t.Fatalf("普通用户登录失败: status=%d body=%s", memberLoginRecorder.Code, memberLoginRecorder.Body.String())
+	}
+	var memberLoginResponse api.LoginResponse
+	if err := json.Unmarshal(memberLoginRecorder.Body.Bytes(), &memberLoginResponse); err != nil {
+		t.Fatalf("解析普通用户登录响应失败: %v", err)
+	}
+
+	mergeBody := bytes.NewReader([]byte(`{"source_project_name":"alias-project","target_project_name":"main-project"}`))
+	mergeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/memories/merge-project", mergeBody)
+	mergeRequest.Header.Set("Content-Type", "application/json")
+	mergeRequest.Header.Set("Authorization", "Bearer "+memberLoginResponse.Token)
+	mergeRecorder := httptest.NewRecorder()
+	router.ServeHTTP(mergeRecorder, mergeRequest)
+	if mergeRecorder.Code != http.StatusForbidden {
+		t.Fatalf("普通用户合并项目应被拒绝: status=%d body=%s", mergeRecorder.Code, mergeRecorder.Body.String())
+	}
+}
+
+// TestRouterAdminCanListAndMergeProjectMemories 验证管理员可拉取项目下拉并执行项目合并。
+func TestRouterAdminCanListAndMergeProjectMemories(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	admin, password, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+	if _, err := service.Write(ctx, "main-project", "main", admin.UserID, []api.MemoryWriteItem{{Type: "summary", Title: "主项目", Tags: []string{"主"}, Summary: "主", Context: "主"}}); err != nil {
+		t.Fatalf("写入主项目记忆失败: %v", err)
+	}
+	if _, err := service.Write(ctx, "alias-project", "main", admin.UserID, []api.MemoryWriteItem{{Type: "summary", Title: "副项目", Tags: []string{"副"}, Summary: "副", Context: "副"}}); err != nil {
+		t.Fatalf("写入副项目记忆失败: %v", err)
+	}
+	if err := store.ReplacePendingCleanupReviews(time.Now().UTC().Format(time.RFC3339Nano), "summary", []models.MemoryCleanupReview{{MemoryID: 1, ProjectName: "alias-project", Type: "summary", Status: "pending", Score: 0.8, ReasonJSON: "{}", SnapshotJSON: "{}", RunAt: time.Now().UTC().Format(time.RFC3339Nano), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}}); err != nil {
+		t.Fatalf("写入副项目审核记录失败: %v", err)
+	}
+	token := loginAsAdmin(t, router, password)
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/admin/memories/projects", nil)
+	listRequest.Header.Set("Authorization", "Bearer "+token)
+	listRecorder := httptest.NewRecorder()
+	router.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("读取项目列表失败: status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var listResponse api.ProjectNameListResponse
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &listResponse); err != nil {
+		t.Fatalf("解析项目列表失败: %v", err)
+	}
+	if len(listResponse.Items) != 2 || listResponse.Items[0] != "alias-project" || listResponse.Items[1] != "main-project" {
+		t.Fatalf("项目列表异常: %+v", listResponse)
+	}
+
+	mergeBody := bytes.NewReader([]byte(`{"source_project_name":"alias-project","target_project_name":"main-project"}`))
+	mergeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/memories/merge-project", mergeBody)
+	mergeRequest.Header.Set("Content-Type", "application/json")
+	mergeRequest.Header.Set("Authorization", "Bearer "+token)
+	mergeRecorder := httptest.NewRecorder()
+	router.ServeHTTP(mergeRecorder, mergeRequest)
+	if mergeRecorder.Code != http.StatusOK {
+		t.Fatalf("执行项目合并失败: status=%d body=%s", mergeRecorder.Code, mergeRecorder.Body.String())
+	}
+	var mergeResponse api.MergeProjectResponse
+	if err := json.Unmarshal(mergeRecorder.Body.Bytes(), &mergeResponse); err != nil {
+		t.Fatalf("解析项目合并响应失败: %v", err)
+	}
+	if mergeResponse.MergedMemoryCount != 1 || mergeResponse.TargetProjectName != "main-project" {
+		t.Fatalf("项目合并响应异常: %+v", mergeResponse)
+	}
+	if mergeResponse.InvalidatedApprovedReviewCount != 0 {
+		t.Fatalf("当前路由用例不应包含已批准失效记录: %+v", mergeResponse)
+	}
+	aliasItems, err := store.ListMemoriesByProjectAndType("alias-project", "summary")
+	if err != nil {
+		t.Fatalf("读取副项目记忆失败: %v", err)
+	}
+	if len(aliasItems) != 0 {
+		t.Fatalf("副项目记忆应已被迁走: %+v", aliasItems)
+	}
+	mainItems, err := store.ListMemoriesByProjectAndType("main-project", "summary")
+	if err != nil {
+		t.Fatalf("读取主项目记忆失败: %v", err)
+	}
+	if len(mainItems) != 2 {
+		t.Fatalf("主项目记忆数量异常: %d", len(mainItems))
+	}
+	reviews, total, err := store.ListCleanupReviews("", "summary", "alias-project", 1, 10)
+	if err != nil {
+		t.Fatalf("读取副项目审核记录失败: %v", err)
+	}
+	if total != 0 || len(reviews) != 0 {
+		t.Fatalf("副项目审核记录应已清空: total=%d items=%+v", total, reviews)
+	}
+}
+
+// TestRouterMergeProjectMemoriesRejectsEmptyProjectNames 验证空项目名不会被默认项目名吞掉，避免误合并到 default-project。
+func TestRouterMergeProjectMemoriesRejectsEmptyProjectNames(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	admin, password, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+	if _, err := service.Write(ctx, "default-project", "main", admin.UserID, []api.MemoryWriteItem{{Type: "summary", Title: "默认项目", Tags: []string{"默认"}, Summary: "默认", Context: "默认"}}); err != nil {
+		t.Fatalf("写入默认项目记忆失败: %v", err)
+	}
+	token := loginAsAdmin(t, router, password)
+
+	mergeBody := bytes.NewReader([]byte(`{"source_project_name":"","target_project_name":"default-project"}`))
+	mergeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/memories/merge-project", mergeBody)
+	mergeRequest.Header.Set("Content-Type", "application/json")
+	mergeRequest.Header.Set("Authorization", "Bearer "+token)
+	mergeRecorder := httptest.NewRecorder()
+	router.ServeHTTP(mergeRecorder, mergeRequest)
+	if mergeRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("空项目名应返回400: status=%d body=%s", mergeRecorder.Code, mergeRecorder.Body.String())
+	}
+	var mergeResponse api.MergeProjectResponse
+	if err := json.Unmarshal(mergeRecorder.Body.Bytes(), &mergeResponse); err != nil {
+		t.Fatalf("解析空项目名响应失败: %v", err)
+	}
+	if !strings.Contains(mergeResponse.Error, "不能为空") {
+		t.Fatalf("空项目名错误信息异常: %+v", mergeResponse)
+	}
+	defaultItems, err := store.ListMemoriesByProjectAndType("default-project", "summary")
+	if err != nil {
+		t.Fatalf("读取默认项目记忆失败: %v", err)
+	}
+	if len(defaultItems) != 1 {
+		t.Fatalf("空项目名请求不应改动默认项目数据: %+v", defaultItems)
+	}
+}
+
 // TestRouterProtectedTagCRUD 验证管理员可通过接口维护保护标签，避免白名单只能通过改配置文件管理。
 func TestRouterProtectedTagCRUD(t *testing.T) {
 	t.Helper()

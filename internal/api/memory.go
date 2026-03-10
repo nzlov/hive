@@ -185,6 +185,31 @@ type UpdateMemoryRequest struct {
 	Content string   `json:"content"`
 }
 
+// ProjectNameListResponse 返回可供下拉选择的项目名列表，避免前端自行扫描分页数据凑选项。
+type ProjectNameListResponse struct {
+	Items []string `json:"items"`
+	Error string   `json:"error,omitempty"`
+}
+
+// MergeProjectRequest 描述项目记忆合并请求，要求把副项目全部并入主项目。
+type MergeProjectRequest struct {
+	SourceProjectName string `json:"source_project_name"`
+	TargetProjectName string `json:"target_project_name"`
+}
+
+// MergeProjectResponse 返回项目合并结果摘要，便于前端展示本次迁移规模。
+type MergeProjectResponse struct {
+	SourceProjectName              string `json:"source_project_name"`
+	TargetProjectName              string `json:"target_project_name"`
+	BatchCount                     int    `json:"batch_count"`
+	MergedMemoryCount              int    `json:"merged_memory_count"`
+	RebuiltEmbeddingCount          int    `json:"rebuilt_embedding_count"`
+	ClearedReviewCount             int64  `json:"cleared_review_count"`
+	InvalidatedApprovedReviewCount int64  `json:"invalidated_approved_review_count"`
+	Message                        string `json:"message,omitempty"`
+	Error                          string `json:"error,omitempty"`
+}
+
 // ChangePasswordRequest 描述用户修改密码的请求参数，允许用户更新自己的登录密码。
 type ChangePasswordRequest struct {
 	NewPassword string `json:"new_password"`

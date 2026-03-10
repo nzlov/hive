@@ -297,6 +297,163 @@ func TestServiceUpdateRefreshesEmbedding(t *testing.T) {
 	}
 }
 
+// TestServiceMergeProjectMemoriesBatchesIDs 验证项目合并会按 ID 分页迁移并重建向量，避免大项目一次性占用过多内存。
+func TestServiceMergeProjectMemoriesBatchesIDs(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
+	provider := &stubEmbeddingProvider{enabled: true, model: "merge-batch-model", vector: []float64{0.6, 0.4}}
+	service.provider = provider
+	ctx := testContextWithStore(t, service.config)
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		t.Fatalf("读取模型存储失败: %v", err)
+	}
+	if _, err := service.Write(ctx, "main-project", "main", "admin", []api.MemoryWriteItem{{
+		Type:    "summary",
+		Title:   "主项目记忆",
+		Tags:    []string{"主项目"},
+		Summary: "主项目保留",
+		Context: "主项目保留正文",
+	}}); err != nil {
+		t.Fatalf("写入主项目记忆失败: %v", err)
+	}
+	items := make([]api.MemoryWriteItem, 0, 205)
+	for idx := 0; idx < 205; idx++ {
+		items = append(items, api.MemoryWriteItem{
+			Type:    "summary",
+			Title:   fmt.Sprintf("副项目记忆-%03d", idx),
+			Tags:    []string{"副项目", "分页"},
+			Summary: fmt.Sprintf("副项目摘要-%03d", idx),
+			Context: fmt.Sprintf("副项目正文-%03d", idx),
+		})
+	}
+	if _, err := service.Write(ctx, "alias-project", "feature/merge", "admin", items); err != nil {
+		t.Fatalf("写入副项目记忆失败: %v", err)
+	}
+	if err := store.ReplacePendingCleanupReviews(time.Now().UTC().Format(time.RFC3339Nano), "summary", []models.MemoryCleanupReview{{
+		MemoryID:     1,
+		ProjectName:  "alias-project",
+		Type:         "summary",
+		Status:       "pending",
+		Score:        0.9,
+		ReasonJSON:   "{}",
+		SnapshotJSON: "{}",
+		RunAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		CreatedAt:    time.Now().UTC().Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("写入副项目审核记录失败: %v", err)
+	}
+	approvedAliasReview := models.MemoryCleanupReview{
+		MemoryID:     1,
+		ProjectName:  "alias-project",
+		Type:         "summary",
+		Status:       "approved",
+		Score:        0.6,
+		ReasonJSON:   "{}",
+		SnapshotJSON: "{}",
+		RunAt:        time.Now().UTC().Add(2 * time.Second).Format(time.RFC3339Nano),
+		CreatedAt:    time.Now().UTC().Add(2 * time.Second).Format(time.RFC3339Nano),
+	}
+	if err := store.ReplacePendingCleanupReviews(approvedAliasReview.RunAt, "summary", []models.MemoryCleanupReview{approvedAliasReview}); err != nil {
+		t.Fatalf("写入副项目已批准审核记录失败: %v", err)
+	}
+	if err := store.ReplacePendingCleanupReviews(time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano), "summary", []models.MemoryCleanupReview{{
+		MemoryID:     2,
+		ProjectName:  "main-project",
+		Type:         "summary",
+		Status:       "pending",
+		Score:        0.7,
+		ReasonJSON:   "{}",
+		SnapshotJSON: "{}",
+		RunAt:        time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano),
+		CreatedAt:    time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("写入主项目审核记录失败: %v", err)
+	}
+
+	result, err := service.MergeProjectMemories(ctx, "alias-project", "main-project")
+	if err != nil {
+		t.Fatalf("合并项目记忆失败: %v", err)
+	}
+	if result.BatchCount != 2 {
+		t.Fatalf("分页批次数异常: %+v", result)
+	}
+	if result.MergedMemoryCount != 205 || result.RebuiltEmbeddingCount != 205 {
+		t.Fatalf("合并结果计数异常: %+v", result)
+	}
+	if result.ClearedReviewCount != 1 {
+		t.Fatalf("清理审核记录数量异常: %+v", result)
+	}
+	if result.InvalidatedApprovedReviewCount != 1 {
+		t.Fatalf("已批准记录失效数量异常: %+v", result)
+	}
+	aliasItems, err := store.ListMemoriesByProjectAndType("alias-project", "summary")
+	if err != nil {
+		t.Fatalf("读取副项目记忆失败: %v", err)
+	}
+	if len(aliasItems) != 0 {
+		t.Fatalf("副项目记忆应已全部迁移: %d", len(aliasItems))
+	}
+	mainItems, err := store.ListMemoriesByProjectAndType("main-project", "summary")
+	if err != nil {
+		t.Fatalf("读取主项目记忆失败: %v", err)
+	}
+	if len(mainItems) != 206 {
+		t.Fatalf("主项目记忆数量异常: %d", len(mainItems))
+	}
+	mergedIDs := make([]int64, 0, 205)
+	for _, item := range mainItems {
+		if strings.HasPrefix(item.Title, "副项目记忆-") {
+			mergedIDs = append(mergedIDs, item.ID)
+		}
+	}
+	embeddings, err := store.ListMemoryEmbeddings("main-project", mergedIDs)
+	if err != nil {
+		t.Fatalf("读取合并后向量失败: %v", err)
+	}
+	if len(embeddings) != 205 {
+		t.Fatalf("合并后向量数量异常: %d", len(embeddings))
+	}
+	reviews, total, err := store.ListCleanupReviews("pending", "summary", "alias-project", 1, 10)
+	if err != nil {
+		t.Fatalf("读取副项目审核记录失败: %v", err)
+	}
+	if total != 0 || len(reviews) != 0 {
+		t.Fatalf("副项目待审核记录应已清空: total=%d items=%+v", total, reviews)
+	}
+	approvedReviews, approvedTotal, err := store.ListCleanupReviews("approved", "summary", "alias-project", 1, 10)
+	if err != nil {
+		t.Fatalf("读取副项目已批准审核记录失败: %v", err)
+	}
+	if approvedTotal != 0 || len(approvedReviews) != 0 {
+		t.Fatalf("副项目已批准记录应已失效: total=%d items=%+v", approvedTotal, approvedReviews)
+	}
+	rejectedReviews, rejectedTotal, err := store.ListCleanupReviews("rejected", "summary", "alias-project", 1, 10)
+	if err != nil {
+		t.Fatalf("读取副项目已失效审核记录失败: %v", err)
+	}
+	if rejectedTotal != 1 || len(rejectedReviews) != 1 {
+		t.Fatalf("副项目已批准记录应改写为已拒绝: total=%d items=%+v", rejectedTotal, rejectedReviews)
+	}
+	if !strings.Contains(rejectedReviews[0].ExecutionNote, "已合并") {
+		t.Fatalf("失效记录缺少项目合并说明: %+v", rejectedReviews[0])
+	}
+	execResult, err := service.ExecuteApprovedCleanupReviews(ctx, nil, 20, "tester")
+	if err != nil {
+		t.Fatalf("执行已批准清理失败: %v", err)
+	}
+	if execResult.ExecutedReviewCount != 0 || execResult.ExecutedMemoryCount != 0 {
+		t.Fatalf("副项目旧批准记录失效后不应再删除记忆: %+v", execResult)
+	}
+	mainReviews, mainTotal, err := store.ListCleanupReviews("", "summary", "main-project", 1, 10)
+	if err != nil {
+		t.Fatalf("读取主项目审核记录失败: %v", err)
+	}
+	if mainTotal != 1 || len(mainReviews) != 1 {
+		t.Fatalf("主项目审核记录不应受影响: total=%d items=%+v", mainTotal, mainReviews)
+	}
+}
+
 // TestServiceSearchReturnsBranchMetadata 验证查询会返回分支元信息，后续由脚本决定是否保留该条记忆。
 func TestServiceSearchReturnsBranchMetadata(t *testing.T) {
 	t.Helper()
