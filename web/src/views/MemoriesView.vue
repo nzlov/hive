@@ -36,11 +36,20 @@
 
       <section class="panel overflow-hidden">
         <div class="overflow-x-auto">
-          <table class="min-w-full table-auto divide-y divide-slate-200 text-sm">
-            <thead class="bg-slate-50/80 text-left text-slate-500">
+          <table class="min-w-full table-fixed divide-y divide-slate-200 text-sm">
+            <colgroup>
+              <col class="w-[14rem]" />
+              <col class="w-[17rem]" />
+              <col />
+              <col class="w-[7rem]" />
+              <col class="w-[5.5rem]" />
+              <col class="w-[8.5rem]" />
+              <col class="w-[8rem]" />
+            </colgroup>
+            <thead class="bg-slate-50/80 text-center text-slate-500">
               <tr>
-                <th class="w-px whitespace-nowrap px-5 py-4 font-medium">项目</th>
-                <th class="w-px whitespace-nowrap px-5 py-4 font-medium">标题</th>
+                <th class="px-5 py-4 font-medium">项目</th>
+                <th class="px-5 py-4 font-medium">标题</th>
                 <th class="px-5 py-4 font-medium">总结</th>
                 <th class="w-px whitespace-nowrap px-5 py-4 font-medium">创建人</th>
                 <th class="w-px whitespace-nowrap px-5 py-4 font-medium">置信度</th>
@@ -56,15 +65,12 @@
                 <td class="px-5 py-10 text-center text-slate-400" colspan="7">暂无匹配的记忆</td>
               </tr>
               <tr v-for="item in memories" :key="item.id" class="align-top">
-                <td class="w-px whitespace-nowrap px-5 py-4 text-ink">
-                  <div class="max-w-[18rem] space-y-1">
-                    <p class="text-xs uppercase tracking-[0.24em] text-slate-400">项目</p>
-                    <p class="whitespace-pre-wrap break-all font-semibold leading-6">{{ item.project_name || '-' }}</p>
-                  </div>
+                <td class="px-5 py-4 text-center text-ink align-top">
+                  <p class="whitespace-pre-wrap break-all font-semibold leading-6">{{ item.project_name || '-' }}</p>
                 </td>
-                <td class="w-px whitespace-nowrap px-5 py-4 text-ink">
-                  <div class="max-w-[15rem] space-y-3">
-                    <div class="flex flex-wrap items-center gap-2">
+                <td class="px-5 py-4 text-center text-ink align-top">
+                  <div class="space-y-3">
+                    <div class="flex flex-wrap items-center justify-center gap-2">
                       <p class="break-words font-medium leading-6">{{ item.title || '-' }}</p>
                       <span
                         v-if="item.type"
@@ -84,7 +90,7 @@
                         <span>{{ formatTypeLabel(item.type) }}</span>
                       </span>
                     </div>
-                    <div v-if="item.tags?.length" class="flex flex-wrap gap-2">
+                    <div v-if="item.tags?.length" class="flex flex-wrap justify-center gap-2">
                       <span
                         v-for="tag in item.tags"
                         :key="`${item.id}-${tag}`"
@@ -95,21 +101,21 @@
                     </div>
                   </div>
                 </td>
-                <td class="w-full px-5 py-4 text-slate-600">
-                  <p class="max-w-md whitespace-pre-wrap break-words">{{ item.summary || '-' }}</p>
+                <td class="w-full px-5 py-4 text-center text-slate-600">
+                  <p class="mx-auto max-w-md whitespace-pre-wrap break-words">{{ item.summary || '-' }}</p>
                 </td>
-                <td class="w-px whitespace-nowrap px-5 py-4 text-slate-500">
-                  <p class="max-w-[7rem] break-words leading-6">{{ item.creator_name || item.userid || '-' }}</p>
+                <td class="w-px whitespace-nowrap px-5 py-4 text-center text-slate-500">
+                  <p class="mx-auto max-w-[7rem] break-words leading-6">{{ item.creator_name || item.userid || '-' }}</p>
                 </td>
-                <td class="w-px whitespace-nowrap px-5 py-4 text-slate-500">{{ formatConfidence(item.confidence) }}</td>
-                <td class="w-px whitespace-nowrap px-5 py-4 text-slate-500">
-                  <div class="min-w-[7.5rem] space-y-1 whitespace-nowrap">
+                <td class="w-px whitespace-nowrap px-5 py-4 text-center text-slate-500">{{ formatConfidence(item.confidence) }}</td>
+                <td class="w-px whitespace-nowrap px-5 py-4 text-center text-slate-500">
+                  <div class="min-w-[7.5rem] space-y-1 whitespace-nowrap text-center">
                     <p>{{ formatDateParts(item.created_at).date }}</p>
                     <p class="text-xs text-slate-400">{{ formatDateParts(item.created_at).time }}</p>
                   </div>
                 </td>
-                <td class="w-px whitespace-nowrap px-5 py-4">
-                  <div class="flex flex-wrap items-center gap-2">
+                <td class="w-px whitespace-nowrap px-5 py-4 text-center">
+                  <div class="flex flex-nowrap items-center justify-center gap-2 whitespace-nowrap">
                     <button class="icon-btn" type="button" aria-label="查看详情" @click="openDetail(item.id)">
                       <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
                         <path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z" />
