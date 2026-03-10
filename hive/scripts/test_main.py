@@ -171,6 +171,38 @@ class WriteItemsFileTest(unittest.TestCase):
             self.assertEqual(items[0]["type"], "summary")
             self.assertEqual(items[0]["title"], "标题")
 
+    def test_parse_write_items_reads_utf8_bom_items_file(self) -> None:
+        """Windows 导出的 UTF-8 BOM JSON 也应可解析，避免文件输入被误判为非法 JSON。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            items_path = Path(temp_dir) / "items.json"
+            items_path.write_bytes(
+                '[{"type":"summary","title":"标题","tags":[],"summary":"","context":"正文"}]'.encode("utf-8-sig")
+            )
+            args = type("Args", (), {"items_json": "", "items_file": str(items_path)})()
+
+            items = MAIN.parse_write_items(args)
+
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["context"], "正文")
+
+    def test_parse_write_items_accepts_bom_prefixed_items_json(self) -> None:
+        """命令行直接传入带 BOM 的 JSON 时也应兼容，避免不同终端编码导致写入失败。"""
+
+        args = type(
+            "Args",
+            (),
+            {
+                "items_json": '\ufeff[{"type":"error","title":"标题","tags":[],"summary":"","context":"正文"}]',
+                "items_file": "",
+            },
+        )()
+
+        items = MAIN.parse_write_items(args)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["type"], "error")
+
     def test_parse_write_items_requires_exactly_one_source(self) -> None:
         """--items-json 与 --items-file 同时提供或同时缺失都应报错，避免来源歧义。"""
 

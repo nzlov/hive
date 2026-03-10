@@ -246,6 +246,20 @@ def normalize_tags(raw_tags: object) -> list[str]:
     return [str(item).strip() for item in raw_tags if str(item).strip()]
 
 
+def load_items_json_text(items_json: str = "", items_file: str = "") -> str:
+    """统一去掉命令行或文件里的 UTF-8 BOM，避免 Windows 生成的 JSON 被误判非法。"""
+
+    if items_file:
+        file_path = Path(items_file).expanduser()
+        try:
+            return file_path.read_bytes().decode("utf-8-sig")
+        except OSError as exc:
+            raise SystemExit(f"--items-file 读取失败: {file_path}") from exc
+        except UnicodeDecodeError as exc:
+            raise SystemExit(f"--items-file 不是合法 UTF-8 文件: {file_path}") from exc
+    return items_json.lstrip("\ufeff")
+
+
 def parse_write_items(args: argparse.Namespace) -> list[dict[str, Any]]:
     """写入只接受记忆数组，避免继续维护单条与批量两套协议。"""
 
@@ -254,12 +268,13 @@ def parse_write_items(args: argparse.Namespace) -> list[dict[str, Any]]:
     if bool(items_json) == bool(items_file):
         raise SystemExit("--items-json 与 --items-file 必须二选一")
 
+    source_name = "内容"
     if items_file:
-        file_path = Path(items_file).expanduser()
-        try:
-            items_json = file_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise SystemExit(f"--items-file 读取失败: {file_path}") from exc
+        source_name = "--items-file 内容"
+    elif items_json:
+        source_name = "--items-json"
+
+    items_json = load_items_json_text(items_json=items_json, items_file=items_file)
 
     if not items_json.strip():
         raise SystemExit("记忆内容不能为空，且必须是记忆对象数组")
@@ -267,26 +282,26 @@ def parse_write_items(args: argparse.Namespace) -> list[dict[str, Any]]:
     try:
         payload = json.loads(items_json)
     except json.JSONDecodeError as exc:
-        raise SystemExit("--items-json 必须是合法 JSON") from exc
+        raise SystemExit(f"{source_name}不是合法 JSON") from exc
 
     if not isinstance(payload, list):
-        raise SystemExit("--items-json 必须是对象数组")
+        raise SystemExit(f"{source_name}必须是对象数组")
 
     items: list[dict[str, Any]] = []
     for index, item in enumerate(payload, start=1):
         if not isinstance(item, dict):
-            raise SystemExit(f"--items-json 第 {index} 项必须是对象")
+            raise SystemExit(f"{source_name}第 {index} 项必须是对象")
         mem_type = str(item.get("type", "")).strip()
         if mem_type not in {"summary", "error"}:
             raise SystemExit(
-                f"--items-json 第 {index} 项的 type 必须是 summary 或 error"
+                f"{source_name}第 {index} 项的 type 必须是 summary 或 error"
             )
         title = str(item.get("title", "")).strip()
         if not title:
-            raise SystemExit(f"--items-json 第 {index} 项缺少 title")
+            raise SystemExit(f"{source_name}第 {index} 项缺少 title")
         context = str(item.get("context", "")).strip()
         if not context:
-            raise SystemExit(f"--items-json 第 {index} 项缺少 context")
+            raise SystemExit(f"{source_name}第 {index} 项缺少 context")
         items.append(
             {
                 "type": mem_type,
@@ -297,7 +312,7 @@ def parse_write_items(args: argparse.Namespace) -> list[dict[str, Any]]:
             }
         )
     if not items:
-        raise SystemExit("--items-json 不能为空数组")
+        raise SystemExit(f"{source_name}不能为空数组")
     return items
 
 
