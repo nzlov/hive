@@ -202,6 +202,59 @@ func (s *Service) Write(ctx context.Context, projectName, gitBranch, userID stri
 	return store.SourceLabel(), nil
 }
 
+// Update 更新单条记忆的可编辑字段，并在成功后同步刷新对应向量与搜索缓存。
+func (s *Service) Update(ctx context.Context, id int64, request api.UpdateMemoryRequest) (models.Memory, error) {
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		return models.Memory{}, err
+	}
+	var updated models.Memory
+	err = store.WithTx(func(txStore *models.Store) error {
+		existing, err := txStore.GetMemoryByID(id)
+		if err != nil {
+			return err
+		}
+		updated, err = txStore.SaveMemoryEditableFields(models.Memory{
+			ID:      existing.ID,
+			Title:   sanitizeTitle(request.Title),
+			Tags:    models.EncodeTags(request.Tags),
+			Summary: strings.TrimSpace(request.Summary),
+			Content: normalizeMemoryContent(request.Content),
+		})
+		if err != nil {
+			return err
+		}
+		if !s.provider.Enabled() {
+			return nil
+		}
+		row := memoryRowFromModel(updated)
+		vectors, err := s.provider.EmbedTexts([]string{BuildMemoryEmbeddingText(row)})
+		if err != nil {
+			return err
+		}
+		if len(vectors) == 0 {
+			return nil
+		}
+		updatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+		if err := txStore.UpsertMemoryEmbeddings([]models.MemoryEmbedding{{
+			MemoryID:    updated.ID,
+			ProjectName: updated.ProjectName,
+			Type:        updated.Type,
+			Vector:      models.EncodeVector(vectors[0]),
+			Timestamp:   updated.Timestamp,
+			UpdatedAt:   updatedAt,
+		}}); err != nil {
+			return err
+		}
+		return txStore.SetMemoryMetadata(embeddingModelMetaKey, s.provider.ModelName(), updatedAt)
+	})
+	if err != nil {
+		return models.Memory{}, err
+	}
+	s.invalidateSearchCache()
+	return updated, nil
+}
+
 // EnsureEmbeddingsReady 在服务启动阶段校验模型一致性，避免请求到来后才暴露旧向量问题。
 func (s *Service) EnsureEmbeddingsReady(ctx context.Context) (RebuildResult, error) {
 	store, err := models.StoreFromContext(ctx)

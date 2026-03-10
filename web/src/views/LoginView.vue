@@ -8,7 +8,7 @@
           <div class="mt-10 grid gap-4 md:grid-cols-2">
             <div class="rounded-3xl border border-white/20 bg-white/10 p-5">
               <p class="text-sm font-semibold">JWT 管理端</p>
-              <p class="mt-2 text-sm text-white/70">用户管理接口统一走 `/api/v1/users`，便于后台管理与页面守卫。</p>
+              <p class="mt-2 text-sm text-white/70">登录态接口走 `/api/v1/users`，管理员写操作统一收敛到 `/api/v1/admin`。</p>
             </div>
             <div class="rounded-3xl border border-white/20 bg-white/10 p-5">
               <p class="text-sm font-semibold">API Token 记忆接口</p>

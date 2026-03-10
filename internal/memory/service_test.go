@@ -27,6 +27,12 @@ type queryEmbeddingProvider struct {
 	calls  int
 }
 
+// textAwareEmbeddingProvider 根据输入文本生成不同向量，便于验证编辑后向量是否同步刷新。
+type textAwareEmbeddingProvider struct {
+	model string
+	calls int
+}
+
 // Enabled 让语义搜索路径保持开启，避免测试退化为关键字分支。
 func (p *queryEmbeddingProvider) Enabled() bool { return true }
 
@@ -41,6 +47,27 @@ func (p *queryEmbeddingProvider) EmbedTexts(texts []string) ([][]float64, error)
 		vector := make([]float64, len(p.vector))
 		copy(vector, p.vector)
 		vectors = append(vectors, vector)
+	}
+	return vectors, nil
+}
+
+// Enabled 让编辑测试始终走向量更新路径，避免退化为仅更新主记录。
+func (p *textAwareEmbeddingProvider) Enabled() bool { return true }
+
+// ModelName 返回固定模型名，保证测试里的元数据行为稳定可预测。
+func (p *textAwareEmbeddingProvider) ModelName() string { return p.model }
+
+// EmbedTexts 根据文本长度和首字符生成可区分向量，方便断言编辑前后向量已变化。
+func (p *textAwareEmbeddingProvider) EmbedTexts(texts []string) ([][]float64, error) {
+	p.calls++
+	vectors := make([][]float64, 0, len(texts))
+	for _, text := range texts {
+		runes := []rune(strings.TrimSpace(text))
+		first := 0.0
+		if len(runes) > 0 {
+			first = float64(runes[0])
+		}
+		vectors = append(vectors, []float64{float64(len(runes)), first})
 	}
 	return vectors, nil
 }
@@ -182,6 +209,82 @@ func TestServiceWriteAndSearch(t *testing.T) {
 	}
 	if rows[0].GitBranch != "feature/test-branch" {
 		t.Fatalf("写入记忆未落库 git_branch: %+v", rows)
+	}
+}
+
+// TestServiceUpdateRefreshesEmbedding 验证编辑记忆后会同步刷新向量内容，避免语义检索继续命中旧文本。
+func TestServiceUpdateRefreshesEmbedding(t *testing.T) {
+	t.Helper()
+	service := NewService(config.AppConfig{MemoryRoot: t.TempDir()})
+	provider := &textAwareEmbeddingProvider{model: "update-aware-model"}
+	service.provider = provider
+	ctx := testContextWithStore(t, service.config)
+
+	if _, err := service.Write(ctx, "update-project", "feature/edit", "editor-user", []api.MemoryWriteItem{{
+		Type:    "summary",
+		Title:   "编辑前标题",
+		Tags:    []string{"编辑前", "标签"},
+		Summary: "编辑前总结",
+		Context: "编辑前正文",
+	}}); err != nil {
+		t.Fatalf("写入测试记忆失败: %v", err)
+	}
+	store, err := models.StoreFromContext(ctx)
+	if err != nil {
+		t.Fatalf("读取模型存储失败: %v", err)
+	}
+	items, err := store.ListAllMemories()
+	if err != nil || len(items) != 1 {
+		t.Fatalf("读取初始记忆失败: err=%v items=%+v", err, items)
+	}
+	memoryID := items[0].ID
+	beforeEmbedding, err := store.ListMemoryEmbeddings("update-project", []int64{memoryID})
+	if err != nil {
+		t.Fatalf("读取初始向量失败: %v", err)
+	}
+	beforeVector := beforeEmbedding[memoryID]
+	if len(beforeVector) == 0 {
+		t.Fatalf("初始向量为空: %+v", beforeEmbedding)
+	}
+
+	updated, err := service.Update(ctx, memoryID, api.UpdateMemoryRequest{
+		Title:   "编辑后标题",
+		Tags:    []string{"编辑后", "向量同步"},
+		Summary: "编辑后总结",
+		Content: "编辑后正文\n\n包含更多内容用于触发不同向量。",
+	})
+	if err != nil {
+		t.Fatalf("更新记忆失败: %v", err)
+	}
+	if updated.Title != "编辑后标题" || updated.Summary != "编辑后总结" {
+		t.Fatalf("更新后的主记录字段异常: %+v", updated)
+	}
+	if updated.ProjectName != "update-project" || updated.Type != "summary" {
+		t.Fatalf("更新不应修改不可编辑字段: %+v", updated)
+	}
+	afterEmbedding, err := store.ListMemoryEmbeddings("update-project", []int64{memoryID})
+	if err != nil {
+		t.Fatalf("读取更新后向量失败: %v", err)
+	}
+	afterVector := afterEmbedding[memoryID]
+	if len(afterVector) == 0 {
+		t.Fatalf("更新后向量为空: %+v", afterEmbedding)
+	}
+	if len(beforeVector) != len(afterVector) {
+		t.Fatalf("更新前后向量维度不一致: before=%v after=%v", beforeVector, afterVector)
+	}
+	if beforeVector[0] == afterVector[0] && beforeVector[1] == afterVector[1] {
+		t.Fatalf("编辑后向量未刷新: before=%v after=%v", beforeVector, afterVector)
+	}
+	if provider.calls < 2 {
+		t.Fatalf("编辑前后都应触发嵌入生成: calls=%d", provider.calls)
+	}
+	stored, err := store.GetMemoryByID(memoryID)
+	if err != nil {
+		t.Fatalf("回读更新后的记忆失败: %v", err)
+	}
+	if stored.GitBranch != "feature/edit" || stored.CreatedAt == "" || stored.Timestamp == "" {
+		t.Fatalf("更新后应保留原始元数据: %+v", stored)
 	}
 }
 

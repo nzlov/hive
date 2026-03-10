@@ -42,12 +42,12 @@ export function fetchUsers(page = 1, pageSize = 10, keyword = '') {
   if (String(keyword || '').trim()) {
     params.set('keyword', String(keyword).trim())
   }
-  return request(`/api/v1/users?${params.toString()}`)
+  return request(`/api/v1/admin/users?${params.toString()}`)
 }
 
 // createUser 创建新用户并返回完整对象，便于页面直接更新列表而不是再次推断生成字段。
 export function createUser(payload) {
-  return request('/api/v1/users', {
+  return request('/api/v1/admin/users', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
@@ -55,7 +55,7 @@ export function createUser(payload) {
 
 // updateUser 更新用户资料、密码或 token，集中复用同一接口约定。
 export function updateUser(id, payload) {
-  return request(`/api/v1/users/${id}`, {
+  return request(`/api/v1/admin/users/${id}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
   })
@@ -63,7 +63,7 @@ export function updateUser(id, payload) {
 
 // deleteUser 删除指定用户，保持页面层无需关心删除接口的空响应细节。
 export function deleteUser(id) {
-  return request(`/api/v1/users/${id}`, { method: 'DELETE' })
+  return request(`/api/v1/admin/users/${id}`, { method: 'DELETE' })
 }
 
 // fetchMemories 拉取后台记忆分页列表，确保管理页与服务端共享同一筛选协议。
@@ -82,7 +82,15 @@ export function fetchMemoryDetail(id) {
   return request(`/api/v1/memories/${id}`)
 }
 
+// updateMemory 更新单条记忆，并由后端同步刷新向量数据保持检索一致。
+export function updateMemory(id, payload) {
+  return request(`/api/v1/admin/memories/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
 // deleteMemory 删除记忆并触发后端同步清理向量，保持索引与主记录一致。
 export function deleteMemory(id) {
-  return request(`/api/v1/memories/${id}`, { method: 'DELETE' })
+  return request(`/api/v1/admin/memories/${id}`, { method: 'DELETE' })
 }
