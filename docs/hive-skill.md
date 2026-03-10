@@ -25,6 +25,68 @@ Hive Skill 是 OpenCode 的一个技能模块，专门用于：
 
 只有当用户明确要求"总结并记忆""保存记忆""写入总结记忆"时，才会执行写入操作。
 
+## 客户端配置说明
+
+Hive 客户端脚本读取本地配置文件：
+
+```text
+~/.config/hive/config.json
+```
+
+当文件不存在时，脚本会自动创建最小配置骨架：
+
+```json
+{
+  "default_server_base_url": "http://127.0.0.1:8080",
+  "api_token": "",
+  "projects": {}
+}
+```
+
+### 完整配置示例
+
+```json
+{
+  "default_server_base_url": "http://127.0.0.1:8080",
+  "api_token": "global-token",
+  "projects": {
+    "/home/dev/work/repo-a": {
+      "alias": "team/repo-a",
+      "server_url": "http://127.0.0.1:8080",
+      "api_token": "repo-a-token"
+    },
+    "github.com/acme/repo-b.git": {
+      "alias": "acme/repo-b",
+      "server_url": "https://hive.example.com",
+      "api_token": "repo-b-token"
+    }
+  }
+}
+```
+
+### 字段说明（推荐最简键名）
+
+- 服务端地址：
+  - 全局默认使用 `default_server_base_url`
+  - 项目级覆盖使用 `server_url`
+- API Token：
+  - 项目级优先，其次全局
+  - 推荐统一使用 `api_token`
+  - 未配置 Token 时，`search` / `write` 会直接失败
+- 项目标识（写入 `project_name`）：
+  - 项目级使用 `alias`
+  - 若未配置，优先使用 Git 远端仓库标识（如 `github.com/org/repo.git`），再回退到目录名
+
+### `projects` 匹配规则
+
+脚本会基于 `--root` 解析绝对路径，并按以下顺序命中 `projects` 键：
+
+1. 项目绝对路径（如 `/home/dev/work/repo-a`）
+2. Git 远端仓库标识（如 `github.com/acme/repo-b.git`）
+3. 目录名（如 `repo-a`）
+
+建议优先使用“绝对路径”或“Git 远端仓库标识”作为键，避免多仓库重名导致配置串用。
+
 ## 检索记忆
 
 使用关键词或描述进行查询，支持多个查询词，按时间倒序返回。
