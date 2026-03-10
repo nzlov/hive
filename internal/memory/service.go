@@ -691,8 +691,8 @@ func (s *Service) rankRowsByKeywordBM25(rows []Row, queries []string) ([]Row, ma
 // keywordBM25FieldsAndWeights 返回 BM25 参与字段和权重，避免关键字打分字段散落在多处。
 func (s *Service) keywordBM25FieldsAndWeights() ([]string, map[string]float64) {
 	allowed := map[string]struct{}{"title": {}, "summary": {}, "tags": {}, "content": {}, "project_name": {}}
-	defaultFields := []string{"title", "summary", "tags", "content", "project_name"}
-	defaultWeights := map[string]float64{"title": 2.0, "summary": 1.5, "tags": 1.5, "content": 1.0, "project_name": 0.8}
+	defaultFields := []string{"title", "summary", "tags", "content"}
+	defaultWeights := map[string]float64{"title": 2.0, "summary": 1.5, "tags": 1.5, "content": 1.0}
 	if s.config.SearchConfig == nil {
 		return defaultFields, defaultWeights
 	}

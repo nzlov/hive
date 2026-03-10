@@ -25,13 +25,12 @@
       "backend": "auto",
       "bm25_k1": 1.2,
       "bm25_b": 0.75,
-      "fields": ["title", "summary", "tags", "content", "project_name"],
+      "fields": ["title", "summary", "tags", "content"],
       "field_weights": {
         "title": 2.0,
         "summary": 1.5,
         "tags": 1.5,
-        "content": 1.0,
-        "project_name": 0.8
+        "content": 1.0
       },
       "synonyms": {
         "enabled": true,
