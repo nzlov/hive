@@ -69,6 +69,7 @@
 - `search.cache.query_embedding_ttl_seconds`：查询向量缓存 TTL（秒）
 - `search.cache.semantic_hits_ttl_seconds`：语义命中缓存 TTL（秒）
 - `search.cache.max_entries`：缓存最大条目数
+- `search.cache.stats_refresh_interval_seconds`：管理端缓存统计刷新间隔（秒），`0` 表示仅首次加载
 - `embedding.base_url`：OpenAI 兼容 Embeddings 服务根地址
 - `embedding.api_key`：嵌入服务认证令牌
 - `embedding.model`：嵌入模型名
@@ -126,7 +127,8 @@
       "enabled": false,
       "query_embedding_ttl_seconds": 600,
       "semantic_hits_ttl_seconds": 120,
-      "max_entries": 5000
+      "max_entries": 5000,
+      "stats_refresh_interval_seconds": 10
     }
   },
   "embedding": {

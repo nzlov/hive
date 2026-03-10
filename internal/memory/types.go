@@ -75,3 +75,18 @@ type MemoryListResult struct {
 	PageSize  int
 	TotalPage int
 }
+
+// CacheStatsSnapshot 描述缓存运行时快照，便于管理端观察命中率与容量占用。
+type CacheStatsSnapshot struct {
+	Enabled                  bool
+	QueryEmbeddingEntryCount int
+	SemanticHitsEntryCount   int
+	QueryEmbeddingHitCount   uint64
+	QueryEmbeddingMissCount  uint64
+	SemanticHitsHitCount     uint64
+	SemanticHitsMissCount    uint64
+	QueryEmbeddingEvictCount uint64
+	SemanticHitsEvictCount   uint64
+	EstimatedMemoryBytes     int64
+	HitRate                  float64
+}

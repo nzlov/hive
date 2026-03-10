@@ -36,6 +36,16 @@ export function fetchCurrentUser() {
   return request('/api/v1/users/me')
 }
 
+// fetchDashboardStats 拉取总览页基础统计与缓存配置，避免页面拆分多个初始化请求。
+export function fetchDashboardStats() {
+  return request('/api/v1/users/stats')
+}
+
+// fetchDashboardCacheStats 拉取缓存统计快照，供总览页按配置频率轮询刷新。
+export function fetchDashboardCacheStats() {
+  return request('/api/v1/users/stats/cache')
+}
+
 // fetchUsers 拉取用户分页列表，确保搜索和翻页共享同一查询协议。
 export function fetchUsers(page = 1, pageSize = 10, keyword = '') {
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })

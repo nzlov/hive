@@ -36,6 +36,10 @@ func main() {
 	if createdPassword != "" {
 		log.Printf("已创建默认管理员 username=%s userid=%s password=%s", defaultAdmin.Username, defaultAdmin.UserID, createdPassword)
 	}
+	statsService := server.NewDashboardStatsService()
+	if err := statsService.Bootstrap(store); err != nil {
+		log.Fatalf("初始化总览统计失败: %v", err)
+	}
 	result, err := service.EnsureEmbeddingsReady(ctx)
 	if err != nil {
 		log.Fatalf("校验嵌入模型失败: %v", err)
@@ -43,7 +47,7 @@ func main() {
 	if result.Message != "" {
 		log.Printf("嵌入模型检查完成: %s", result.Message)
 	}
-	router := server.NewRouter(service, userService, store)
+	router := server.NewRouter(service, userService, store, statsService)
 	log.Printf("hive server listening on %s, %s", cfg.ServerListenAddr, cfg.String())
 	if err := router.Run(cfg.ServerListenAddr); err != nil {
 		log.Fatalf("启动服务失败: %v", err)

@@ -177,3 +177,54 @@ type MemoryDetailResponse struct {
 type ChangePasswordRequest struct {
 	NewPassword string `json:"new_password"`
 }
+
+// DashboardTagStat 描述热门标签统计项，便于前端按标签样式展示 Top 列表。
+type DashboardTagStat struct {
+	Tag   string `json:"tag"`
+	Count int64  `json:"count"`
+}
+
+// DashboardMemoryTypeStat 描述记忆类型分布，避免前端重复计算 summary/error 口径。
+type DashboardMemoryTypeStat struct {
+	Summary int64 `json:"summary"`
+	Error   int64 `json:"error"`
+}
+
+// DashboardBaseStats 描述总览页默认展示的基础统计信息。
+type DashboardBaseStats struct {
+	UserTotal      int64                   `json:"user_total"`
+	MemoryTotal    int64                   `json:"memory_total"`
+	MemoryType     DashboardMemoryTypeStat `json:"memory_type"`
+	HotTags        []DashboardTagStat      `json:"hot_tags"`
+	HotTagTopLimit int                     `json:"hot_tag_top_limit"`
+}
+
+// DashboardCacheStats 描述缓存统计信息，供缓存开启场景下展示运行状态。
+type DashboardCacheStats struct {
+	Enabled                  bool    `json:"enabled"`
+	QueryEmbeddingEntryCount int     `json:"query_embedding_entry_count"`
+	SemanticHitsEntryCount   int     `json:"semantic_hits_entry_count"`
+	HitRate                  float64 `json:"hit_rate"`
+	EstimatedMemoryBytes     int64   `json:"estimated_memory_bytes"`
+	EstimatedMemoryHuman     string  `json:"estimated_memory_human"`
+	QueryEmbeddingHitCount   uint64  `json:"query_embedding_hit_count"`
+	QueryEmbeddingMissCount  uint64  `json:"query_embedding_miss_count"`
+	SemanticHitsHitCount     uint64  `json:"semantic_hits_hit_count"`
+	SemanticHitsMissCount    uint64  `json:"semantic_hits_miss_count"`
+	QueryEmbeddingEvictCount uint64  `json:"query_embedding_evict_count"`
+	SemanticHitsEvictCount   uint64  `json:"semantic_hits_evict_count"`
+}
+
+// DashboardStatsResponse 描述总览统计接口响应，避免前端拼接多个接口。
+type DashboardStatsResponse struct {
+	Base                     DashboardBaseStats  `json:"base"`
+	Cache                    DashboardCacheStats `json:"cache"`
+	CacheRefreshIntervalSecs int                 `json:"cache_refresh_interval_seconds"`
+	Error                    string              `json:"error,omitempty"`
+}
+
+// DashboardCacheStatsResponse 描述缓存统计接口响应，便于前端按配置频率轮询。
+type DashboardCacheStatsResponse struct {
+	Cache DashboardCacheStats `json:"cache"`
+	Error string              `json:"error,omitempty"`
+}

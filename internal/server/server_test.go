@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/nzlov/hive/internal/api"
 	"github.com/nzlov/hive/internal/config"
 	"github.com/nzlov/hive/internal/memory"
@@ -32,6 +33,16 @@ func testContextWithStore(t *testing.T, cfg config.AppConfig) (context.Context, 
 	return models.StoreToContext(context.Background(), store), store
 }
 
+// newTestRouter 统一构造带统计服务的路由，避免每个用例重复拼装启动依赖。
+func newTestRouter(t *testing.T, service *memory.Service, userService *user.Service, store *models.Store) *gin.Engine {
+	t.Helper()
+	statsService := NewDashboardStatsService()
+	if err := statsService.Bootstrap(store); err != nil {
+		t.Fatalf("初始化统计服务失败: %v", err)
+	}
+	return NewRouter(service, userService, store, statsService)
+}
+
 // TestRouterWriteAndSearch 验证 HTTP 路由能正确透传到服务层，避免接口协议改动后脚本调用失效。
 func TestRouterWriteAndSearch(t *testing.T) {
 	t.Helper()
@@ -48,7 +59,7 @@ func TestRouterWriteAndSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("初始化默认管理员失败: %v", err)
 	}
-	router := NewRouter(service, userService, store)
+	router := newTestRouter(t, service, userService, store)
 	writeBody, err := json.Marshal(api.WriteRequest{ProjectName: "router-alias", GitBranch: "feature/router", Items: []api.MemoryWriteItem{{
 		Type:    "error",
 		Title:   "HTTP接口测试",
@@ -139,7 +150,7 @@ func TestRouterReturnsErrorField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("初始化默认管理员失败: %v", err)
 	}
-	router := NewRouter(service, userService, store)
+	router := newTestRouter(t, service, userService, store)
 
 	searchRequest := httptest.NewRequest(http.MethodPost, "/tokenapi/v1/memories/search", bytes.NewReader([]byte(`{"project_name":123}`)))
 	searchRequest.Header.Set("Content-Type", "application/json")
@@ -165,7 +176,7 @@ func TestRouterDoesNotExposeRebuildEmbeddingsEndpoint(t *testing.T) {
 	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
 	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
 	_, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
-	router := NewRouter(service, userService, store)
+	router := newTestRouter(t, service, userService, store)
 
 	req := httptest.NewRequest(http.MethodPost, "/tokenapi/v1/memories/rebuild-embeddings", bytes.NewReader([]byte(`{"force":true}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -196,7 +207,7 @@ func TestRouterMemoryListReturnsConfidence(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("写入测试记忆失败: %v", err)
 	}
-	router := NewRouter(service, userService, store)
+	router := newTestRouter(t, service, userService, store)
 
 	loginBody := bytes.NewReader([]byte(`{"username":"admin","password":"` + password + `"}`))
 	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/users/auth/login", loginBody)
@@ -247,7 +258,7 @@ func TestRouterLoginAndUserList(t *testing.T) {
 	if _, err := userService.CreateUser(ctx, user.CreateInput{Username: "bob", RealName: "鲍勃", Password: "secret-2", IsAdmin: false}); err != nil {
 		t.Fatalf("创建测试用户失败: %v", err)
 	}
-	router := NewRouter(service, userService, store)
+	router := newTestRouter(t, service, userService, store)
 
 	loginBody := bytes.NewReader([]byte(`{"username":"admin","password":"` + password + `"}`))
 	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/users/auth/login", loginBody)
@@ -297,7 +308,7 @@ func TestRouterMemoryEndpointsReturnCreatorName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("初始化默认管理员失败: %v", err)
 	}
-	router := NewRouter(service, userService, store)
+	router := newTestRouter(t, service, userService, store)
 
 	writeBody := bytes.NewReader([]byte(`{"project_name":"router-memory","git_branch":"main","items":[{"type":"summary","title":"创建人映射","tags":["creator"],"summary":"验证后端直接返回真实姓名","context":"content"}]}`))
 	writeRequest := httptest.NewRequest(http.MethodPost, "/tokenapi/v1/memories/write", writeBody)
@@ -356,5 +367,91 @@ func TestRouterMemoryEndpointsReturnCreatorName(t *testing.T) {
 	}
 	if detailResponse.Item.CreatorName != admin.RealName {
 		t.Fatalf("记忆详情未返回创建人真实姓名: %+v", detailResponse)
+	}
+}
+
+// TestRouterStatsEndpoints 验证总览统计和缓存统计接口可用，避免前端新增卡片后缺少数据来源。
+func TestRouterStatsEndpoints(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{
+		MemoryRoot: memoryRoot,
+		JWTSecret:  "test-secret",
+		SearchConfig: &config.SearchConfig{
+			CacheEnabled:              true,
+			CacheQueryEmbeddingTTL:    600,
+			CacheSemanticHitsTTL:      120,
+			CacheMaxEntries:           100,
+			CacheStatsRefreshInterval: 5,
+		},
+	})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	admin, password, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+
+	writeBody := bytes.NewReader([]byte(`{"project_name":"stats-project","git_branch":"main","items":[{"type":"summary","title":"统计一","tags":["高频","后端"],"summary":"统计测试","context":"content"},{"type":"error","title":"统计二","tags":["高频"],"summary":"统计测试","context":"content"}]}`))
+	writeRequest := httptest.NewRequest(http.MethodPost, "/tokenapi/v1/memories/write", writeBody)
+	writeRequest.Header.Set("Content-Type", "application/json")
+	writeRequest.Header.Set("X-API-Token", admin.APIToken)
+	writeRecorder := httptest.NewRecorder()
+	router.ServeHTTP(writeRecorder, writeRequest)
+	if writeRecorder.Code != http.StatusOK {
+		t.Fatalf("写入记忆失败: status=%d body=%s", writeRecorder.Code, writeRecorder.Body.String())
+	}
+
+	loginBody := bytes.NewReader([]byte(`{"username":"admin","password":"` + password + `"}`))
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/users/auth/login", loginBody)
+	loginRequest.Header.Set("Content-Type", "application/json")
+	loginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(loginRecorder, loginRequest)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("登录失败: status=%d body=%s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	var loginResponse api.LoginResponse
+	if err := json.Unmarshal(loginRecorder.Body.Bytes(), &loginResponse); err != nil {
+		t.Fatalf("解析登录响应失败: %v", err)
+	}
+
+	statsRequest := httptest.NewRequest(http.MethodGet, "/api/v1/users/stats", nil)
+	statsRequest.Header.Set("Authorization", "Bearer "+loginResponse.Token)
+	statsRecorder := httptest.NewRecorder()
+	router.ServeHTTP(statsRecorder, statsRequest)
+	if statsRecorder.Code != http.StatusOK {
+		t.Fatalf("统计接口失败: status=%d body=%s", statsRecorder.Code, statsRecorder.Body.String())
+	}
+	var statsResponse api.DashboardStatsResponse
+	if err := json.Unmarshal(statsRecorder.Body.Bytes(), &statsResponse); err != nil {
+		t.Fatalf("解析统计响应失败: %v", err)
+	}
+	if statsResponse.Base.MemoryTotal < 2 {
+		t.Fatalf("记忆总数异常: %+v", statsResponse.Base)
+	}
+	if statsResponse.Base.MemoryType.Summary < 1 || statsResponse.Base.MemoryType.Error < 1 {
+		t.Fatalf("记忆类型统计异常: %+v", statsResponse.Base.MemoryType)
+	}
+	if len(statsResponse.Base.HotTags) == 0 || statsResponse.Base.HotTags[0].Tag != "高频" {
+		t.Fatalf("热门标签统计异常: %+v", statsResponse.Base.HotTags)
+	}
+	if statsResponse.CacheRefreshIntervalSecs != 5 {
+		t.Fatalf("缓存刷新间隔异常: %d", statsResponse.CacheRefreshIntervalSecs)
+	}
+
+	cacheRequest := httptest.NewRequest(http.MethodGet, "/api/v1/users/stats/cache", nil)
+	cacheRequest.Header.Set("Authorization", "Bearer "+loginResponse.Token)
+	cacheRecorder := httptest.NewRecorder()
+	router.ServeHTTP(cacheRecorder, cacheRequest)
+	if cacheRecorder.Code != http.StatusOK {
+		t.Fatalf("缓存统计接口失败: status=%d body=%s", cacheRecorder.Code, cacheRecorder.Body.String())
+	}
+	var cacheResponse api.DashboardCacheStatsResponse
+	if err := json.Unmarshal(cacheRecorder.Body.Bytes(), &cacheResponse); err != nil {
+		t.Fatalf("解析缓存统计响应失败: %v", err)
+	}
+	if !cacheResponse.Cache.Enabled {
+		t.Fatalf("缓存统计应标识为启用: %+v", cacheResponse.Cache)
 	}
 }

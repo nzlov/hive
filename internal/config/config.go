@@ -40,6 +40,7 @@ const (
 	defaultCacheQueryEmbeddingTTL      = 600
 	defaultCacheSemanticHitsTTL        = 120
 	defaultCacheMaxEntries             = 5000
+	defaultCacheStatsRefreshInterval   = 10
 	defaultSemanticSimilarityThreshold = 0.15
 	defaultSemanticCandidateBatchSize  = 256
 	defaultSemanticCandidateMaxCount   = 1024
@@ -97,6 +98,7 @@ type SearchConfig struct {
 	CacheQueryEmbeddingTTL       int
 	CacheSemanticHitsTTL         int
 	CacheMaxEntries              int
+	CacheStatsRefreshInterval    int
 }
 
 // AppConfig 统一描述脚本与服务端共用配置，降低多入口行为漂移风险。
@@ -172,6 +174,7 @@ var (
 	searchCacheQueryEmbeddingTTLKeys         = []string{"query_embedding_ttl_seconds", "queryEmbeddingTtlSeconds"}
 	searchCacheSemanticHitsTTLKeys           = []string{"semantic_hits_ttl_seconds", "semanticHitsTtlSeconds"}
 	searchCacheMaxEntriesKeys                = []string{"max_entries", "maxEntries"}
+	searchCacheStatsRefreshIntervalKeys      = []string{"stats_refresh_interval_seconds", "statsRefreshIntervalSeconds"}
 )
 
 // Load 读取并标准化配置，缺失时自动补默认配置降低首次使用门槛。
@@ -320,10 +323,11 @@ func buildDefaultPayload() (map[string]any, error) {
 				"min_semantic_score": defaultSemanticSimilarityThreshold,
 			},
 			"cache": map[string]any{
-				"enabled":                     defaultCacheEnabled,
-				"query_embedding_ttl_seconds": defaultCacheQueryEmbeddingTTL,
-				"semantic_hits_ttl_seconds":   defaultCacheSemanticHitsTTL,
-				"max_entries":                 defaultCacheMaxEntries,
+				"enabled":                        defaultCacheEnabled,
+				"query_embedding_ttl_seconds":    defaultCacheQueryEmbeddingTTL,
+				"semantic_hits_ttl_seconds":      defaultCacheSemanticHitsTTL,
+				"max_entries":                    defaultCacheMaxEntries,
+				"stats_refresh_interval_seconds": defaultCacheStatsRefreshInterval,
 			},
 		},
 		"auth": map[string]any{
@@ -515,7 +519,7 @@ func orderedConfigKeys(parentPath string, obj map[string]any) []string {
 		"search.keyword.field_weights":   {"title", "summary", "tags", "content", "project_name"},
 		"search.keyword.synonyms":        {"enabled", "groups"},
 		"search.fusion":                  {"enabled", "formula", "keyword_weight", "semantic_weight", "recency_weight", "min_semantic_score"},
-		"search.cache":                   {"enabled", "query_embedding_ttl_seconds", "semantic_hits_ttl_seconds", "max_entries"},
+		"search.cache":                   {"enabled", "query_embedding_ttl_seconds", "semantic_hits_ttl_seconds", "max_entries", "stats_refresh_interval_seconds"},
 		"embedding":                      {"base_url", "api_key", "model", "timeout_seconds", "semantic_similarity_threshold", "semantic_candidate_batch_size", "semantic_candidate_max_count", "semantic_hit_fetch_limit", "semantic_window", "decay"},
 		"embedding.semantic_window":      {"mode", "base_max_count", "dynamic_min_count", "dynamic_max_count", "dynamic_ratio", "reference_corpus_size"},
 		"embedding.decay":                {"enabled", "age_weight", "semantic_weight", "half_life_days"},
@@ -557,33 +561,34 @@ func configCommentForPath(path string) string {
 		"search":                                "搜索层配置",
 		"search.low_confidence_error_hit_limit": "错误记忆中低于 1 分置信度的最大返回条数",
 		"search.low_confidence_summary_hit_limit": "总结记忆中低于 1 分置信度的最大返回条数",
-		"search.keyword":                                  "关键字检索配置",
-		"search.keyword.mode":                             "关键字模式，like 为子串匹配，bm25 为加权相关性排序",
-		"search.keyword.backend":                          "关键字后端类型预留项，默认 auto",
-		"search.keyword.bm25_k1":                          "BM25 的 k1 参数，控制词频饱和速度",
-		"search.keyword.bm25_b":                           "BM25 的 b 参数，控制文档长度归一化强度",
-		"search.keyword.fields":                           "BM25 参与打分字段列表",
-		"search.keyword.field_weights":                    "BM25 各字段权重映射",
-		"search.keyword.field_weights.title":              "标题字段权重",
-		"search.keyword.field_weights.summary":            "摘要字段权重",
-		"search.keyword.field_weights.tags":               "标签字段权重",
-		"search.keyword.field_weights.content":            "正文字段权重",
-		"search.keyword.field_weights.project_name":       "项目名字段权重",
-		"search.keyword.synonyms":                         "同义词扩展配置",
-		"search.keyword.synonyms.enabled":                 "是否启用同义词扩展",
-		"search.keyword.synonyms.groups":                  "同义词分组，每组内词会互相扩展",
-		"search.fusion":                                   "多路打分融合配置",
-		"search.fusion.enabled":                           "是否启用关键字/语义/时效融合评分",
-		"search.fusion.formula":                           "融合公式，当前支持 weighted_sum",
-		"search.fusion.keyword_weight":                    "关键字分在融合中的权重",
-		"search.fusion.semantic_weight":                   "语义分在融合中的权重",
-		"search.fusion.recency_weight":                    "时效分在融合中的权重",
-		"search.fusion.min_semantic_score":                "语义分最低有效阈值，低于该值会被视为弱语义",
-		"search.cache":                                    "搜索缓存配置",
-		"search.cache.enabled":                            "是否启用查询向量与语义结果缓存",
-		"search.cache.query_embedding_ttl_seconds":        "查询向量缓存 TTL（秒）",
-		"search.cache.semantic_hits_ttl_seconds":          "语义命中缓存 TTL（秒）",
-		"search.cache.max_entries":                        "每类缓存的最大条目数",
+		"search.keyword":                              "关键字检索配置",
+		"search.keyword.mode":                         "关键字模式，like 为子串匹配，bm25 为加权相关性排序",
+		"search.keyword.backend":                      "关键字后端类型预留项，默认 auto",
+		"search.keyword.bm25_k1":                      "BM25 的 k1 参数，控制词频饱和速度",
+		"search.keyword.bm25_b":                       "BM25 的 b 参数，控制文档长度归一化强度",
+		"search.keyword.fields":                       "BM25 参与打分字段列表",
+		"search.keyword.field_weights":                "BM25 各字段权重映射",
+		"search.keyword.field_weights.title":          "标题字段权重",
+		"search.keyword.field_weights.summary":        "摘要字段权重",
+		"search.keyword.field_weights.tags":           "标签字段权重",
+		"search.keyword.field_weights.content":        "正文字段权重",
+		"search.keyword.field_weights.project_name":   "项目名字段权重",
+		"search.keyword.synonyms":                     "同义词扩展配置",
+		"search.keyword.synonyms.enabled":             "是否启用同义词扩展",
+		"search.keyword.synonyms.groups":              "同义词分组，每组内词会互相扩展",
+		"search.fusion":                               "多路打分融合配置",
+		"search.fusion.enabled":                       "是否启用关键字/语义/时效融合评分",
+		"search.fusion.formula":                       "融合公式，当前支持 weighted_sum",
+		"search.fusion.keyword_weight":                "关键字分在融合中的权重",
+		"search.fusion.semantic_weight":               "语义分在融合中的权重",
+		"search.fusion.recency_weight":                "时效分在融合中的权重",
+		"search.fusion.min_semantic_score":            "语义分最低有效阈值，低于该值会被视为弱语义",
+		"search.cache":                                "搜索缓存配置",
+		"search.cache.enabled":                        "是否启用查询向量与语义结果缓存",
+		"search.cache.query_embedding_ttl_seconds":    "查询向量缓存 TTL（秒）",
+		"search.cache.semantic_hits_ttl_seconds":      "语义命中缓存 TTL（秒）",
+		"search.cache.max_entries":                    "每类缓存的最大条目数",
+		"search.cache.stats_refresh_interval_seconds": "管理端缓存统计刷新间隔（秒），0 表示仅手动刷新",
 		"embedding":                                       "嵌入与语义召回配置",
 		"embedding.base_url":                              "OpenAI 兼容 Embeddings 服务地址",
 		"embedding.api_key":                               "Embeddings 服务鉴权令牌",
@@ -929,6 +934,10 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 	if cacheMaxEntries < 1 {
 		cacheMaxEntries = 1
 	}
+	cacheStatsRefreshInterval := pickInt(cacheSection, searchCacheStatsRefreshIntervalKeys, defaultCacheStatsRefreshInterval)
+	if cacheStatsRefreshInterval < 0 {
+		cacheStatsRefreshInterval = 0
+	}
 
 	return &SearchConfig{
 		LowConfidenceErrorHitLimit:   errorLimit,
@@ -951,6 +960,7 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 		CacheQueryEmbeddingTTL:       cacheQueryEmbeddingTTL,
 		CacheSemanticHitsTTL:         cacheSemanticHitsTTL,
 		CacheMaxEntries:              cacheMaxEntries,
+		CacheStatsRefreshInterval:    cacheStatsRefreshInterval,
 	}
 }
 

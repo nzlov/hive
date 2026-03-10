@@ -238,6 +238,9 @@ func TestResolveSearchConfigUsesDefaults(t *testing.T) {
 	if got.CacheMaxEntries != defaultCacheMaxEntries {
 		t.Fatalf("CacheMaxEntries = %d, want %d", got.CacheMaxEntries, defaultCacheMaxEntries)
 	}
+	if got.CacheStatsRefreshInterval != defaultCacheStatsRefreshInterval {
+		t.Fatalf("CacheStatsRefreshInterval = %d, want %d", got.CacheStatsRefreshInterval, defaultCacheStatsRefreshInterval)
+	}
 }
 
 // TestResolveSearchConfigParsesKeywordFusionCache 验证关键字、融合和缓存参数可由配置控制，避免后续实现出现隐式写死。
@@ -269,10 +272,11 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 				"min_semantic_score": 0.2,
 			},
 			"cache": map[string]any{
-				"enabled":                     true,
-				"query_embedding_ttl_seconds": 300,
-				"semantic_hits_ttl_seconds":   60,
-				"max_entries":                 2000,
+				"enabled":                        true,
+				"query_embedding_ttl_seconds":    300,
+				"semantic_hits_ttl_seconds":      60,
+				"max_entries":                    2000,
+				"stats_refresh_interval_seconds": 5,
 			},
 		},
 	}
@@ -330,6 +334,9 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 	}
 	if got.CacheMaxEntries != 2000 {
 		t.Fatalf("CacheMaxEntries = %d, want 2000", got.CacheMaxEntries)
+	}
+	if got.CacheStatsRefreshInterval != 5 {
+		t.Fatalf("CacheStatsRefreshInterval = %d, want 5", got.CacheStatsRefreshInterval)
 	}
 }
 

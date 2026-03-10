@@ -25,21 +25,27 @@ import (
 const currentUserContextKey = "current_user"
 
 // NewRouter 构造 HTTP 路由，把管理端鉴权、记忆接口鉴权和前端静态资源入口统一收敛到一处。
-func NewRouter(memoryService *memory.Service, userService *user.Service, store *models.Store) *gin.Engine {
+func NewRouter(memoryService *memory.Service, userService *user.Service, store *models.Store, statsService *dashboardStatsService) *gin.Engine {
+	if statsService == nil {
+		statsService = NewDashboardStatsService()
+		if store != nil {
+			_ = statsService.Bootstrap(store)
+		}
+	}
 	router := gin.Default()
 	router.Use(buildDBStoreMiddleware(store))
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	registerUserRoutes(router, memoryService, userService)
-	registerTokenMemoryRoutes(router, memoryService, userService)
+	registerUserRoutes(router, memoryService, userService, statsService)
+	registerTokenMemoryRoutes(router, memoryService, userService, statsService)
 	router.NoRoute(buildSPAFallbackHandler())
 	return router
 }
 
 // registerUserRoutes 把管理端登录、用户管理和后台记忆接口集中注册，避免 JWT 路由散落在多个文件中。
-func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userService *user.Service) {
+func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userService *user.Service, statsService *dashboardStatsService) {
 	publicGroup := router.Group("/api/v1/users")
 	publicGroup.POST("/auth/login", func(c *gin.Context) {
 		var request api.LoginRequest
@@ -114,6 +120,7 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 			c.JSON(http.StatusBadRequest, api.UserMutationResponse{Error: err.Error()})
 			return
 		}
+		statsService.OnUserCreated()
 		c.JSON(http.StatusOK, api.UserMutationResponse{Item: userToSummary(item)})
 	})
 	adminUserGroup.PUT("/:id", func(c *gin.Context) {
@@ -151,7 +158,48 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 			c.JSON(http.StatusBadRequest, api.UserMutationResponse{Error: err.Error()})
 			return
 		}
+		statsService.OnUserDeleted()
 		c.JSON(http.StatusOK, gin.H{"success": true})
+	})
+	protectedGroup.GET("/stats", func(c *gin.Context) {
+		cacheStats := memoryService.CacheStatsSnapshot()
+		response := api.DashboardStatsResponse{
+			Base: statsService.Snapshot(),
+			Cache: api.DashboardCacheStats{
+				Enabled:                  cacheStats.Enabled,
+				QueryEmbeddingEntryCount: cacheStats.QueryEmbeddingEntryCount,
+				SemanticHitsEntryCount:   cacheStats.SemanticHitsEntryCount,
+				HitRate:                  cacheStats.HitRate,
+				EstimatedMemoryBytes:     cacheStats.EstimatedMemoryBytes,
+				EstimatedMemoryHuman:     formatBytesHuman(cacheStats.EstimatedMemoryBytes),
+				QueryEmbeddingHitCount:   cacheStats.QueryEmbeddingHitCount,
+				QueryEmbeddingMissCount:  cacheStats.QueryEmbeddingMissCount,
+				SemanticHitsHitCount:     cacheStats.SemanticHitsHitCount,
+				SemanticHitsMissCount:    cacheStats.SemanticHitsMissCount,
+				QueryEmbeddingEvictCount: cacheStats.QueryEmbeddingEvictCount,
+				SemanticHitsEvictCount:   cacheStats.SemanticHitsEvictCount,
+			},
+			CacheRefreshIntervalSecs: memoryService.CacheStatsRefreshInterval(),
+		}
+		c.JSON(http.StatusOK, response)
+	})
+	protectedGroup.GET("/stats/cache", func(c *gin.Context) {
+		cacheStats := memoryService.CacheStatsSnapshot()
+		response := api.DashboardCacheStatsResponse{Cache: api.DashboardCacheStats{
+			Enabled:                  cacheStats.Enabled,
+			QueryEmbeddingEntryCount: cacheStats.QueryEmbeddingEntryCount,
+			SemanticHitsEntryCount:   cacheStats.SemanticHitsEntryCount,
+			HitRate:                  cacheStats.HitRate,
+			EstimatedMemoryBytes:     cacheStats.EstimatedMemoryBytes,
+			EstimatedMemoryHuman:     formatBytesHuman(cacheStats.EstimatedMemoryBytes),
+			QueryEmbeddingHitCount:   cacheStats.QueryEmbeddingHitCount,
+			QueryEmbeddingMissCount:  cacheStats.QueryEmbeddingMissCount,
+			SemanticHitsHitCount:     cacheStats.SemanticHitsHitCount,
+			SemanticHitsMissCount:    cacheStats.SemanticHitsMissCount,
+			QueryEmbeddingEvictCount: cacheStats.QueryEmbeddingEvictCount,
+			SemanticHitsEvictCount:   cacheStats.SemanticHitsEvictCount,
+		}}
+		c.JSON(http.StatusOK, response)
 	})
 	protectedGroup.GET("/me", func(c *gin.Context) {
 		c.JSON(http.StatusOK, api.UserMutationResponse{Item: userToSummary(mustCurrentUser(c))})
@@ -281,10 +329,13 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 			c.JSON(http.StatusInternalServerError, api.UserMutationResponse{Error: err.Error()})
 			return
 		}
+		var deletedMemory models.Memory
 		if err := store.WithTx(func(txStore *models.Store) error {
-			if _, err := txStore.GetMemoryByID(id); err != nil {
+			item, err := txStore.GetMemoryByID(id)
+			if err != nil {
 				return err
 			}
+			deletedMemory = item
 			if err := txStore.DeleteMemoryEmbeddingByMemoryID(id); err != nil {
 				return err
 			}
@@ -297,6 +348,7 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 			c.JSON(status, api.UserMutationResponse{Error: err.Error()})
 			return
 		}
+		statsService.OnMemoryDeleted(deletedMemory)
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
 }
@@ -313,7 +365,7 @@ func buildAdminOnlyMiddleware() gin.HandlerFunc {
 }
 
 // registerTokenMemoryRoutes 把记忆查询与写入统一挂到 API Token 路由下，避免和管理接口的 JWT 语义混淆。
-func registerTokenMemoryRoutes(router *gin.Engine, memoryService *memory.Service, userService *user.Service) {
+func registerTokenMemoryRoutes(router *gin.Engine, memoryService *memory.Service, userService *user.Service, statsService *dashboardStatsService) {
 	group := router.Group("/tokenapi/v1")
 	group.Use(buildAPITokenMiddleware(userService))
 	group.POST("/memories/search", func(c *gin.Context) {
@@ -348,6 +400,7 @@ func registerTokenMemoryRoutes(router *gin.Engine, memoryService *memory.Service
 			c.JSON(http.StatusBadRequest, api.WriteResponse{Error: err.Error()})
 			return
 		}
+		statsService.OnMemoryWritten(request.Items)
 		c.JSON(http.StatusOK, api.WriteResponse{})
 	})
 }

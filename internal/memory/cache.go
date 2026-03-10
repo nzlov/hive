@@ -3,13 +3,20 @@ package memory
 import (
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 // searchCache 保存查询向量和语义命中缓存，避免高频查询重复访问嵌入服务与向量检索。
 type searchCache struct {
-	queryEmbeddings map[string]queryEmbeddingsCacheEntry
-	semanticHits    map[string]semanticHitsCacheEntry
+	queryEmbeddings    map[string]queryEmbeddingsCacheEntry
+	semanticHits       map[string]semanticHitsCacheEntry
+	queryHitCount      uint64
+	queryMissCount     uint64
+	semanticHitCount   uint64
+	semanticMissCount  uint64
+	queryEvictCount    uint64
+	semanticEvictCount uint64
 }
 
 type queryEmbeddingsCacheEntry struct {
@@ -59,6 +66,14 @@ func (s *Service) cacheMaxEntries() int {
 	return s.config.SearchConfig.CacheMaxEntries
 }
 
+// CacheStatsRefreshInterval 返回缓存统计刷新间隔秒数，供管理端控制轮询频率。
+func (s *Service) CacheStatsRefreshInterval() int {
+	if s.config.SearchConfig == nil || s.config.SearchConfig.CacheStatsRefreshInterval < 0 {
+		return 0
+	}
+	return s.config.SearchConfig.CacheStatsRefreshInterval
+}
+
 // queryEmbeddingsCacheKey 构造查询向量缓存键，避免不同模型和查询串共享同一缓存项。
 func (s *Service) queryEmbeddingsCacheKey(queries []string) string {
 	return strings.Join([]string{"emb", s.provider.ModelName(), strings.Join(queries, "\x1f")}, "|")
@@ -96,10 +111,13 @@ func (s *Service) getCachedQueryEmbeddings(key string, now time.Time) ([][]float
 	}
 	s.cacheMu.RLock()
 	entry, ok := s.cache.queryEmbeddings[key]
-	s.cacheMu.RUnlock()
 	if !ok || entry.ExpiresAt.Before(now) {
+		s.cacheMu.RUnlock()
+		atomic.AddUint64(&s.cache.queryMissCount, 1)
 		return nil, false
 	}
+	s.cacheMu.RUnlock()
+	atomic.AddUint64(&s.cache.queryHitCount, 1)
 	out := make([][]float64, 0, len(entry.Vectors))
 	for _, vector := range entry.Vectors {
 		copied := make([]float64, len(vector))
@@ -137,10 +155,13 @@ func (s *Service) getCachedSemanticHits(key string, now time.Time) ([]Hit, bool)
 	}
 	s.cacheMu.RLock()
 	entry, ok := s.cache.semanticHits[key]
-	s.cacheMu.RUnlock()
 	if !ok || entry.ExpiresAt.Before(now) {
+		s.cacheMu.RUnlock()
+		atomic.AddUint64(&s.cache.semanticMissCount, 1)
 		return nil, false
 	}
+	s.cacheMu.RUnlock()
+	atomic.AddUint64(&s.cache.semanticHitCount, 1)
 	out := make([]Hit, 0, len(entry.Hits))
 	for _, hit := range entry.Hits {
 		out = append(out, hit)
@@ -184,13 +205,79 @@ func (s *Service) evictCacheIfNeededLocked() {
 	for len(s.cache.queryEmbeddings) > maxEntries {
 		for key := range s.cache.queryEmbeddings {
 			delete(s.cache.queryEmbeddings, key)
+			atomic.AddUint64(&s.cache.queryEvictCount, 1)
 			break
 		}
 	}
 	for len(s.cache.semanticHits) > maxEntries {
 		for key := range s.cache.semanticHits {
 			delete(s.cache.semanticHits, key)
+			atomic.AddUint64(&s.cache.semanticEvictCount, 1)
 			break
 		}
 	}
+}
+
+// CacheStatsSnapshot 返回当前缓存统计快照，避免管理端直接读取内部缓存结构。
+func (s *Service) CacheStatsSnapshot() CacheStatsSnapshot {
+	result := CacheStatsSnapshot{Enabled: s.cacheEnabled()}
+	if s.cache == nil {
+		return result
+	}
+	s.cacheMu.RLock()
+	queryEntryCount := len(s.cache.queryEmbeddings)
+	semanticEntryCount := len(s.cache.semanticHits)
+	estimatedMemoryBytes := estimateCacheMemorySizeLocked(s.cache)
+	s.cacheMu.RUnlock()
+	queryHitCount := atomic.LoadUint64(&s.cache.queryHitCount)
+	queryMissCount := atomic.LoadUint64(&s.cache.queryMissCount)
+	semanticHitCount := atomic.LoadUint64(&s.cache.semanticHitCount)
+	semanticMissCount := atomic.LoadUint64(&s.cache.semanticMissCount)
+	queryEvictCount := atomic.LoadUint64(&s.cache.queryEvictCount)
+	semanticEvictCount := atomic.LoadUint64(&s.cache.semanticEvictCount)
+	totalCacheReq := queryHitCount + queryMissCount + semanticHitCount + semanticMissCount
+	hitRate := 0.0
+	if totalCacheReq > 0 {
+		hitRate = float64(queryHitCount+semanticHitCount) / float64(totalCacheReq)
+	}
+	return CacheStatsSnapshot{
+		Enabled:                  result.Enabled,
+		QueryEmbeddingEntryCount: queryEntryCount,
+		SemanticHitsEntryCount:   semanticEntryCount,
+		QueryEmbeddingHitCount:   queryHitCount,
+		QueryEmbeddingMissCount:  queryMissCount,
+		SemanticHitsHitCount:     semanticHitCount,
+		SemanticHitsMissCount:    semanticMissCount,
+		QueryEmbeddingEvictCount: queryEvictCount,
+		SemanticHitsEvictCount:   semanticEvictCount,
+		EstimatedMemoryBytes:     estimatedMemoryBytes,
+		HitRate:                  hitRate,
+	}
+}
+
+// estimateCacheMemorySizeLocked 粗略估算缓存内存占用，便于页面观察缓存规模变化趋势。
+func estimateCacheMemorySizeLocked(cache *searchCache) int64 {
+	if cache == nil {
+		return 0
+	}
+	total := int64(0)
+	for key, entry := range cache.queryEmbeddings {
+		total += int64(len(key) + 32)
+		for _, vector := range entry.Vectors {
+			total += int64(24 + len(vector)*8)
+		}
+	}
+	for key, entry := range cache.semanticHits {
+		total += int64(len(key) + 32)
+		for _, hit := range entry.Hits {
+			total += int64(96 + len(hit.Source) + len(hit.GitBranch) + len(hit.Title) + len(hit.FileContent))
+			for _, tag := range hit.Tags {
+				total += int64(16 + len(tag))
+			}
+			for _, snippet := range hit.Snippets {
+				total += int64(32 + len(snippet.Content))
+			}
+		}
+	}
+	return total
 }
