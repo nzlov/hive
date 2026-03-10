@@ -40,9 +40,7 @@
             <thead class="bg-slate-50/80 text-left text-slate-500">
               <tr>
                 <th class="px-5 py-4 font-medium">项目</th>
-                <th class="px-5 py-4 font-medium">类型</th>
                 <th class="px-5 py-4 font-medium">标题</th>
-                <th class="px-5 py-4 font-medium">Tags</th>
                 <th class="px-5 py-4 font-medium">总结</th>
                 <th class="px-5 py-4 font-medium">创建人</th>
                 <th class="px-5 py-4 font-medium">置信度</th>
@@ -52,10 +50,10 @@
             </thead>
             <tbody class="divide-y divide-slate-100 bg-white/90">
               <tr v-if="loading">
-                <td class="px-5 py-10 text-center text-slate-400" colspan="9">正在加载记忆列表...</td>
+                <td class="px-5 py-10 text-center text-slate-400" colspan="7">正在加载记忆列表...</td>
               </tr>
               <tr v-else-if="!memories.length">
-                <td class="px-5 py-10 text-center text-slate-400" colspan="9">暂无匹配的记忆</td>
+                <td class="px-5 py-10 text-center text-slate-400" colspan="7">暂无匹配的记忆</td>
               </tr>
               <tr v-for="item in memories" :key="item.id" class="align-top">
                 <td class="px-5 py-4 text-ink">
@@ -64,22 +62,37 @@
                     <p class="whitespace-pre-wrap break-all font-semibold leading-6">{{ item.project_name || '-' }}</p>
                   </div>
                 </td>
-                <td class="px-5 py-4 text-slate-500">
-                  <span class="type-badge" :class="getTypeBadgeClass(item.type)">{{ formatTypeLabel(item.type) }}</span>
-                </td>
                 <td class="px-5 py-4 text-ink">
-                  <p class="max-w-[12rem] break-words font-medium leading-6">{{ item.title || '-' }}</p>
-                </td>
-                <td class="px-5 py-4">
-                  <div class="flex max-w-xs flex-wrap gap-2">
-                    <span
-                      v-for="tag in item.tags"
-                      :key="`${item.id}-${tag}`"
-                      class="rounded-full bg-mist px-3 py-1 text-xs text-slate-600"
-                    >
-                      {{ tag }}
-                    </span>
-                    <span v-if="!item.tags?.length" class="text-slate-300">-</span>
+                  <div class="max-w-[16rem] space-y-3">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <p class="break-words font-medium leading-6">{{ item.title || '-' }}</p>
+                      <span
+                        v-if="item.type"
+                        class="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-500"
+                        :class="getTypeIconClass(item.type)"
+                        :aria-label="`${formatTypeLabel(item.type)} 类型`"
+                      >
+                        <svg v-if="item.type === 'error'" viewBox="0 0 24 24" aria-hidden="true" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
+                          <circle cx="12" cy="12" r="9" />
+                          <path d="M12 7.5v5" />
+                          <path d="M12 16.5h.01" />
+                        </svg>
+                        <svg v-else viewBox="0 0 24 24" aria-hidden="true" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
+                          <path d="M9 12.75 11.25 15 15 9.75" />
+                          <circle cx="12" cy="12" r="9" />
+                        </svg>
+                        <span class="sr-only">{{ formatTypeLabel(item.type) }}</span>
+                      </span>
+                    </div>
+                    <div v-if="item.tags?.length" class="flex flex-wrap gap-2">
+                      <span
+                        v-for="tag in item.tags"
+                        :key="`${item.id}-${tag}`"
+                        class="rounded-full bg-mist px-3 py-1 text-xs text-slate-600"
+                      >
+                        {{ tag }}
+                      </span>
+                    </div>
                   </div>
                 </td>
                 <td class="px-5 py-4 text-slate-600">
@@ -92,21 +105,19 @@
                 <td class="px-5 py-4 text-slate-500">{{ formatDate(item.created_at) }}</td>
                 <td class="px-5 py-4">
                   <div class="flex flex-wrap items-center gap-2">
-                    <button class="icon-btn group" type="button" aria-label="查看详情" @click="openDetail(item.id)">
+                    <button class="icon-btn" type="button" aria-label="查看详情" @click="openDetail(item.id)">
                       <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
                         <path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z" />
                         <circle cx="12" cy="12" r="3" />
                       </svg>
-                      <span class="icon-btn-tooltip">查看</span>
                     </button>
-                    <button v-if="user.is_admin" class="icon-btn group" type="button" aria-label="编辑记忆" @click="openEdit(item.id)">
+                    <button v-if="user.is_admin" class="icon-btn" type="button" aria-label="编辑记忆" @click="openEdit(item.id)">
                       <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
                         <path d="M12 20h9" />
                         <path d="m16.5 3.5 4 4L8 20l-5 1 1-5 12.5-12.5Z" />
                       </svg>
-                      <span class="icon-btn-tooltip">编辑</span>
                     </button>
-                    <button v-if="user.is_admin" class="icon-btn icon-btn--danger group" type="button" aria-label="删除记忆" @click="handleDelete(item)">
+                    <button v-if="user.is_admin" class="icon-btn icon-btn--danger" type="button" aria-label="删除记忆" @click="handleDelete(item)">
                       <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
                         <path d="M3 6h18" />
                         <path d="M8 6V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V6" />
@@ -114,7 +125,6 @@
                         <path d="M10 11v6" />
                         <path d="M14 11v6" />
                       </svg>
-                      <span class="icon-btn-tooltip">删除</span>
                     </button>
                   </div>
                 </td>
@@ -522,6 +532,17 @@ function getTypeBadgeClass(value) {
     return 'type-badge--error'
   }
   return 'type-badge--neutral'
+}
+
+// getTypeIconClass 为标题后的类型小图标提供语义色，避免列表依赖文字占据额外空间。
+function getTypeIconClass(value) {
+  if (value === 'summary') {
+    return 'border-pine/20 bg-pine/10 text-pine'
+  }
+  if (value === 'error') {
+    return 'border-coral/20 bg-coral/10 text-coral'
+  }
+  return 'border-slate-200 bg-slate-50 text-slate-500'
 }
 
 onMounted(() => {
