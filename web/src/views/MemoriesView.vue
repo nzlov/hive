@@ -36,16 +36,16 @@
 
       <section class="panel overflow-hidden">
         <div class="overflow-x-auto">
-          <table class="min-w-full divide-y divide-slate-200 text-sm">
+          <table class="min-w-full table-auto divide-y divide-slate-200 text-sm">
             <thead class="bg-slate-50/80 text-left text-slate-500">
               <tr>
-                <th class="px-5 py-4 font-medium">项目</th>
-                <th class="px-5 py-4 font-medium">标题</th>
+                <th class="w-px whitespace-nowrap px-5 py-4 font-medium">项目</th>
+                <th class="w-px whitespace-nowrap px-5 py-4 font-medium">标题</th>
                 <th class="px-5 py-4 font-medium">总结</th>
-                <th class="px-5 py-4 font-medium">创建人</th>
-                <th class="px-5 py-4 font-medium">置信度</th>
-                <th class="px-5 py-4 font-medium">创建时间</th>
-                <th class="px-5 py-4 font-medium">操作</th>
+                <th class="w-px whitespace-nowrap px-5 py-4 font-medium">创建人</th>
+                <th class="w-px whitespace-nowrap px-5 py-4 font-medium">置信度</th>
+                <th class="w-px whitespace-nowrap px-5 py-4 font-medium">创建时间</th>
+                <th class="w-px whitespace-nowrap px-5 py-4 font-medium">操作</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100 bg-white/90">
@@ -56,20 +56,20 @@
                 <td class="px-5 py-10 text-center text-slate-400" colspan="7">暂无匹配的记忆</td>
               </tr>
               <tr v-for="item in memories" :key="item.id" class="align-top">
-                <td class="px-5 py-4 text-ink">
-                  <div class="max-w-[22rem] min-w-[16rem] space-y-1">
+                <td class="w-px whitespace-nowrap px-5 py-4 text-ink">
+                  <div class="max-w-[18rem] space-y-1">
                     <p class="text-xs uppercase tracking-[0.24em] text-slate-400">项目</p>
                     <p class="whitespace-pre-wrap break-all font-semibold leading-6">{{ item.project_name || '-' }}</p>
                   </div>
                 </td>
-                <td class="px-5 py-4 text-ink">
-                  <div class="max-w-[16rem] space-y-3">
+                <td class="w-px whitespace-nowrap px-5 py-4 text-ink">
+                  <div class="max-w-[15rem] space-y-3">
                     <div class="flex flex-wrap items-center gap-2">
                       <p class="break-words font-medium leading-6">{{ item.title || '-' }}</p>
                       <span
                         v-if="item.type"
-                        class="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-500"
-                        :class="getTypeIconClass(item.type)"
+                        class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold"
+                        :class="getTypeChipClass(item.type)"
                         :aria-label="`${formatTypeLabel(item.type)} 类型`"
                       >
                         <svg v-if="item.type === 'error'" viewBox="0 0 24 24" aria-hidden="true" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
@@ -81,7 +81,7 @@
                           <path d="M9 12.75 11.25 15 15 9.75" />
                           <circle cx="12" cy="12" r="9" />
                         </svg>
-                        <span class="sr-only">{{ formatTypeLabel(item.type) }}</span>
+                        <span>{{ formatTypeLabel(item.type) }}</span>
                       </span>
                     </div>
                     <div v-if="item.tags?.length" class="flex flex-wrap gap-2">
@@ -95,15 +95,20 @@
                     </div>
                   </div>
                 </td>
-                <td class="px-5 py-4 text-slate-600">
+                <td class="w-full px-5 py-4 text-slate-600">
                   <p class="max-w-md whitespace-pre-wrap break-words">{{ item.summary || '-' }}</p>
                 </td>
-                <td class="px-5 py-4 text-slate-500">
+                <td class="w-px whitespace-nowrap px-5 py-4 text-slate-500">
                   <p class="max-w-[7rem] break-words leading-6">{{ item.creator_name || item.userid || '-' }}</p>
                 </td>
-                <td class="px-5 py-4 text-slate-500">{{ formatConfidence(item.confidence) }}</td>
-                <td class="px-5 py-4 text-slate-500">{{ formatDate(item.created_at) }}</td>
-                <td class="px-5 py-4">
+                <td class="w-px whitespace-nowrap px-5 py-4 text-slate-500">{{ formatConfidence(item.confidence) }}</td>
+                <td class="w-px whitespace-nowrap px-5 py-4 text-slate-500">
+                  <div class="min-w-[7.5rem] space-y-1 whitespace-nowrap">
+                    <p>{{ formatDateParts(item.created_at).date }}</p>
+                    <p class="text-xs text-slate-400">{{ formatDateParts(item.created_at).time }}</p>
+                  </div>
+                </td>
+                <td class="w-px whitespace-nowrap px-5 py-4">
                   <div class="flex flex-wrap items-center gap-2">
                     <button class="icon-btn" type="button" aria-label="查看详情" @click="openDetail(item.id)">
                       <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">
@@ -518,8 +523,27 @@ function formatDate(value) {
   return date.toLocaleString('zh-CN', { hour12: false })
 }
 
-// formatTypeLabel 统一兜底记忆类型文案，避免空值直接露出无意义占位风格。
+// formatDateParts 将日期和时间拆成两行展示，避免列表列宽被完整时间字符串撑大。
+function formatDateParts(value) {
+  const formatted = formatDate(value)
+  if (formatted === '-') {
+    return { date: '-', time: '' }
+  }
+  const [datePart, timePart] = formatted.split(' ')
+  if (!timePart) {
+    return { date: formatted, time: '' }
+  }
+  return { date: datePart, time: timePart }
+}
+
+// formatTypeLabel 统一映射类型中文文案，避免列表和详情混用原始枚举影响辨识度。
 function formatTypeLabel(value) {
+  if (value === 'summary') {
+    return '总结记忆'
+  }
+  if (value === 'error') {
+    return '错误记忆'
+  }
   return value || '-'
 }
 
@@ -534,8 +558,8 @@ function getTypeBadgeClass(value) {
   return 'type-badge--neutral'
 }
 
-// getTypeIconClass 为标题后的类型小图标提供语义色，避免列表依赖文字占据额外空间。
-function getTypeIconClass(value) {
+// getTypeChipClass 为列表类型徽标提供语义色，让不同记忆在扫描时能直接区分。
+function getTypeChipClass(value) {
   if (value === 'summary') {
     return 'border-pine/20 bg-pine/10 text-pine'
   }
