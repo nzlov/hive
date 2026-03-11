@@ -17,6 +17,13 @@ import (
 	"github.com/nzlov/hive/internal/models"
 )
 
+var (
+	// summaryEmbeddingFieldLabels 约束总结记忆的语义字段名，便于与 CLI 写入模板保持一致。
+	summaryEmbeddingFieldLabels = []string{"详情", "结论", "约束", "依赖"}
+	// errorEmbeddingFieldLabels 约束错误记忆的语义字段名，便于优先提取根因与修复信息。
+	errorEmbeddingFieldLabels = []string{"错误现象", "触发条件", "根因", "修复动作", "修复结论", "验证结果", "影响"}
+)
+
 // EmbeddingProvider 抽象嵌入能力，避免服务层直接依赖具体供应商协议。
 type EmbeddingProvider interface {
 	Enabled() bool
@@ -146,26 +153,39 @@ func shouldBypassProxy(hostname string) bool {
 func BuildMemoryEmbeddingText(row Row) string {
 	tags := formatEmbeddingTags(row.Tags)
 	if strings.EqualFold(strings.TrimSpace(row.Type), "error") {
+		fields := extractStructuredEmbeddingFields(row.Content, errorEmbeddingFieldLabels)
 		return joinNonEmpty([]string{
 			"记忆类型: 错误记忆",
 			"项目: " + strings.TrimSpace(row.ProjectName),
 			"分支: " + strings.TrimSpace(row.GitBranch),
-			"问题: " + strings.TrimSpace(row.Title),
-			"现象摘要: " + strings.TrimSpace(row.Summary),
-			"故障标签: " + tags,
-			"排障记录:",
-			strings.TrimSpace(row.Content),
+			"标题: " + strings.TrimSpace(row.Title),
+			"摘要: " + strings.TrimSpace(row.Summary),
+			"标签: " + tags,
+			structuredEmbeddingFieldLine("错误现象", fields),
+			structuredEmbeddingFieldLine("触发条件", fields),
+			structuredEmbeddingFieldLine("根因", fields),
+			structuredEmbeddingFieldLine("修复动作", fields),
+			structuredEmbeddingFieldLine("修复结论", fields),
+			structuredEmbeddingFieldLine("验证结果", fields),
+			structuredEmbeddingFieldLine("影响", fields),
+			embeddingSectionLine("关键章节", extractEmbeddingHeadings(row.Content)),
+			"排障记录: " + strings.TrimSpace(row.Content),
 		})
 	}
+	fields := extractStructuredEmbeddingFields(row.Content, summaryEmbeddingFieldLabels)
 	return joinNonEmpty([]string{
 		"记忆类型: 总结记忆",
 		"项目: " + strings.TrimSpace(row.ProjectName),
 		"分支: " + strings.TrimSpace(row.GitBranch),
-		"主题: " + strings.TrimSpace(row.Title),
+		"标题: " + strings.TrimSpace(row.Title),
 		"摘要: " + strings.TrimSpace(row.Summary),
 		"标签: " + tags,
-		"正文:",
-		strings.TrimSpace(row.Content),
+		structuredEmbeddingFieldLine("详情", fields),
+		structuredEmbeddingFieldLine("结论", fields),
+		structuredEmbeddingFieldLine("约束", fields),
+		structuredEmbeddingFieldLine("依赖", fields),
+		embeddingSectionLine("关键章节", extractEmbeddingHeadings(row.Content)),
+		"正文: " + strings.TrimSpace(row.Content),
 	})
 }
 
@@ -203,4 +223,90 @@ func joinNonEmpty(parts []string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// extractStructuredEmbeddingFields 从 Markdown 正文里抽取结构化字段，降低长正文对向量的噪声干扰。
+func extractStructuredEmbeddingFields(content string, labels []string) map[string][]string {
+	result := make(map[string][]string, len(labels))
+	allowed := make(map[string]struct{}, len(labels))
+	for _, label := range labels {
+		trimmed := strings.TrimSpace(label)
+		if trimmed == "" {
+			continue
+		}
+		allowed[trimmed] = struct{}{}
+	}
+	for _, rawLine := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		line = strings.TrimLeft(line, "-*0123456789. ")
+		label, value, ok := splitStructuredTemplateLine(line)
+		if !ok {
+			continue
+		}
+		if _, exists := allowed[label]; !exists {
+			continue
+		}
+		result[label] = append(result[label], value)
+	}
+	return result
+}
+
+// splitStructuredTemplateLine 识别模板里的“字段名: 内容”结构，便于统一抽取关键语义片段。
+func splitStructuredTemplateLine(line string) (string, string, bool) {
+	separators := []string{":", "："}
+	for _, separator := range separators {
+		parts := strings.SplitN(line, separator, 2)
+		if len(parts) != 2 {
+			continue
+		}
+		label := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if label == "" || value == "" {
+			return "", "", false
+		}
+		return label, value, true
+	}
+	return "", "", false
+}
+
+// structuredEmbeddingFieldLine 把抽取出的结构化字段转成稳定文本，便于召回时聚焦关键结论。
+func structuredEmbeddingFieldLine(label string, fields map[string][]string) string {
+	values := fields[strings.TrimSpace(label)]
+	if len(values) == 0 {
+		return ""
+	}
+	return label + ": " + strings.Join(values, "；")
+}
+
+// extractEmbeddingHeadings 收集正文中的 Markdown 标题，帮助向量感知章节主题而不依赖整段长文。
+func extractEmbeddingHeadings(content string) []string {
+	headings := []string{}
+	seen := map[string]struct{}{}
+	for _, rawLine := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if !strings.HasPrefix(line, "#") {
+			continue
+		}
+		heading := strings.TrimSpace(strings.TrimLeft(line, "#"))
+		if heading == "" {
+			continue
+		}
+		if _, ok := seen[heading]; ok {
+			continue
+		}
+		seen[heading] = struct{}{}
+		headings = append(headings, heading)
+	}
+	return headings
+}
+
+// embeddingSectionLine 把多条章节名压缩成单行，避免额外分隔符影响向量稳定性。
+func embeddingSectionLine(label string, values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(label) + ": " + strings.Join(values, "；")
 }

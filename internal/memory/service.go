@@ -1384,6 +1384,15 @@ func (s *Service) mergeHits(source string, keywordHits, semanticHits []Hit) []Hi
 		result.Confidence = s.fusedConfidence(source, hasKeyword, keywordHit, hasSemantic, semanticHit, now)
 		merged = append(merged, result)
 	}
+	sort.SliceStable(merged, func(i, j int) bool {
+		if merged[i].Confidence == merged[j].Confidence {
+			if merged[i].Timestamp.Equal(merged[j].Timestamp) {
+				return merged[i].ID > merged[j].ID
+			}
+			return merged[i].Timestamp.After(merged[j].Timestamp)
+		}
+		return merged[i].Confidence > merged[j].Confidence
+	})
 	return merged
 }
 

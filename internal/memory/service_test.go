@@ -1262,6 +1262,38 @@ func TestServiceMergeHitsPreservesKeywordSnippetAndAppliesFusion(t *testing.T) {
 	}
 }
 
+// TestServiceMergeHitsResortsByFinalConfidence 验证融合命中会按最终分数重新排序，避免沿用旧输入顺序误伤高相关结果。
+func TestServiceMergeHitsResortsByFinalConfidence(t *testing.T) {
+	t.Helper()
+	now := time.Now().UTC()
+	service := NewService(config.AppConfig{SearchConfig: &config.SearchConfig{
+		FusionEnabled:              true,
+		FusionFormula:              "coverage_discount",
+		FusionCoverageDiscountBase: 0.85,
+		FusionKeywordWeight:        0.8,
+		FusionSemanticWeight:       0.2,
+		FusionRecencyWeight:        0,
+	}})
+	keywordHits := []Hit{
+		{ID: 1, Source: "summary", Title: "旧命中", Confidence: 0.1, Timestamp: now.Add(-2 * time.Hour), Snippets: []Snippet{{Start: 1, End: 1, Content: "旧片段"}}},
+		{ID: 2, Source: "summary", Title: "新命中", Confidence: 0.2, Timestamp: now.Add(-time.Hour), Snippets: []Snippet{{Start: 1, End: 1, Content: "新片段"}}},
+	}
+	semanticHits := []Hit{
+		{ID: 1, Source: "summary", Title: "旧命中", Confidence: 0.95, Timestamp: now, FileContent: "旧正文"},
+		{ID: 2, Source: "summary", Title: "新命中", Confidence: 0.3, Timestamp: now, FileContent: "新正文"},
+	}
+	merged := service.mergeHits("summary", keywordHits, semanticHits)
+	if len(merged) != 2 {
+		t.Fatalf("融合命中数量异常: %+v", merged)
+	}
+	if merged[0].ID != 1 || merged[1].ID != 2 {
+		t.Fatalf("融合结果应按最终置信度重排: %+v", merged)
+	}
+	if merged[0].Confidence <= merged[1].Confidence {
+		t.Fatalf("前一条命中的最终置信度应更高: %+v", merged)
+	}
+}
+
 // TestServiceFusedConfidenceCoverageDiscount 提示单路命中会做轻微覆盖率折扣，避免缺失信号被直接当成 0 分拉低过多。
 func TestServiceFusedConfidenceCoverageDiscount(t *testing.T) {
 	t.Helper()
