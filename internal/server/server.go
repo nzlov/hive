@@ -263,10 +263,6 @@ func registerUserRoutes(router *gin.Engine, memoryService *memory.Service, userS
 			c.JSON(http.StatusBadRequest, api.MemoryListResponse{Error: err.Error()})
 			return
 		}
-		if strings.TrimSpace(request.Description) == "" {
-			c.JSON(http.StatusBadRequest, api.MemoryListResponse{Error: "description 不能为空，请按 tags + description 传参"})
-			return
-		}
 		result, err := memoryService.List(c.Request.Context(), request.Page, request.PageSize, request.Tags, request.Description)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, api.MemoryListResponse{Error: err.Error()})

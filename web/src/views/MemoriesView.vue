@@ -31,7 +31,7 @@
             <input
               v-model="descriptionInput"
               class="field"
-              placeholder="必填，直接输入你的查询描述"
+              placeholder="未填写描述时，标签搜索无效"
             />
           </label>
           <label class="block space-y-2">
@@ -667,10 +667,6 @@ async function handleMergeTags() {
 // handleSearch 在用户显式提交后重置到第一页，避免旧页码导致新结果看起来为空。
 async function handleSearch() {
   actionMessage.value = ''
-  if (!String(descriptionInput.value || '').trim()) {
-    errorMessage.value = '搜索描述不能为空'
-    return
-  }
   page.value = 1
   await loadMemories()
 }
@@ -896,8 +892,6 @@ function getTypeChipClass(value) {
 }
 
 onMounted(() => {
-  memories.value = []
-  total.value = 0
-  totalPage.value = 0
+  loadMemories()
 })
 </script>
