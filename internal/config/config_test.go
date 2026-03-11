@@ -38,9 +38,15 @@ func TestResolveEmbeddingConfigWithoutAPIKey(t *testing.T) {
 			"semanticCandidateMaxCount":   512,
 			"semanticHitFetchLimit":       32,
 			"semanticSearchConcurrency":   6,
+			"semanticWindow": map[string]any{
+				"mode": "static",
+			},
 		},
 	}
-	got := resolveEmbeddingConfig(payload)
+	got, err := resolveEmbeddingConfig(payload)
+	if err != nil {
+		t.Fatalf("resolveEmbeddingConfig() 返回错误: %v", err)
+	}
 	if got == nil {
 		t.Fatal("resolveEmbeddingConfig() 返回 nil, want 非空配置")
 	}
@@ -81,21 +87,32 @@ func TestResolveEmbeddingConfigRequiresModel(t *testing.T) {
 			"baseUrl": "http://127.0.0.1:11434/v1",
 		},
 	}
-	if got := resolveEmbeddingConfig(payload); got != nil {
+	got, err := resolveEmbeddingConfig(payload)
+	if err != nil {
+		t.Fatalf("resolveEmbeddingConfig() 返回错误: %v", err)
+	}
+	if got != nil {
 		t.Fatalf("resolveEmbeddingConfig() = %#v, want nil", got)
 	}
 }
 
-// TestResolveEmbeddingConfigUsesSemanticDefaults 验证未显式配置语义检索参数时会自动回落到统一默认值。
+// TestResolveEmbeddingConfigUsesSemanticDefaults 验证默认模板补齐后的嵌入配置可沿用统一默认值，避免自动补齐后仍触发选项校验错误。
 func TestResolveEmbeddingConfigUsesSemanticDefaults(t *testing.T) {
 	t.Helper()
-	payload := map[string]any{
-		"embedding": map[string]any{
-			"baseUrl": "http://127.0.0.1:11434/v1",
-			"model":   "nomic-embed-text",
-		},
+	payload, err := buildDefaultPayload()
+	if err != nil {
+		t.Fatalf("buildDefaultPayload 返回错误: %v", err)
 	}
-	got := resolveEmbeddingConfig(payload)
+	embedding, ok := payload["embedding"].(map[string]any)
+	if !ok {
+		t.Fatalf("embedding 配置类型异常: %#v", payload["embedding"])
+	}
+	embedding["baseUrl"] = "http://127.0.0.1:11434/v1"
+	embedding["model"] = "nomic-embed-text"
+	got, err := resolveEmbeddingConfig(payload)
+	if err != nil {
+		t.Fatalf("resolveEmbeddingConfig() 返回错误: %v", err)
+	}
 	if got == nil {
 		t.Fatal("resolveEmbeddingConfig() 返回 nil, want 非空配置")
 	}
@@ -157,7 +174,10 @@ func TestResolveEmbeddingConfigParsesSemanticWindowAndDecay(t *testing.T) {
 			},
 		},
 	}
-	got := resolveEmbeddingConfig(payload)
+	got, err := resolveEmbeddingConfig(payload)
+	if err != nil {
+		t.Fatalf("resolveEmbeddingConfig() 返回错误: %v", err)
+	}
 	if got == nil {
 		t.Fatal("resolveEmbeddingConfig() 返回 nil, want 非空配置")
 	}
@@ -204,9 +224,19 @@ func TestResolveSearchConfig(t *testing.T) {
 			"lowConfidenceErrorHitLimit":   3,
 			"lowConfidenceSummaryHitLimit": 5,
 			"searchStageConcurrency":       3,
+			"keyword": map[string]any{
+				"mode":    "like",
+				"backend": "auto",
+			},
+			"fusion": map[string]any{
+				"formula": "coverage_discount",
+			},
 		},
 	}
-	got := resolveSearchConfig(payload)
+	got, err := resolveSearchConfig(payload)
+	if err != nil {
+		t.Fatalf("resolveSearchConfig() 返回错误: %v", err)
+	}
 	if got == nil {
 		t.Fatal("resolveSearchConfig() 返回 nil, want 非空配置")
 	}
@@ -221,10 +251,17 @@ func TestResolveSearchConfig(t *testing.T) {
 	}
 }
 
-// TestResolveSearchConfigUsesDefaults 验证缺省场景会回退到统一默认上限，避免旧配置文件升级后行为漂移。
+// TestResolveSearchConfigUsesDefaults 验证默认模板中的选项配置可正常解析，避免自动补齐后仍被视为非法配置。
 func TestResolveSearchConfigUsesDefaults(t *testing.T) {
 	t.Helper()
-	got := resolveSearchConfig(map[string]any{})
+	defaults, err := buildDefaultPayload()
+	if err != nil {
+		t.Fatalf("buildDefaultPayload 返回错误: %v", err)
+	}
+	got, err := resolveSearchConfig(defaults)
+	if err != nil {
+		t.Fatalf("resolveSearchConfig() 返回错误: %v", err)
+	}
 	if got == nil {
 		t.Fatal("resolveSearchConfig() 返回 nil, want 非空配置")
 	}
@@ -265,9 +302,14 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 	t.Helper()
 	payload := map[string]any{
 		"search": map[string]any{
+			"lowConfidenceErrorHitLimit":   defaultSearchErrorHitLimit,
+			"lowConfidenceSummaryHitLimit": defaultSearchSummaryHitLimit,
+			"searchStageConcurrency":       defaultSearchStageConcurrency,
 			"keyword": map[string]any{
 				"mode":    "bm25",
 				"backend": "postgres",
+				"bm25K1":  defaultKeywordBM25K1,
+				"bm25B":   defaultKeywordBM25B,
 				"fields":  []string{"title", "content"},
 				"fieldWeights": map[string]float64{
 					"title":   3,
@@ -298,7 +340,10 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 			},
 		},
 	}
-	got := resolveSearchConfig(payload)
+	got, err := resolveSearchConfig(payload)
+	if err != nil {
+		t.Fatalf("resolveSearchConfig() 返回错误: %v", err)
+	}
 	if got == nil {
 		t.Fatal("resolveSearchConfig() 返回 nil, want 非空配置")
 	}
@@ -364,10 +409,17 @@ func TestResolveSearchConfigParsesKeywordFusionCache(t *testing.T) {
 	}
 }
 
-// TestResolveScheduleConfigUsesDefaults 验证缺省场景会回退到统一清理任务默认值，避免首次启用治理功能时出现空配置。
+// TestResolveScheduleConfigUsesDefaults 验证默认模板中的调度选项配置可正常解析，避免自动补齐后触发非法模式错误。
 func TestResolveScheduleConfigUsesDefaults(t *testing.T) {
 	t.Helper()
-	got := resolveScheduleConfig(map[string]any{})
+	defaults, err := buildDefaultPayload()
+	if err != nil {
+		t.Fatalf("buildDefaultPayload 返回错误: %v", err)
+	}
+	got, err := resolveScheduleConfig(defaults)
+	if err != nil {
+		t.Fatalf("resolveScheduleConfig() 返回错误: %v", err)
+	}
 	if got == nil {
 		t.Fatal("resolveScheduleConfig() 返回 nil, want 非空配置")
 	}
@@ -414,7 +466,10 @@ func TestResolveScheduleConfigParsesCleanupPolicy(t *testing.T) {
 			},
 		},
 	}
-	got := resolveScheduleConfig(payload)
+	got, err := resolveScheduleConfig(payload)
+	if err != nil {
+		t.Fatalf("resolveScheduleConfig() 返回错误: %v", err)
+	}
 	if !got.MemoryCleanup.Enabled || !got.MemoryCleanup.DryRun {
 		t.Fatalf("清理任务开关解析异常: %+v", got.MemoryCleanup)
 	}
@@ -429,6 +484,110 @@ func TestResolveScheduleConfigParsesCleanupPolicy(t *testing.T) {
 	}
 	if got.MemoryCleanup.Summary.Weights.ProjectPressure != 0.4 {
 		t.Fatalf("summary 权重解析异常: %+v", got.MemoryCleanup.Summary.Weights)
+	}
+}
+
+// TestResolveSearchConfigRejectsInvalidOption 验证搜索选项命中统一枚举校验后会直接报错，避免继续静默回退默认值。
+func TestResolveSearchConfigRejectsInvalidOption(t *testing.T) {
+	t.Helper()
+	payload := map[string]any{
+		"search": map[string]any{
+			"keyword": map[string]any{
+				"mode":    "invalid",
+				"backend": "auto",
+			},
+			"fusion": map[string]any{
+				"formula": "coverage_discount",
+			},
+		},
+	}
+	_, err := resolveSearchConfig(payload)
+	if err == nil {
+		t.Fatal("resolveSearchConfig() 未返回错误, want 非空错误")
+	}
+	if !strings.Contains(err.Error(), "search.keyword.mode") {
+		t.Fatalf("错误信息应包含配置项路径: %v", err)
+	}
+}
+
+// TestResolveSearchConfigRejectsEmptyOption 验证搜索选项为空时会直接报错，避免缺省场景继续使用默认选项。
+func TestResolveSearchConfigRejectsEmptyOption(t *testing.T) {
+	t.Helper()
+	payload := map[string]any{
+		"search": map[string]any{
+			"keyword": map[string]any{
+				"mode":    "",
+				"backend": "auto",
+			},
+			"fusion": map[string]any{
+				"formula": "coverage_discount",
+			},
+		},
+	}
+	_, err := resolveSearchConfig(payload)
+	if err == nil {
+		t.Fatal("resolveSearchConfig() 未返回错误, want 非空错误")
+	}
+	if !strings.Contains(err.Error(), "不能为空") {
+		t.Fatalf("错误信息应包含不能为空提示: %v", err)
+	}
+}
+
+// TestResolveEmbeddingConfigRejectsEmptySemanticWindowMode 验证嵌入窗口模式为空时会直接报错，避免静默回退到 static。
+func TestResolveEmbeddingConfigRejectsEmptySemanticWindowMode(t *testing.T) {
+	t.Helper()
+	payload := map[string]any{
+		"embedding": map[string]any{
+			"baseUrl": "http://127.0.0.1:11434/v1",
+			"model":   "nomic-embed-text",
+			"semanticWindow": map[string]any{
+				"mode": "",
+			},
+		},
+	}
+	_, err := resolveEmbeddingConfig(payload)
+	if err == nil {
+		t.Fatal("resolveEmbeddingConfig() 未返回错误, want 非空错误")
+	}
+	if !strings.Contains(err.Error(), "embedding.semanticWindow.mode") {
+		t.Fatalf("错误信息应包含配置项路径: %v", err)
+	}
+}
+
+// TestResolveScheduleConfigRejectsInvalidMode 验证清理模式非法时会直接报错，避免静默回退到 review。
+func TestResolveScheduleConfigRejectsInvalidMode(t *testing.T) {
+	t.Helper()
+	payload := map[string]any{
+		"schedule": map[string]any{
+			"memoryCleanup": map[string]any{
+				"mode": "noop",
+			},
+		},
+	}
+	_, err := resolveScheduleConfig(payload)
+	if err == nil {
+		t.Fatal("resolveScheduleConfig() 未返回错误, want 非空错误")
+	}
+	if !strings.Contains(err.Error(), "schedule.memoryCleanup.mode") {
+		t.Fatalf("错误信息应包含配置项路径: %v", err)
+	}
+}
+
+// TestResolveDatabaseConfigRejectsEmptyDriver 验证数据库驱动为空时会直接报错，避免 dsn 存在时继续落到未定义驱动行为。
+func TestResolveDatabaseConfigRejectsEmptyDriver(t *testing.T) {
+	t.Helper()
+	payload := map[string]any{
+		"database": map[string]any{
+			"driver": "",
+			"dsn":    "postgres://demo",
+		},
+	}
+	_, err := resolveDatabaseConfig(payload)
+	if err == nil {
+		t.Fatal("resolveDatabaseConfig() 未返回错误, want 非空错误")
+	}
+	if !strings.Contains(err.Error(), "database.driver") {
+		t.Fatalf("错误信息应包含配置项路径: %v", err)
 	}
 }
 

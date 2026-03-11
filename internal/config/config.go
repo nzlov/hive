@@ -179,6 +179,14 @@ type AppConfig struct {
 }
 
 var (
+	configOptionValues = map[string][]string{
+		"database.driver":               {"sqlite", "postgres", "postgresql"},
+		"embedding.semanticWindow.mode": {"static", "dynamic"},
+		"schedule.memoryCleanup.mode":   {"review", "auto"},
+		"search.keyword.mode":           {"like", "bm25"},
+		"search.keyword.backend":        {"auto", "postgres"},
+		"search.fusion.formula":         {"weighted_sum", "coverage_discount"},
+	}
 	serverSectionKeys                        = "server"
 	serverBaseURLKeys                        = "baseUrl"
 	serverListenAddrKeys                     = "listenAddr"
@@ -299,11 +307,24 @@ func loadFromPath(configPath string, requireExists bool) (AppConfig, error) {
 		ServerBaseURL:    resolveServerBaseURL(payload),
 		ServerListenAddr: resolveServerListenAddr(payload),
 		JWTSecret:        resolveJWTSecret(payload),
-		DatabaseConfig:   resolveDatabaseConfig(payload),
 	}
-	config.EmbeddingConfig = resolveEmbeddingConfig(payload)
-	config.SearchConfig = resolveSearchConfig(payload)
-	config.ScheduleConfig = resolveScheduleConfig(payload)
+	databaseConfig, err := resolveDatabaseConfig(payload)
+	if err != nil {
+		return AppConfig{}, err
+	}
+	config.DatabaseConfig = databaseConfig
+	config.EmbeddingConfig, err = resolveEmbeddingConfig(payload)
+	if err != nil {
+		return AppConfig{}, err
+	}
+	config.SearchConfig, err = resolveSearchConfig(payload)
+	if err != nil {
+		return AppConfig{}, err
+	}
+	config.ScheduleConfig, err = resolveScheduleConfig(payload)
+	if err != nil {
+		return AppConfig{}, err
+	}
 	return config, nil
 }
 
@@ -885,13 +906,13 @@ func resolveServerListenAddr(payload map[string]any) string {
 }
 
 // resolveEmbeddingConfig 只要求地址和模型存在，兼容本地 Ollama 这类无需鉴权的嵌入服务。
-func resolveEmbeddingConfig(payload map[string]any) *EmbeddingConfig {
+func resolveEmbeddingConfig(payload map[string]any) (*EmbeddingConfig, error) {
 	section := findSection(payload, embeddingSectionKeys)
 	baseURL := strings.TrimRight(pickStrings(section, embeddingBaseURLKeys), "/")
 	apiKey := pickStrings(section, embeddingAPIKeyKeys)
 	model := pickStrings(section, embeddingModelKeys)
 	if baseURL == "" || model == "" {
-		return nil
+		return nil, nil
 	}
 	timeout := pickFloat(section, embeddingTimeoutKeys, 30)
 	if timeout < 1 {
@@ -922,11 +943,8 @@ func resolveEmbeddingConfig(payload map[string]any) *EmbeddingConfig {
 	}
 	semanticWindow := findSection(section, embeddingSemanticWindowSectionKeys)
 	semanticWindowMode := strings.ToLower(strings.TrimSpace(pickStrings(semanticWindow, embeddingSemanticWindowModeKeys)))
-	if semanticWindowMode == "" {
-		semanticWindowMode = defaultSemanticWindowMode
-	}
-	if semanticWindowMode != "dynamic" {
-		semanticWindowMode = "static"
+	if err := validateConfigOption("embedding.semanticWindow.mode", semanticWindowMode); err != nil {
+		return nil, err
 	}
 	semanticWindowBaseMaxCount := pickInt(semanticWindow, embeddingSemanticWindowBaseMaxCountKeys, semanticCandidateMaxCount)
 	if semanticWindowBaseMaxCount < 1 {
@@ -994,7 +1012,7 @@ func resolveEmbeddingConfig(payload map[string]any) *EmbeddingConfig {
 		DecaySemanticWeight:         decaySemanticWeight,
 		DecaySummaryHalfLifeDays:    decaySummaryHalfLifeDays,
 		DecayErrorHalfLifeDays:      decayErrorHalfLifeDays,
-	}
+	}, nil
 }
 
 // resolveJWTSecret 统一读取 JWT 密钥，避免管理接口鉴权在不同入口出现不一致的签名结果。
@@ -1007,23 +1025,30 @@ func resolveJWTSecret(payload map[string]any) string {
 }
 
 // resolveDatabaseConfig 统一解析数据库配置，未配置时继续沿用默认 SQLite 行为。
-func resolveDatabaseConfig(payload map[string]any) *DatabaseConfig {
+func resolveDatabaseConfig(payload map[string]any) (*DatabaseConfig, error) {
 	section := findSection(payload, databaseSectionKeys)
-	driver := pickStrings(section, databaseDriverKeys)
+	driver := strings.ToLower(strings.TrimSpace(pickStrings(section, databaseDriverKeys)))
 	dsn := pickStrings(section, databaseDSNKeys)
 	if driver == "" && dsn == "" {
-		return nil
+		return nil, nil
 	}
-	return &DatabaseConfig{Driver: driver, DSN: dsn}
+	if err := validateConfigOption("database.driver", driver); err != nil {
+		return nil, err
+	}
+	return &DatabaseConfig{Driver: driver, DSN: dsn}, nil
 }
 
 // resolveScheduleConfig 统一解析定时任务配置，避免定时清理的 cron、保护标签和评分策略散落在多个调用方。
-func resolveScheduleConfig(payload map[string]any) *ScheduleConfig {
+func resolveScheduleConfig(payload map[string]any) (*ScheduleConfig, error) {
 	section := findSection(findSection(payload, scheduleSectionKeys), scheduleMemoryCleanupSectionKeys)
+	mode := strings.ToLower(strings.TrimSpace(pickStrings(section, scheduleCleanupModeKeys)))
+	if err := validateConfigOption("schedule.memoryCleanup.mode", mode); err != nil {
+		return nil, err
+	}
 	config := MemoryCleanupScheduleConfig{
 		Enabled:       pickBool(section, scheduleCleanupEnabledKeys, defaultCleanupEnabled),
 		Spec:          pickStrings(section, scheduleCleanupSpecKeys),
-		Mode:          strings.ToLower(strings.TrimSpace(pickStrings(section, scheduleCleanupModeKeys))),
+		Mode:          mode,
 		DryRun:        pickBool(section, scheduleCleanupDryRunKeys, defaultCleanupDryRun),
 		ReviewTopN:    pickInt(section, scheduleCleanupReviewTopNKeys, defaultCleanupReviewTopN),
 		ProtectedTags: pickStringSlice(section, scheduleCleanupProtectedTagsKeys),
@@ -1049,16 +1074,13 @@ func resolveScheduleConfig(payload map[string]any) *ScheduleConfig {
 	if strings.TrimSpace(config.Spec) == "" {
 		config.Spec = defaultCleanupSpec
 	}
-	if config.Mode != "review" && config.Mode != "auto" {
-		config.Mode = defaultCleanupMode
-	}
 	if config.ReviewTopN < 1 {
 		config.ReviewTopN = defaultCleanupReviewTopN
 	}
 	if len(config.ProtectedTags) == 0 {
 		config.ProtectedTags = []string{"核心故障", "架构决策"}
 	}
-	return &ScheduleConfig{MemoryCleanup: config}
+	return &ScheduleConfig{MemoryCleanup: config}, nil
 }
 
 // resolveMemoryCleanupPolicy 统一规整单类记忆清理参数，避免 summary 和 error 的默认值与边界校验分叉。
@@ -1099,7 +1121,7 @@ func resolveMemoryCleanupPolicy(section map[string]any, defaultBeforeDays, defau
 }
 
 // resolveSearchConfig 统一解析搜索返回上限，确保所有入口都遵循同一结果裁剪策略。
-func resolveSearchConfig(payload map[string]any) *SearchConfig {
+func resolveSearchConfig(payload map[string]any) (*SearchConfig, error) {
 	section := findSection(payload, searchSectionKeys)
 	errorLimit := pickInt(section, searchLowConfidenceErrorHitLimitKeys, defaultSearchErrorHitLimit)
 	if errorLimit < 0 {
@@ -1116,15 +1138,12 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 
 	keywordSection := findSection(section, searchKeywordSectionKeys)
 	keywordMode := strings.ToLower(strings.TrimSpace(pickStrings(keywordSection, searchKeywordModeKeys)))
-	if keywordMode == "" {
-		keywordMode = defaultKeywordMode
-	}
-	if keywordMode != "bm25" {
-		keywordMode = "like"
+	if err := validateConfigOption("search.keyword.mode", keywordMode); err != nil {
+		return nil, err
 	}
 	keywordBackend := strings.ToLower(strings.TrimSpace(pickStrings(keywordSection, searchKeywordBackendKeys)))
-	if keywordBackend == "" {
-		keywordBackend = defaultKeywordBackend
+	if err := validateConfigOption("search.keyword.backend", keywordBackend); err != nil {
+		return nil, err
 	}
 	keywordFields := pickStringSlice(keywordSection, searchKeywordFieldsKeys)
 	if len(keywordFields) == 0 {
@@ -1152,11 +1171,8 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 	fusionSection := findSection(section, searchFusionSectionKeys)
 	fusionEnabled := pickBool(fusionSection, searchFusionEnabledKeys, defaultFusionEnabled)
 	fusionFormula := strings.ToLower(strings.TrimSpace(pickStrings(fusionSection, searchFusionFormulaKeys)))
-	if fusionFormula == "" {
-		fusionFormula = defaultFusionFormula
-	}
-	if fusionFormula != "weighted_sum" && fusionFormula != "coverage_discount" {
-		fusionFormula = defaultFusionFormula
+	if err := validateConfigOption("search.fusion.formula", fusionFormula); err != nil {
+		return nil, err
 	}
 	fusionKeywordWeight := pickFloat(fusionSection, searchFusionKeywordWeightKeys, defaultFusionKeywordWeight)
 	if fusionKeywordWeight < 0 {
@@ -1225,7 +1241,24 @@ func resolveSearchConfig(payload map[string]any) *SearchConfig {
 		CacheSemanticHitsTTL:         cacheSemanticHitsTTL,
 		CacheMaxEntries:              cacheMaxEntries,
 		CacheStatsRefreshInterval:    cacheStatsRefreshInterval,
+	}, nil
+}
+
+// validateConfigOption 统一校验枚举型配置，避免无效或空值被静默回退为默认选项。
+func validateConfigOption(key, value string) error {
+	allowedValues, ok := configOptionValues[key]
+	if !ok {
+		return nil
 	}
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("配置项 %s 不能为空，可选值: %s", key, strings.Join(allowedValues, ", "))
+	}
+	for _, allowedValue := range allowedValues {
+		if value == allowedValue {
+			return nil
+		}
+	}
+	return fmt.Errorf("配置项 %s 的值 %q 无效，可选值: %s", key, value, strings.Join(allowedValues, ", "))
 }
 
 // findSection 读取指定节配置，确保各模块按统一层级解析。
