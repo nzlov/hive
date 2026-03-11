@@ -143,10 +143,17 @@
 ```json
 {
   "project_name": "payment-service",
-  "queries": ["支付超时", "重试队列"],
+  "tags": ["支付", "重试队列"],
+  "description": "支付超时后重试队列为什么会积压",
   "debug": true
 }
 ```
+
+请求约束：
+
+- `description` 必填，服务端会直接把它作为语义查询主输入
+- `tags` 可选，服务端会同时把它用于关键字检索与辅助向量查询
+- 旧 `queries` 字段已废弃；如果继续传入，接口会返回 `400`
 
 返回字段：
 
@@ -158,6 +165,20 @@
 - `markdown`
 
 搜索结果真正返回命中时，服务端会同步更新对应记忆的 `use_count` 和 `last_used_at`。
+
+### `GET /api/v1/memories`
+
+管理端记忆列表接口支持以下查询参数：
+
+- `page`
+- `page_size`
+- `description`：必填，不能为空白字符串
+- `tags`：可重复传入，例如 `?tags=支付&tags=重试`
+
+说明：
+
+- 接口始终按搜索模式执行，并返回命中置信度
+- 请求缺少 `description` 时会直接返回 `400`
 
 ### `POST /tokenapi/v1/memories/write`
 

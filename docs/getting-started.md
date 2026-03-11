@@ -41,7 +41,13 @@ curl http://127.0.0.1:8080/healthz
 也可以通过客户端脚本访问服务：
 
 ```bash
-python3 hive/scripts/main.py search --root . --query "向量重建"
+python3 hive/scripts/main.py search --root . --tags "向量" --description "向量重建"
+```
+
+如果需要多个标签，也可以直接拆成多个参数：
+
+```bash
+python3 hive/scripts/main.py search --root . --tags 向量 召回 --description "向量重建"
 ```
 
 详细的开发、测试、清理与调试说明见 `docs/development.md`。

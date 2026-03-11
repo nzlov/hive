@@ -48,7 +48,7 @@ func (p *queryEmbeddingProvider) Enabled() bool { return true }
 // ModelName 返回固定模型名，避免测试被模型元数据分支干扰。
 func (p *queryEmbeddingProvider) ModelName() string { return "query-only-model" }
 
-// EmbedTexts 为每个查询词返回同一查询向量，让测试聚焦候选过滤而非远程协议。
+// EmbedTexts 为每个检索输入返回同一查询向量，让测试聚焦候选过滤而非远程协议。
 func (p *queryEmbeddingProvider) EmbedTexts(texts []string) ([][]float64, error) {
 	atomic.AddInt64(&p.calls, 1)
 	vectors := make([][]float64, 0, len(texts))
@@ -172,7 +172,7 @@ func TestServiceWriteAndSearch(t *testing.T) {
 		t.Fatalf("Write 返回的数据库路径不符合预期: %s", databasePath)
 	}
 
-	result, err := service.Search(ctx, "service-alias", []string{"服务层写入测试"}, true)
+	result, err := service.Search(ctx, "service-alias", nil, "服务层写入测试", true)
 	if err != nil {
 		t.Fatalf("Search 返回错误: %v", err)
 	}
@@ -637,7 +637,7 @@ func TestServiceSearchReturnsBranchMetadata(t *testing.T) {
 		t.Fatalf("写入公共记忆失败: %v", err)
 	}
 
-	result, err := service.Search(ctx, "branch-project", []string{"记忆"}, false)
+	result, err := service.Search(ctx, "branch-project", nil, "记忆", false)
 	if err != nil {
 		t.Fatalf("Search 返回错误: %v", err)
 	}
@@ -673,7 +673,7 @@ func TestServiceSearchSnippetIncludesTitleAndTags(t *testing.T) {
 		t.Fatalf("写入片段记忆失败: %v", err)
 	}
 
-	result, err := service.Search(ctx, "snippet-project", []string{"长连接池"}, false)
+	result, err := service.Search(ctx, "snippet-project", nil, "长连接池", false)
 	if err != nil {
 		t.Fatalf("搜索片段记忆失败: %v", err)
 	}
@@ -725,7 +725,7 @@ func TestServiceSearchIsolatedByProjectName(t *testing.T) {
 		t.Fatalf("写入项目B记忆失败: %v", err)
 	}
 
-	resultA, err := service.Search(ctx, "project-a", []string{"记忆"}, false)
+	resultA, err := service.Search(ctx, "project-a", nil, "记忆", false)
 	if err != nil {
 		t.Fatalf("搜索项目A记忆失败: %v", err)
 	}
@@ -736,7 +736,7 @@ func TestServiceSearchIsolatedByProjectName(t *testing.T) {
 		t.Fatalf("项目A搜索结果串入了项目B记忆: %s", resultA.Markdown())
 	}
 
-	resultB, err := service.Search(ctx, "project-b", []string{"记忆"}, false)
+	resultB, err := service.Search(ctx, "project-b", nil, "记忆", false)
 	if err != nil {
 		t.Fatalf("搜索项目B记忆失败: %v", err)
 	}
@@ -971,7 +971,7 @@ func TestServiceSemanticSearchFindsMatchAcrossBatches(t *testing.T) {
 		seedSemanticMemory(t, store, "semantic-batch-project", "summary", title, content, base.Add(-time.Duration(idx)*time.Minute).Format("20060102150405"), vector)
 	}
 
-	result, err := service.Search(ctx, "semantic-batch-project", []string{"跨批次语义查询"}, false)
+	result, err := service.Search(ctx, "semantic-batch-project", nil, "跨批次语义查询", false)
 	if err != nil {
 		t.Fatalf("语义搜索失败: %v", err)
 	}
@@ -1011,7 +1011,7 @@ func TestServiceSemanticSearchLimitsCandidateWindow(t *testing.T) {
 		seedSemanticMemory(t, store, "semantic-window-project", "summary", title, content, base.Add(-time.Duration(idx)*time.Minute).Format("20060102150405"), vector)
 	}
 
-	result, err := service.Search(ctx, "semantic-window-project", []string{"窗口外语义查询"}, false)
+	result, err := service.Search(ctx, "semantic-window-project", nil, "窗口外语义查询", false)
 	if err != nil {
 		t.Fatalf("语义搜索失败: %v", err)
 	}
@@ -1112,7 +1112,7 @@ func TestServiceListKeepsAllSemanticHits(t *testing.T) {
 		)
 	}
 
-	searchResult, err := service.Search(ctx, "list-semantic-project-0", []string{"管理列表语义查询"}, false)
+	searchResult, err := service.Search(ctx, "list-semantic-project-0", nil, "管理列表语义查询", false)
 	if err != nil {
 		t.Fatalf("Search 返回错误: %v", err)
 	}
@@ -1120,7 +1120,7 @@ func TestServiceListKeepsAllSemanticHits(t *testing.T) {
 		t.Fatalf("Search 应继续保留低置信度裁剪: %+v", searchResult.SummaryHits)
 	}
 
-	listResult, err := service.List(ctx, 1, 10, []string{"管理列表语义查询"})
+	listResult, err := service.List(ctx, 1, 10, nil, "管理列表语义查询")
 	if err != nil {
 		t.Fatalf("List 返回错误: %v", err)
 	}
@@ -1176,7 +1176,7 @@ func TestServiceSemanticSearchUsesDynamicWindow(t *testing.T) {
 		)
 	}
 
-	result, err := service.Search(ctx, "dynamic-window-project", []string{"动态窗口语义查询"}, false)
+	result, err := service.Search(ctx, "dynamic-window-project", nil, "动态窗口语义查询", false)
 	if err != nil {
 		t.Fatalf("语义搜索失败: %v", err)
 	}
@@ -1400,10 +1400,10 @@ func TestServiceSemanticSearchUsesCache(t *testing.T) {
 	}
 	seedSemanticMemory(t, store, "cache-project", "summary", "缓存记忆", "## Summary\n\n- 详情: 缓存命中。", "20260310100000", []float64{1, 0})
 
-	if _, err := service.Search(ctx, "cache-project", []string{"缓存查询"}, false); err != nil {
+	if _, err := service.Search(ctx, "cache-project", nil, "缓存查询", false); err != nil {
 		t.Fatalf("首次搜索失败: %v", err)
 	}
-	if _, err := service.Search(ctx, "cache-project", []string{"缓存查询"}, false); err != nil {
+	if _, err := service.Search(ctx, "cache-project", nil, "缓存查询", false); err != nil {
 		t.Fatalf("第二次搜索失败: %v", err)
 	}
 	if got := atomic.LoadInt64(&provider.calls); got != 1 {
@@ -1437,7 +1437,7 @@ func TestServiceWriteInvalidatesSearchCache(t *testing.T) {
 		t.Fatalf("首次写入失败: %v", err)
 	}
 
-	first, err := service.Search(ctx, "cache-write-project", []string{"缓存写入"}, false)
+	first, err := service.Search(ctx, "cache-write-project", nil, "缓存写入", false)
 	if err != nil {
 		t.Fatalf("首次搜索失败: %v", err)
 	}
@@ -1455,7 +1455,7 @@ func TestServiceWriteInvalidatesSearchCache(t *testing.T) {
 		t.Fatalf("第二次写入失败: %v", err)
 	}
 
-	second, err := service.Search(ctx, "cache-write-project", []string{"缓存写入"}, false)
+	second, err := service.Search(ctx, "cache-write-project", nil, "缓存写入", false)
 	if err != nil {
 		t.Fatalf("第二次搜索失败: %v", err)
 	}
@@ -1478,10 +1478,10 @@ func TestServiceSearchIncrementsUseCount(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("写入测试记忆失败: %v", err)
 	}
-	if _, err := service.Search(ctx, "usage-project", []string{"使用计数测试"}, false); err != nil {
+	if _, err := service.Search(ctx, "usage-project", nil, "使用计数测试", false); err != nil {
 		t.Fatalf("首次搜索失败: %v", err)
 	}
-	if _, err := service.Search(ctx, "usage-project", []string{"使用计数测试"}, false); err != nil {
+	if _, err := service.Search(ctx, "usage-project", nil, "使用计数测试", false); err != nil {
 		t.Fatalf("第二次搜索失败: %v", err)
 	}
 	store, err := models.StoreFromContext(ctx)

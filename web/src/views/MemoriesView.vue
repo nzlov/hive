@@ -17,13 +17,21 @@
           </div>
         </div>
 
-        <form class="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_180px_120px]" @submit.prevent="handleSearch">
+        <form class="mt-6 grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.2fr)_180px_120px]" @submit.prevent="handleSearch">
           <label class="block space-y-2">
-            <span class="text-sm font-medium text-slate-700">关键字搜索</span>
+            <span class="text-sm font-medium text-slate-700">标签</span>
             <input
-              v-model="keywordInput"
+              v-model="tagInput"
               class="field"
-              placeholder="多个关键字用空格分隔，将按记忆搜索逻辑同时命中"
+              placeholder="可选，多个标签用空格分隔"
+            />
+          </label>
+          <label class="block space-y-2">
+            <span class="text-sm font-medium text-slate-700">描述</span>
+            <input
+              v-model="descriptionInput"
+              class="field"
+              placeholder="必填，直接输入你的查询描述"
             />
           </label>
           <label class="block space-y-2">
@@ -416,7 +424,8 @@ const memories = ref([])
 const loading = ref(false)
 const actionMessage = ref('')
 const errorMessage = ref('')
-const keywordInput = ref('')
+const tagInput = ref('')
+const descriptionInput = ref('')
 const page = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
@@ -451,10 +460,10 @@ const sourceProjectOptions = computed(() => projectOptions.value.filter((item) =
 const availableTargetTagOptions = computed(() => tagOptions.value.filter((item) => !tagMergeForm.sourceTags.includes(item)))
 const availableSourceTagOptions = computed(() => tagOptions.value.filter((item) => item !== tagMergeForm.targetTag))
 
-// buildQueries 统一按空白拆分关键字，确保后台列表与记忆搜索接口共享同样的多词匹配输入形式。
-function buildQueries() {
-  return keywordInput.value
-    .split(/\s+/)
+// buildSearchTags 统一按空白拆分标签输入，避免管理页搜索与接口协议口径不一致。
+function buildSearchTags() {
+  return tagInput.value
+    .split(/[\s,，\n]+/)
     .map((item) => item.trim())
     .filter(Boolean)
 }
@@ -464,7 +473,7 @@ async function loadMemories() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const response = await fetchMemories(page.value, pageSize.value, buildQueries())
+    const response = await fetchMemories(page.value, pageSize.value, buildSearchTags(), descriptionInput.value)
     memories.value = response.items || []
     total.value = response.total || 0
     totalPage.value = response.total_page || 0
@@ -658,6 +667,10 @@ async function handleMergeTags() {
 // handleSearch 在用户显式提交后重置到第一页，避免旧页码导致新结果看起来为空。
 async function handleSearch() {
   actionMessage.value = ''
+  if (!String(descriptionInput.value || '').trim()) {
+    errorMessage.value = '搜索描述不能为空'
+    return
+  }
   page.value = 1
   await loadMemories()
 }
@@ -883,6 +896,8 @@ function getTypeChipClass(value) {
 }
 
 onMounted(() => {
-  loadMemories()
+  memories.value = []
+  total.value = 0
+  totalPage.value = 0
 })
 </script>

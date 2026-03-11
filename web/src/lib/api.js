@@ -77,13 +77,16 @@ export function deleteUser(id) {
 }
 
 // fetchMemories 拉取后台记忆分页列表，确保管理页与服务端共享同一筛选协议。
-export function fetchMemories(page = 1, pageSize = 10, queries = []) {
+export function fetchMemories(page = 1, pageSize = 10, tags = [], description = '') {
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
-  queries.forEach((query) => {
-    if (String(query || '').trim()) {
-      params.append('queries', String(query).trim())
+  tags.forEach((tag) => {
+    if (String(tag || '').trim()) {
+      params.append('tags', String(tag).trim())
     }
   })
+  if (String(description || '').trim()) {
+    params.set('description', String(description).trim())
+  }
   return request(`/api/v1/memories?${params.toString()}`)
 }
 

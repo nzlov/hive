@@ -112,3 +112,29 @@ Hive 客户端读取本地配置文件：
 2. 确认 `skills/hive/SKILL.md` 存在
 3. 配置 `~/.config/hive/config.json`
 4. 让 AI 工具从 `skills/hive/` 加载这个 Skill
+
+## 搜索命令约定
+
+当前客户端搜索命令使用：
+
+```bash
+python3 scripts/main.py search --root . --tags "数据库" --description "数据库连接没释放导致服务变慢"
+```
+
+也支持把多个标签拆成多个参数：
+
+```bash
+python3 scripts/main.py search --root . --tags 数据库 连接池 --description "数据库连接没释放导致服务变慢"
+```
+
+或者显式传 JSON 数组：
+
+```bash
+python3 scripts/main.py search --root . --tags '["数据库","连接池"]' --description "数据库连接没释放导致服务变慢"
+```
+
+说明：
+
+- `--description` 必填
+- `--tags` 可选，对应请求体里的 `tags` 数组，可拆成多个参数或传 JSON 数组字符串
+- 旧 `--query` 已废弃

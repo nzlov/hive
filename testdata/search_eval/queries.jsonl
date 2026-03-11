@@ -1,19 +1,19 @@
-{"query_id":"q-001","project_name":"eval-project","queries":["订单超时后应该怎么重试"],"source_types":["summary"],"category":"自然语言描述","difficulty":"medium"}
-{"query_id":"q-002","project_name":"eval-project","queries":["重复点击下单怎么避免生成两笔订单"],"source_types":["summary"],"category":"自然语言描述","difficulty":"easy"}
-{"query_id":"q-003","project_name":"eval-project","queries":["数据库连接没释放导致服务变慢"],"source_types":["error","summary"],"category":"错误排查","difficulty":"medium"}
-{"query_id":"q-004","project_name":"eval-project","queries":["Redis 连接池打满导致缓存超时"],"source_types":["error"],"category":"错误排查","difficulty":"easy"}
-{"query_id":"q-005","project_name":"eval-project","queries":["关键字结果和语义结果是怎么合并排序的"],"source_types":["summary","error"],"category":"模块定位","difficulty":"medium"}
-{"query_id":"q-006","project_name":"eval-project","queries":["语义阈值和回表窗口应该怎么调"],"source_types":["summary","error"],"category":"调优经验","difficulty":"medium"}
-{"query_id":"q-007","project_name":"eval-project","queries":["服务启动时为什么会触发向量重建"],"source_types":["summary"],"category":"自然语言描述","difficulty":"medium"}
-{"query_id":"q-008","project_name":"eval-project","queries":["向量表和记忆表是怎么关联的"],"source_types":["summary"],"category":"模块定位","difficulty":"easy"}
-{"query_id":"q-009","project_name":"eval-project","queries":["python3 scripts/main.py search 找不到文件"],"source_types":["error"],"category":"错误复用","difficulty":"easy"}
-{"query_id":"q-010","project_name":"eval-project","queries":["bm25 会按照哪些字段做关键字重排"],"source_types":["summary"],"category":"调优经验","difficulty":"easy"}
-{"query_id":"q-011","project_name":"eval-project","queries":["为什么低置信度结果没有返回"],"source_types":["summary"],"category":"自然语言描述","difficulty":"easy"}
-{"query_id":"q-012","project_name":"eval-project","queries":["动态窗口太小为什么语义结果会很少"],"source_types":["error","summary"],"category":"错误排查","difficulty":"medium"}
-{"query_id":"q-013","project_name":"eval-project","queries":["支付重试里为什么要求连接后立即关闭"],"source_types":["summary","error"],"category":"自然语言描述","difficulty":"medium"}
-{"query_id":"q-014","project_name":"eval-project","queries":["新增记忆后为什么还会命中旧缓存"],"source_types":["summary"],"category":"自然语言描述","difficulty":"medium"}
-{"query_id":"q-015","project_name":"eval-project","queries":["搜索里的同义词扩展是怎么做的"],"source_types":["summary"],"category":"模块定位","difficulty":"easy"}
-{"query_id":"q-016","project_name":"eval-project","queries":["标题弱命中压过语义结果要怎么修"],"source_types":["error","summary"],"category":"错误复用","difficulty":"medium"}
-{"query_id":"q-017","project_name":"eval-project","queries":["最新的回放对账操作手册是哪一份"],"source_types":["summary"],"category":"时效性排序","difficulty":"medium"}
-{"query_id":"q-018","project_name":"eval-project","queries":["sqlite vec 提示向量维度不一致是什么意思"],"source_types":["error"],"category":"错误复用","difficulty":"medium"}
-{"query_id":"q-019","project_name":"eval-project","queries":["搜索阶段并发控制在哪个配置项"],"source_types":["summary"],"category":"模块定位","difficulty":"easy"}
+{"query_id":"q-001","project_name":"eval-project","tags":["订单"],"description":"订单超时后应该怎么重试","source_types":["summary"],"category":"自然语言描述","difficulty":"medium"}
+{"query_id":"q-002","project_name":"eval-project","tags":["下单"],"description":"重复点击下单怎么避免生成两笔订单","source_types":["summary"],"category":"自然语言描述","difficulty":"easy"}
+{"query_id":"q-003","project_name":"eval-project","tags":["数据库","连接池"],"description":"数据库连接没释放导致服务变慢","source_types":["error","summary"],"category":"错误排查","difficulty":"medium"}
+{"query_id":"q-004","project_name":"eval-project","tags":["Redis","连接池"],"description":"Redis 连接池打满导致缓存超时","source_types":["error"],"category":"错误排查","difficulty":"easy"}
+{"query_id":"q-005","project_name":"eval-project","tags":["排序"],"description":"关键字结果和语义结果是怎么合并排序的","source_types":["summary","error"],"category":"模块定位","difficulty":"medium"}
+{"query_id":"q-006","project_name":"eval-project","tags":["语义","窗口"],"description":"语义阈值和回表窗口应该怎么调","source_types":["summary","error"],"category":"调优经验","difficulty":"medium"}
+{"query_id":"q-007","project_name":"eval-project","tags":["向量重建"],"description":"服务启动时为什么会触发向量重建","source_types":["summary"],"category":"自然语言描述","difficulty":"medium"}
+{"query_id":"q-008","project_name":"eval-project","tags":["向量表"],"description":"向量表和记忆表是怎么关联的","source_types":["summary"],"category":"模块定位","difficulty":"easy"}
+{"query_id":"q-009","project_name":"eval-project","tags":["脚本"],"description":"python3 scripts/main.py search 找不到文件","source_types":["error"],"category":"错误复用","difficulty":"easy"}
+{"query_id":"q-010","project_name":"eval-project","tags":["bm25"],"description":"bm25 会按照哪些字段做关键字重排","source_types":["summary"],"category":"调优经验","difficulty":"easy"}
+{"query_id":"q-011","project_name":"eval-project","tags":["置信度"],"description":"为什么低置信度结果没有返回","source_types":["summary"],"category":"自然语言描述","difficulty":"easy"}
+{"query_id":"q-012","project_name":"eval-project","tags":["动态窗口"],"description":"动态窗口太小为什么语义结果会很少","source_types":["error","summary"],"category":"错误排查","difficulty":"medium"}
+{"query_id":"q-013","project_name":"eval-project","tags":["支付重试"],"description":"支付重试里为什么要求连接后立即关闭","source_types":["summary","error"],"category":"自然语言描述","difficulty":"medium"}
+{"query_id":"q-014","project_name":"eval-project","tags":["缓存"],"description":"新增记忆后为什么还会命中旧缓存","source_types":["summary"],"category":"自然语言描述","difficulty":"medium"}
+{"query_id":"q-015","project_name":"eval-project","tags":["同义词"],"description":"搜索里的同义词扩展是怎么做的","source_types":["summary"],"category":"模块定位","difficulty":"easy"}
+{"query_id":"q-016","project_name":"eval-project","tags":["标题","语义"],"description":"标题弱命中压过语义结果要怎么修","source_types":["error","summary"],"category":"错误复用","difficulty":"medium"}
+{"query_id":"q-017","project_name":"eval-project","tags":["回放对账"],"description":"最新的回放对账操作手册是哪一份","source_types":["summary"],"category":"时效性排序","difficulty":"medium"}
+{"query_id":"q-018","project_name":"eval-project","tags":["sqlite vec"],"description":"sqlite vec 提示向量维度不一致是什么意思","source_types":["error"],"category":"错误复用","difficulty":"medium"}
+{"query_id":"q-019","project_name":"eval-project","tags":["并发控制"],"description":"搜索阶段并发控制在哪个配置项","source_types":["summary"],"category":"模块定位","difficulty":"easy"}

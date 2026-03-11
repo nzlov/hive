@@ -32,7 +32,8 @@ type SearchEvalCorpusRecord struct {
 type SearchEvalQueryRecord struct {
 	QueryID     string   `json:"query_id"`
 	ProjectName string   `json:"project_name"`
-	Queries     []string `json:"queries"`
+	Tags        []string `json:"tags"`
+	Description string   `json:"description"`
 	SourceTypes []string `json:"source_types"`
 	Category    string   `json:"category"`
 	Difficulty  string   `json:"difficulty"`
@@ -1178,7 +1179,7 @@ func runSearchEvalQueries(ctx context.Context, service *Service, queries []Searc
 			return nil, fmt.Errorf("缺少查询标注: %s", query.QueryID)
 		}
 		startedAt := time.Now()
-		result, err := service.Search(ctx, query.ProjectName, query.Queries, false)
+		result, err := service.Search(ctx, query.ProjectName, query.Tags, query.Description, false)
 		if err != nil {
 			return nil, fmt.Errorf("执行评测查询失败: query_id=%s err=%w", query.QueryID, err)
 		}

@@ -12,6 +12,13 @@
 - 检查客户端 `alias` / `project_alias` 是否发生变化
 - 检查请求头里是否带了有效的 `X-API-Token`
 - 检查服务端是否连接到了你预期的数据库
+- 检查搜索请求是否传了非空 `description`
+
+## 为什么搜索接口提示 `queries` 已废弃？
+
+- 因为当前版本的搜索协议已经改为 `tags + description`
+- `description` 必填，`tags` 可选
+- 旧 `queries` 不再兼容执行，服务端会显式返回 `400`，避免静默得到错误结果
 
 ## 为什么 `go test ./...` 会失败？
 

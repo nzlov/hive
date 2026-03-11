@@ -88,14 +88,19 @@ func (s *Service) CacheStatsRefreshInterval() int {
 	return s.config.SearchConfig.CacheStatsRefreshInterval
 }
 
-// queryEmbeddingsCacheKey 构造查询向量缓存键，避免不同模型和查询串共享同一缓存项。
-func (s *Service) queryEmbeddingsCacheKey(queries []string) string {
-	return strings.Join([]string{"emb", s.provider.ModelName(), strings.Join(queries, "\x1f")}, "|")
+// queryEmbeddingsCacheKey 构造查询向量缓存键，避免不同标签与描述组合共享同一缓存项。
+func (s *Service) queryEmbeddingsCacheKey(tags []string, description string) string {
+	return strings.Join([]string{"emb", s.provider.ModelName(), searchInputCacheSegment(tags, description)}, "|")
 }
 
 // semanticHitsCacheKey 构造语义命中缓存键，确保配置变化后不会复用旧策略结果。
-func (s *Service) semanticHitsCacheKey(source, projectName string, queries []string) string {
-	return strings.Join([]string{"sem", source, projectName, s.provider.ModelName(), s.semanticSearchConfigVersion(), strings.Join(queries, "\x1f")}, "|")
+func (s *Service) semanticHitsCacheKey(source, projectName string, tags []string, description string) string {
+	return strings.Join([]string{"sem", source, projectName, s.provider.ModelName(), s.semanticSearchConfigVersion(), searchInputCacheSegment(tags, description)}, "|")
+}
+
+// searchInputCacheSegment 统一拼装搜索输入缓存片段，避免多处手写导致命名漂移。
+func searchInputCacheSegment(tags []string, description string) string {
+	return strings.Join([]string{"v2", strings.Join(tags, "\x1f"), strings.TrimSpace(description)}, "\x1e")
 }
 
 // semanticSearchConfigVersion 生成语义相关配置版本号，避免配置变更后命中过期缓存。

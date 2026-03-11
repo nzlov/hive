@@ -80,7 +80,7 @@ func TestRouterWriteAndSearch(t *testing.T) {
 		t.Fatalf("写入接口返回状态异常: %d, body=%s", writeRecorder.Code, writeRecorder.Body.String())
 	}
 
-	searchBody, err := json.Marshal(api.SearchRequest{ProjectName: "router-alias", Queries: []string{"HTTP接口测试"}, Debug: false})
+	searchBody, err := json.Marshal(api.SearchRequest{ProjectName: "router-alias", Tags: []string{"HTTP", "测试"}, Description: "HTTP接口测试", Debug: false})
 	if err != nil {
 		t.Fatalf("构造搜索请求失败: %v", err)
 	}
@@ -170,6 +170,36 @@ func TestRouterReturnsErrorField(t *testing.T) {
 	}
 }
 
+// TestRouterRejectsMissingDescriptionSearch 验证搜索接口缺少 description 时会显式报错，避免请求语义不完整。
+func TestRouterRejectsMissingDescriptionSearch(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	admin, _, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+
+	searchRequest := httptest.NewRequest(http.MethodPost, "/tokenapi/v1/memories/search", bytes.NewReader([]byte(`{"project_name":"router-alias","tags":["旧协议"]}`)))
+	searchRequest.Header.Set("Content-Type", "application/json")
+	searchRequest.Header.Set("X-API-Token", admin.APIToken)
+	searchRecorder := httptest.NewRecorder()
+	router.ServeHTTP(searchRecorder, searchRequest)
+	if searchRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("缺少 description 的搜索请求应返回 400: %d, body=%s", searchRecorder.Code, searchRecorder.Body.String())
+	}
+	var searchResponse api.SearchResponse
+	if err := json.Unmarshal(searchRecorder.Body.Bytes(), &searchResponse); err != nil {
+		t.Fatalf("解析搜索错误响应失败: %v", err)
+	}
+	if !strings.Contains(searchResponse.Error, "搜索描述不能为空") {
+		t.Fatalf("缺少 description 的搜索错误提示异常: %+v", searchResponse)
+	}
+}
+
 // TestRouterDoesNotExposeRebuildEmbeddingsEndpoint 验证向量重建不再通过 HTTP 暴露，避免维护入口与启动自愈逻辑并存。
 func TestRouterDoesNotExposeRebuildEmbeddingsEndpoint(t *testing.T) {
 	t.Helper()
@@ -223,7 +253,7 @@ func TestRouterMemoryListReturnsConfidence(t *testing.T) {
 		t.Fatalf("解析登录响应失败: %v", err)
 	}
 
-	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/memories?page=1&page_size=10&queries=管理列表关键字命中", nil)
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/memories?page=1&page_size=10&description=管理列表关键字命中&tags=后台&tags=列表", nil)
 	listRequest.Header.Set("Authorization", "Bearer "+loginResponse.Token)
 	listRecorder := httptest.NewRecorder()
 	router.ServeHTTP(listRecorder, listRequest)
@@ -242,6 +272,48 @@ func TestRouterMemoryListReturnsConfidence(t *testing.T) {
 	}
 	if listResponse.Items[0].Confidence == nil || *listResponse.Items[0].Confidence <= 0 {
 		t.Fatalf("记忆列表搜索结果应返回置信度: %+v", listResponse.Items[0])
+	}
+}
+
+// TestRouterRejectsMissingDescriptionList 验证管理端列表接口缺少 description 时会显式报错，避免请求语义不完整。
+func TestRouterRejectsMissingDescriptionList(t *testing.T) {
+	t.Helper()
+	memoryRoot := t.TempDir()
+	service := memory.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	userService := user.NewService(config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	ctx, store := testContextWithStore(t, config.AppConfig{MemoryRoot: memoryRoot, JWTSecret: "test-secret"})
+	_, password, err := userService.EnsureDefaultAdmin(ctx)
+	if err != nil {
+		t.Fatalf("初始化默认管理员失败: %v", err)
+	}
+	router := newTestRouter(t, service, userService, store)
+
+	loginBody := bytes.NewReader([]byte(`{"username":"admin","password":"` + password + `"}`))
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/users/auth/login", loginBody)
+	loginRequest.Header.Set("Content-Type", "application/json")
+	loginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(loginRecorder, loginRequest)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("登录接口返回状态异常: %d, body=%s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	var loginResponse api.LoginResponse
+	if err := json.Unmarshal(loginRecorder.Body.Bytes(), &loginResponse); err != nil {
+		t.Fatalf("解析登录响应失败: %v", err)
+	}
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/memories?page=1&page_size=10&tags=旧协议", nil)
+	listRequest.Header.Set("Authorization", "Bearer "+loginResponse.Token)
+	listRecorder := httptest.NewRecorder()
+	router.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("缺少 description 的列表请求应返回 400: %d, body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var listResponse api.MemoryListResponse
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &listResponse); err != nil {
+		t.Fatalf("解析列表错误响应失败: %v", err)
+	}
+	if !strings.Contains(listResponse.Error, "description 不能为空") {
+		t.Fatalf("缺少 description 的列表错误提示异常: %+v", listResponse)
 	}
 }
 
@@ -343,7 +415,7 @@ func TestRouterMemoryEndpointsReturnCreatorName(t *testing.T) {
 		t.Fatalf("解析登录响应失败: %v", err)
 	}
 
-	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/memories?page=1&page_size=10", nil)
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/memories?page=1&page_size=10&description=创建人映射&tags=creator", nil)
 	listRequest.Header.Set("Authorization", "Bearer "+loginResponse.Token)
 	listRecorder := httptest.NewRecorder()
 	router.ServeHTTP(listRecorder, listRequest)

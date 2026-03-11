@@ -13,8 +13,8 @@ description: Trigger this skill by default for search or analysis tasks. prior-c
 
 ## 检索记忆
 
-1. 查询使用关键词或描述(尽量详细)，允许多个。
-2. `--query` 同时支持多参数写法和 JSON 数组字符串写法。
+1. 查询必须提供描述，可选附带多个标签以增强召回。
+2. `--tags` 对应请求体里的 `tags` 数组，支持多参数写法和 JSON 数组字符串写法，`--description` 必填。
 3. 输出为 Markdown，结果按命中类型分为 `Error Hits` 和 `Summary Hits`，同一分组内多条记录用 `---` 分隔。
 4. 单条记录通常包含：
 
@@ -33,19 +33,25 @@ description: Trigger this skill by default for search or analysis tasks. prior-c
 使用命令：
 
 ```bash
-python3 <hive目录>/scripts/main.py search --root '<项目根目录>' --query '["关键词","<描述>"]'
+python3 <hive目录>/scripts/main.py search --root '<项目根目录>' --tags '["关键词"]' --description '<描述>'
+```
+
+多标签写法示例：
+
+```bash
+python3 <hive目录>/scripts/main.py search --root '<项目根目录>' --tags 支付 重试 --description '<描述>'
 ```
 
 PowerShell：
 
 ```powershell
-python <hive目录>/scripts/main.py search --root "<项目根目录>" --query '["关键词","<描述>"]'
+python <hive目录>/scripts/main.py search --root "<项目根目录>" --tags '["关键词"]' --description "<描述>"
 ```
 
 cmd：
 
 ```cmd
-python <hive目录>\scripts\main.py search --root "<项目根目录>" --query "[\"关键词\",\"<描述>\"]"
+python <hive目录>\scripts\main.py search --root "<项目根目录>" --tags "[\"关键词\"]" --description "<描述>"
 ```
 
 ## 写入总结记忆

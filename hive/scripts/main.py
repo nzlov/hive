@@ -51,8 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser = subparsers.add_parser("search")
     search_parser.add_argument("--root", default=".", help="项目根目录")
     search_parser.add_argument(
-        "--query", nargs="+", required=True, help="搜索关键词或 JSON 数组"
+        "--tags", nargs="*", default=[], help="可选标签，支持多参数或 JSON 数组"
     )
+    search_parser.add_argument("--description", required=True, help="必填搜索描述")
     search_parser.add_argument(
         "-debug", "--debug", action="store_true", help="输出调试信息"
     )
@@ -213,13 +214,13 @@ def resolve_request_target(
     return project_root, base_url, project_name, api_token
 
 
-def parse_queries(raw_queries: list[str]) -> list[str]:
-    """兼容 JSON 数组和多参数写法，减少调用方改造成本。"""
+def parse_tags(raw_tags: list[str]) -> list[str]:
+    """兼容 JSON 数组和多参数写法，减少调用方输入标签时的额外负担。"""
 
-    if not raw_queries:
+    if not raw_tags:
         return []
-    if len(raw_queries) == 1:
-        text = raw_queries[0].strip()
+    if len(raw_tags) == 1:
+        text = raw_tags[0].strip()
         if text.startswith("[") and text.endswith("]"):
             try:
                 payload = json.loads(text)
@@ -227,7 +228,7 @@ def parse_queries(raw_queries: list[str]) -> list[str]:
                 payload = None
             if isinstance(payload, list):
                 return [str(item).strip() for item in payload if str(item).strip()]
-    return [query.strip() for query in raw_queries if query.strip()]
+    return [tag.strip() for tag in raw_tags if tag.strip()]
 
 
 def split_tags(raw_tags: str) -> list[str]:
@@ -567,9 +568,10 @@ def run_search(
 ) -> int:
     """搜索子命令只整理输入并打印服务端返回结果，保持脚本职责轻量。"""
 
-    queries = parse_queries(args.query)
-    if not queries:
-        raise SystemExit("--query 至少需要一个非空关键词")
+    tags = parse_tags(args.tags)
+    description = str(args.description or "").strip()
+    if not description:
+        raise SystemExit("--description 不能为空")
     if not api_token.strip():
         raise SystemExit(
             "缺少 API Token，请在 ~/.config/hive/config.json 中配置 apiToken"
@@ -579,7 +581,8 @@ def run_search(
         "/tokenapi/v1/memories/search",
         build_request_payload(
             project_name,
-            queries=queries,
+            tags=tags,
+            description=description,
             debug=bool(args.debug),
         ),
         api_token=api_token,

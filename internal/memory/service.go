@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -57,8 +56,8 @@ func NewService(cfg config.AppConfig) *Service {
 }
 
 // Search 执行记忆检索并返回结构化结果，统一仅按项目名隔离单库中的不同项目数据。
-func (s *Service) Search(ctx context.Context, projectName string, queries []string, debug bool) (SearchResult, error) {
-	rawResult, err := s.searchHits(ctx, normalizeProjectName(projectName), queries, debug)
+func (s *Service) Search(ctx context.Context, projectName string, tags []string, description string, debug bool) (SearchResult, error) {
+	rawResult, err := s.searchHits(ctx, normalizeProjectName(projectName), tags, description, debug)
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -70,15 +69,16 @@ func (s *Service) Search(ctx context.Context, projectName string, queries []stri
 	return rawResult, nil
 }
 
-// List 为管理端提供分页列表；无查询词时走时间排序，有查询词时复用搜索逻辑并返回完整命中集。
-func (s *Service) List(ctx context.Context, page, pageSize int, queries []string) (MemoryListResult, error) {
+// List 为管理端提供分页列表；无搜索描述时走时间排序，有搜索描述时复用搜索逻辑并返回完整命中集。
+func (s *Service) List(ctx context.Context, page, pageSize int, tags []string, description string) (MemoryListResult, error) {
 	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return MemoryListResult{}, err
 	}
 	page, pageSize = normalizePagination(page, pageSize)
-	cleanedQueries := normalizePlainQueries(queries)
-	if len(cleanedQueries) == 0 {
+	cleanedDescription := normalizeSearchDescription(description)
+	cleanedTags := normalizeTagInputs(tags)
+	if cleanedDescription == "" {
 		items, total, err := store.ListMemoriesPaginated(page, pageSize, nil)
 		if err != nil {
 			return MemoryListResult{}, err
@@ -95,7 +95,7 @@ func (s *Service) List(ctx context.Context, page, pageSize int, queries []string
 			TotalPage: computeTotalPages(total, pageSize),
 		}, nil
 	}
-	rawResult, err := s.searchHits(ctx, "", cleanedQueries, false)
+	rawResult, err := s.searchHits(ctx, "", cleanedTags, cleanedDescription, false)
 	if err != nil {
 		return MemoryListResult{}, err
 	}
@@ -116,18 +116,24 @@ func (s *Service) List(ctx context.Context, page, pageSize int, queries []string
 }
 
 // searchHits 收敛关键字与向量召回实现，让搜索接口和管理列表共享同一套命中逻辑。
-func (s *Service) searchHits(ctx context.Context, projectName string, queries []string, debug bool) (SearchResult, error) {
+func (s *Service) searchHits(ctx context.Context, projectName string, tags []string, description string, debug bool) (SearchResult, error) {
 	store, err := models.StoreFromContext(ctx)
 	if err != nil {
 		return SearchResult{}, err
 	}
-	effectiveQueries := s.keywordQueries(queries)
+	cleanedDescription := normalizeSearchDescription(description)
+	if cleanedDescription == "" {
+		return SearchResult{}, errors.New("搜索描述不能为空")
+	}
+	cleanedTags := normalizeTagInputs(tags)
+	keywordInputs := buildKeywordQueries(cleanedTags, cleanedDescription)
+	effectiveQueries := s.keywordQueries(keywordInputs)
 	matcher := buildQueryMatcher(effectiveQueries)
-	queryTexts := normalizeEmbeddingQueries(queries)
+	queryTexts := buildSemanticQueryTexts(cleanedTags, cleanedDescription)
 	sharedQueryVectors := [][]float64(nil)
 	if s.provider.Enabled() && len(queryTexts) > 0 {
-		queryEmbeddingCacheKey := s.queryEmbeddingsCacheKey(queryTexts)
-		sharedVectors, innerErr := s.queryEmbeddings(queryTexts, queryEmbeddingCacheKey, time.Now().UTC())
+		queryEmbeddingCacheKey := s.queryEmbeddingsCacheKey(cleanedTags, cleanedDescription)
+		sharedVectors, innerErr := s.queryEmbeddings(queryTexts, cleanedTags, cleanedDescription, queryEmbeddingCacheKey, time.Now().UTC())
 		if innerErr != nil {
 			return SearchResult{}, innerErr
 		}
@@ -149,7 +155,7 @@ func (s *Service) searchHits(ctx context.Context, projectName string, queries []
 			localDebug = []string{}
 			debugCommandsRef = &localDebug
 		}
-		hits, innerErr := s.collectHits(store, "error", projectName, queries, matcher, debugCommandsRef)
+		hits, innerErr := s.collectHits(store, "error", projectName, effectiveQueries, matcher, debugCommandsRef)
 		if innerErr != nil {
 			return innerErr
 		}
@@ -164,7 +170,7 @@ func (s *Service) searchHits(ctx context.Context, projectName string, queries []
 			localDebug = []string{}
 			debugCommandsRef = &localDebug
 		}
-		hits, innerErr := s.collectHits(store, "summary", projectName, queries, matcher, debugCommandsRef)
+		hits, innerErr := s.collectHits(store, "summary", projectName, effectiveQueries, matcher, debugCommandsRef)
 		if innerErr != nil {
 			return innerErr
 		}
@@ -173,7 +179,7 @@ func (s *Service) searchHits(ctx context.Context, projectName string, queries []
 		return nil
 	})
 	g.Go(func() error {
-		hits, innerErr := s.collectSemanticHits(store, "error", projectName, queryTexts, sharedQueryVectors)
+		hits, innerErr := s.collectSemanticHits(store, "error", projectName, cleanedTags, cleanedDescription, queryTexts, sharedQueryVectors)
 		if innerErr != nil {
 			return innerErr
 		}
@@ -181,7 +187,7 @@ func (s *Service) searchHits(ctx context.Context, projectName string, queries []
 		return nil
 	})
 	g.Go(func() error {
-		hits, innerErr := s.collectSemanticHits(store, "summary", projectName, queryTexts, sharedQueryVectors)
+		hits, innerErr := s.collectSemanticHits(store, "summary", projectName, cleanedTags, cleanedDescription, queryTexts, sharedQueryVectors)
 		if innerErr != nil {
 			return innerErr
 		}
@@ -196,7 +202,7 @@ func (s *Service) searchHits(ctx context.Context, projectName string, queries []
 		debugCommands = append(debugCommands, summaryKeywordDebug...)
 	}
 	return SearchResult{
-		Query:         strings.Join(queries, ", "),
+		Query:         renderSearchInput(cleanedTags, cleanedDescription),
 		ProjectName:   projectName,
 		DebugCommands: debugCommands,
 		ErrorHits:     s.mergeHits("error", errorKeywordHits, errorSemanticHits),
@@ -784,7 +790,7 @@ func (s *Service) collectHits(store *models.Store, source string, projectName st
 }
 
 // collectSemanticHits 在关键字检索之外补充语义召回，并继续按项目名隔离结果。
-func (s *Service) collectSemanticHits(store *models.Store, source string, projectName string, queryTexts []string, queryVectors [][]float64) ([]Hit, error) {
+func (s *Service) collectSemanticHits(store *models.Store, source string, projectName string, tags []string, description string, queryTexts []string, queryVectors [][]float64) ([]Hit, error) {
 	if !s.provider.Enabled() {
 		return nil, nil
 	}
@@ -792,15 +798,15 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 		return nil, nil
 	}
 	now := time.Now().UTC()
-	semanticCacheKey := s.semanticHitsCacheKey(source, projectName, queryTexts)
+	semanticCacheKey := s.semanticHitsCacheKey(source, projectName, tags, description)
 	if hits, ok := s.getCachedSemanticHits(semanticCacheKey, now); ok {
 		return hits, nil
 	}
 	vectors := cloneEmbeddingVectors(queryVectors)
 	if len(vectors) == 0 {
-		queryEmbeddingCacheKey := s.queryEmbeddingsCacheKey(queryTexts)
+		queryEmbeddingCacheKey := s.queryEmbeddingsCacheKey(tags, description)
 		var err error
-		vectors, err = s.queryEmbeddings(queryTexts, queryEmbeddingCacheKey, now)
+		vectors, err = s.queryEmbeddings(queryTexts, tags, description, queryEmbeddingCacheKey, now)
 		if err != nil || len(vectors) == 0 {
 			return nil, err
 		}
@@ -820,7 +826,7 @@ func (s *Service) collectSemanticHits(store *models.Store, source string, projec
 }
 
 // queryEmbeddings 优先复用缓存和并发去重结果，避免同一轮搜索重复请求嵌入服务。
-func (s *Service) queryEmbeddings(queryTexts []string, cacheKey string, now time.Time) ([][]float64, error) {
+func (s *Service) queryEmbeddings(queryTexts []string, tags []string, description string, cacheKey string, now time.Time) ([][]float64, error) {
 	if vectors, ok := s.getCachedQueryEmbeddings(cacheKey, now); ok {
 		return vectors, nil
 	}
@@ -924,13 +930,40 @@ func cloneEmbeddingVectors(vectors [][]float64) [][]float64 {
 	return cloned
 }
 
-// normalizeEmbeddingQueries 统一裁剪查询词，确保嵌入请求只包含用户真实输入。
-func normalizeEmbeddingQueries(queries []string) []string {
-	out := make([]string, 0, len(queries))
-	for _, query := range queries {
-		if cleaned := strings.TrimSpace(query); cleaned != "" {
+// buildSemanticQueryTexts 基于标签与描述构造语义查询文本，确保描述原文能直接进入嵌入模型。
+func buildSemanticQueryTexts(tags []string, description string) []string {
+	cleanedDescription := normalizeSearchDescription(description)
+	if cleanedDescription == "" {
+		return nil
+	}
+	out := []string{cleanedDescription}
+	if cleanedTags := normalizeTagInputs(tags); len(cleanedTags) > 0 {
+		out = append(out, strings.Join(cleanedTags, "、"))
+	}
+	return out
+}
+
+// buildKeywordQueries 把标签与描述拆成关键字检索输入，避免长文本描述完全绕开 BM25 与 LIKE 召回。
+func buildKeywordQueries(tags []string, description string) []string {
+	out := make([]string, 0, len(tags)+1)
+	out = append(out, normalizeTagInputs(tags)...)
+	cleanedDescription := normalizeSearchDescription(description)
+	if cleanedDescription != "" {
+		out = append(out, splitDescriptionTerms(cleanedDescription)...)
+	}
+	return normalizePlainQueries(out)
+}
+
+// splitDescriptionTerms 统一按空白切分描述中的粗粒度片段，避免关键字检索把整段描述当成单个词条。
+func splitDescriptionTerms(description string) []string {
+	out := []string{}
+	for _, item := range strings.Fields(strings.TrimSpace(description)) {
+		if cleaned := strings.TrimSpace(item); cleaned != "" {
 			out = append(out, cleaned)
 		}
+	}
+	if len(out) == 0 && strings.TrimSpace(description) != "" {
+		return []string{strings.TrimSpace(description)}
 	}
 	return out
 }
@@ -944,6 +977,15 @@ func (s *Service) keywordMode() string {
 		return "bm25"
 	}
 	return "like"
+}
+
+// renderSearchInput 统一拼接查询回显文本，便于 Markdown 输出和调试日志复用同一口径。
+func renderSearchInput(tags []string, description string) string {
+	parts := []string{"description=" + normalizeSearchDescription(description)}
+	if cleanedTags := normalizeTagInputs(tags); len(cleanedTags) > 0 {
+		parts = append(parts, "tags="+strings.Join(cleanedTags, ","))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // searchStageConcurrency 返回搜索编排阶段的最大并发数，避免同时放大关键字与语义查询压力。
@@ -1003,7 +1045,7 @@ func (s *Service) keywordQueries(queries []string) []string {
 	return out
 }
 
-// containsKeywordIgnoreCase 判断分组里是否包含查询词，避免同义词扩展误把无关分组加入召回条件。
+// containsKeywordIgnoreCase 判断分组里是否包含搜索词，避免同义词扩展误把无关分组加入召回条件。
 func containsKeywordIgnoreCase(group []string, query string) bool {
 	for _, item := range group {
 		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(query)) {
@@ -1792,7 +1834,7 @@ func normalizeProjectName(projectName string) string {
 	return cleaned
 }
 
-// normalizePlainQueries 统一清洗查询词，避免列表与搜索入口在空白处理上出现行为分叉。
+// normalizePlainQueries 统一清洗检索输入，避免列表与搜索入口在空白处理上出现行为分叉。
 func normalizePlainQueries(queries []string) []string {
 	out := make([]string, 0, len(queries))
 	for _, query := range queries {
@@ -1801,6 +1843,11 @@ func normalizePlainQueries(queries []string) []string {
 		}
 	}
 	return out
+}
+
+// normalizeSearchDescription 统一裁剪搜索描述，确保服务端各入口共享同一必填字段语义。
+func normalizeSearchDescription(description string) string {
+	return strings.TrimSpace(description)
 }
 
 // normalizePagination 统一分页边界，避免管理端不同查询模式下出现页码和页大小漂移。
@@ -2046,37 +2093,6 @@ func buildBodySnippet(lines []string, matchLine int) (string, int, int) {
 	start := matchIdx - before
 	end := matchIdx + after + 1
 	return strings.TrimSpace(strings.Join(lines[start:end], "\n")), start, end
-}
-
-// parseQueries 兼容 JSON 数组和多参数写法，避免调用方因格式不同而失败。
-func ParseQueries(raw []string) ([]string, error) {
-	if len(raw) == 0 {
-		return nil, nil
-	}
-	if len(raw) == 1 {
-		text := strings.TrimSpace(raw[0])
-		if strings.HasPrefix(text, "[") && strings.HasSuffix(text, "]") {
-			var payload []any
-			if err := json.Unmarshal([]byte(text), &payload); err == nil {
-				out := []string{}
-				for _, item := range payload {
-					if query := strings.TrimSpace(fmt.Sprint(item)); query != "" {
-						out = append(out, query)
-					}
-				}
-				if len(out) > 0 {
-					return out, nil
-				}
-			}
-		}
-	}
-	out := []string{}
-	for _, item := range raw {
-		if query := strings.TrimSpace(item); query != "" {
-			out = append(out, query)
-		}
-	}
-	return out, nil
 }
 
 // minInt 为片段窗口截取提供最小值比较，避免重复写边界分支。

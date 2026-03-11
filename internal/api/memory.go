@@ -3,7 +3,8 @@ package api
 // SearchRequest 统一搜索接口入参，避免脚本和服务端各自维护字段协议。
 type SearchRequest struct {
 	ProjectName string   `json:"project_name"`
-	Queries     []string `json:"queries"`
+	Tags        []string `json:"tags"`
+	Description string   `json:"description"`
 	Debug       bool     `json:"debug"`
 }
 
@@ -123,9 +124,10 @@ type UserMutationResponse struct {
 
 // MemoryListRequest 描述后台记忆列表查询参数，确保分页和关键字筛选协议稳定。
 type MemoryListRequest struct {
-	Page     int      `form:"page"`
-	PageSize int      `form:"page_size"`
-	Queries  []string `form:"queries"`
+	Page        int      `form:"page"`
+	PageSize    int      `form:"page_size"`
+	Tags        []string `form:"tags"`
+	Description string   `form:"description"`
 }
 
 // MemoryItem 描述记忆列表展示项，避免列表接口返回过大的正文内容。
