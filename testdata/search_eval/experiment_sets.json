@@ -1,0 +1,67 @@
+{
+  "baseline": {
+    "embedding": {
+      "semanticSimilarityThreshold": 0.15,
+      "semanticHitFetchLimit": 64,
+      "semanticWindow": {
+        "mode": "static",
+        "baseMaxCount": 1024
+      },
+      "decay": {
+        "enabled": true,
+        "ageWeight": 0.5,
+        "semanticWeight": 0.5,
+        "halfLifeDays": {
+          "summary": 30,
+          "error": 90
+        }
+      }
+    },
+    "search": {
+      "keyword": {
+        "mode": "like"
+      },
+      "fusion": {
+        "enabled": true,
+        "formula": "coverage_discount",
+        "keywordWeight": 0.55,
+        "semanticWeight": 0.45,
+        "recencyWeight": 0.1,
+        "minSemanticScore": 0.0,
+        "coverageDiscountBase": 0.85
+      }
+    }
+  },
+  "threshold_sweep": [
+    {"name": "th_0_10", "embedding": {"semanticSimilarityThreshold": 0.10}},
+    {"name": "th_0_15", "embedding": {"semanticSimilarityThreshold": 0.15}},
+    {"name": "th_0_20", "embedding": {"semanticSimilarityThreshold": 0.20}},
+    {"name": "th_0_25", "embedding": {"semanticSimilarityThreshold": 0.25}}
+  ],
+  "keyword_modes": [
+    {"name": "keyword_like", "search": {"keyword": {"mode": "like"}}},
+    {"name": "keyword_bm25", "search": {"keyword": {"mode": "bm25"}}}
+  ],
+  "fusion_sets": [
+    {"name": "fusion_off", "search": {"fusion": {"enabled": false}}},
+    {"name": "fusion_balanced", "search": {"fusion": {"enabled": true, "keywordWeight": 0.55, "semanticWeight": 0.45, "recencyWeight": 0.1, "minSemanticScore": 0.0}}},
+    {"name": "fusion_semantic_first", "search": {"fusion": {"enabled": true, "keywordWeight": 0.35, "semanticWeight": 0.55, "recencyWeight": 0.1, "minSemanticScore": 0.15}}},
+    {"name": "fusion_keyword_first", "search": {"fusion": {"enabled": true, "keywordWeight": 0.70, "semanticWeight": 0.20, "recencyWeight": 0.1, "minSemanticScore": 0.20}}}
+  ],
+  "decay_sets": [
+    {"name": "decay_off", "embedding": {"decay": {"enabled": false}}},
+    {"name": "decay_default", "embedding": {"decay": {"enabled": true, "ageWeight": 0.5, "semanticWeight": 0.5, "halfLifeDays": {"summary": 30, "error": 90}}}},
+    {"name": "decay_relaxed", "embedding": {"decay": {"enabled": true, "ageWeight": 0.35, "semanticWeight": 0.65, "halfLifeDays": {"summary": 45, "error": 120}}}}
+  ],
+  "window_sets": [
+    {"name": "window_static_64", "embedding": {"semanticWindow": {"mode": "static", "baseMaxCount": 1024}, "semanticHitFetchLimit": 64}},
+    {"name": "window_dynamic_small", "embedding": {"semanticWindow": {"mode": "dynamic", "dynamicMinCount": 64, "dynamicMaxCount": 256, "dynamicRatio": 0.05}, "semanticHitFetchLimit": 32}},
+    {"name": "window_dynamic_balanced", "embedding": {"semanticWindow": {"mode": "dynamic", "dynamicMinCount": 128, "dynamicMaxCount": 1024, "dynamicRatio": 0.20}, "semanticHitFetchLimit": 64}}
+  ],
+  "acceptance": {
+    "recall_at_5": 0.50,
+    "mrr_at_10": 0.55,
+    "error_recall_at_5": 0.60,
+    "max_p95_latency_ratio_vs_baseline": 1.5
+  }
+}

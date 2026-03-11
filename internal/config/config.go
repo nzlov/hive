@@ -267,6 +267,24 @@ func Load() (AppConfig, error) {
 	if err != nil {
 		return AppConfig{}, err
 	}
+	return loadFromPath(configPath, false)
+}
+
+// LoadFromPath 按指定配置文件路径加载配置，避免命令行工具再依赖当前工作目录猜测配置位置。
+func LoadFromPath(configPath string) (AppConfig, error) {
+	return loadFromPath(configPath, true)
+}
+
+// loadFromPath 统一处理配置加载，按调用场景决定是否要求配置文件必须已存在。
+func loadFromPath(configPath string, requireExists bool) (AppConfig, error) {
+	if requireExists {
+		if _, err := os.Stat(configPath); err != nil {
+			if os.IsNotExist(err) {
+				return AppConfig{}, fmt.Errorf("配置文件不存在: %s", configPath)
+			}
+			return AppConfig{}, err
+		}
+	}
 	payload, err := loadPayload(configPath)
 	if err != nil {
 		return AppConfig{}, err
