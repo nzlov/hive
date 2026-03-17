@@ -1,6 +1,6 @@
 # Hive
 
-`Hive` 是带有项目隔离的记忆系统。使用 `Python CLI + Go HTTP Server + Vue Admin SPA` 管理总结记忆与错误记忆。
+`Hive` 是带有项目隔离的Agent记忆系统。使用 `Python CLI + Go HTTP Server + Vue Admin SPA` 管理总结记忆与错误记忆。
 
 当前版本的后端存储已经统一到 `GORM`，支持：
 
@@ -34,7 +34,7 @@
 │   ├── models/               # GORM 模型与数据库访问封装
 │   ├── server/               # Gin 路由与中间件
 │   └── user/                 # 用户、JWT 与 API Token 能力
-├── hive/
+├── hive/                     # skill
 │   ├── SKILL.md
 │   ├── agents/openai.yaml
 │   ├── references/
