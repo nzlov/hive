@@ -1,6 +1,6 @@
 # Hive
 
-`Hive` 是一个面向工程分析场景的项目记忆系统，使用 `Python CLI + Go HTTP Server + Vue Admin SPA` 管理总结记忆与错误记忆。
+`Hive` 是带有项目隔离的记忆系统。使用 `Python CLI + Go HTTP Server + Vue Admin SPA` 管理总结记忆与错误记忆。
 
 当前版本的后端存储已经统一到 `GORM`，支持：
 
